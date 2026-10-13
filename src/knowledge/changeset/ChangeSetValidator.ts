@@ -21,28 +21,24 @@ import {
 } from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Exact runtime observation of one Vault-relative target path. */
 export type KnowledgeFileObservation =
   | { kind: "missing" }
   | { kind: "file"; content: string }
   | { kind: "directory" };
 
-/** Atomic compare-and-swap outcome returned by the Vault file adapter. */
 export type KnowledgeFileCompareAndSwapResult =
   | { kind: "applied" }
   | { kind: "already_after" }
   | { kind: "conflict"; observation: KnowledgeFileObservation };
 
-/** File mutation operations one concrete adapter can safely make atomic. */
 export interface KnowledgeFileMutationCapabilities {
   create: boolean;
   update: boolean;
   delete: boolean;
-  /** Whether create requires its exact parent directory to exist before CAS. */
+
   requiresExistingParentForCreate: boolean;
 }
 
-/** Full capabilities used by explicitly complete in-memory and test stores. */
 export const ALL_KNOWLEDGE_FILE_MUTATIONS: Readonly<KnowledgeFileMutationCapabilities> =
   Object.freeze({
     create: true,
@@ -51,35 +47,11 @@ export const ALL_KNOWLEDGE_FILE_MUTATIONS: Readonly<KnowledgeFileMutationCapabil
     requiresExistingParentForCreate: false,
   });
 
-/** File I/O boundary used by preflight validation and transaction application. */
 export interface KnowledgeFileStore {
-  /** Operations this exact store can serialize without a read/write gap. */
   readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
 
-  /**
-   * Observes the exact current state of one Vault-relative path.
-   *
-   * @param path - Validated Vault-relative path
-   * @returns Missing, text file, or directory state
-   */
   observe(path: string): Promise<KnowledgeFileObservation>;
 
-  /**
-   * Atomically compares one exact state and applies its journaled replacement.
-   *
-   * The adapter MUST perform comparison and create/update/delete as one
-   * serialized operation. It MUST NOT implement this as a public read followed
-   * by an unconditional write: an Obsidian editor update in between could be
-   * overwritten. When current state already equals `after`, return
-   * `already_after`; when it equals neither state, return the exact conflicting
-   * observation without mutating it. The promise resolves only after an applied
-   * replacement is durable and observable through {@link observe}.
-   *
-   * @param path - Validated Vault-relative path
-   * @param before - Exact state authorized for replacement
-   * @param after - Exact durable replacement state
-   * @returns Applied, already-after, or non-mutating conflict outcome
-   */
   compareAndSwap(
     path: string,
     before: TransactionFileState,
@@ -87,46 +59,26 @@ export interface KnowledgeFileStore {
   ): Promise<KnowledgeFileCompareAndSwapResult>;
 }
 
-/** Resolves parser-owned source material needed to re-check one citation. */
 export interface SourceArtifactResolver {
-  /**
-   * Resolves the current parsed artifact referenced by a source locator.
-   *
-   * @param locator - Structurally valid source locator
-   * @returns Matching artifact observation, or null when it is unavailable
-   */
   resolve(locator: SourceLocator): Promise<SourceArtifactObservation | null>;
 }
 
-/** Input presented to an adapter that validates projected OKF files and links. */
 export interface KnowledgeProjectionValidationInput {
   bundle: KnowledgeBundleConfig;
   changeSet: KnowledgeChangeSet;
   targets: readonly TransactionTarget[];
 }
 
-/** Recomputed non-citation validation result for the projected post-state. */
 export interface KnowledgeProjectionValidationResult {
   okfValid: boolean;
   linksValid: boolean;
   diagnostics: readonly KnowledgeDiagnostic[];
 }
 
-/** Adapter boundary for OKF and link validation against the projected Vault view. */
 export interface KnowledgeProjectionValidator {
-  /**
-   * Recomputes OKF and link validity without trusting model-provided booleans.
-   *
-   * The adapter must validate links against the projected view: current Vault
-   * plus create/update after-states minus explicit deletes.
-   *
-   * @param input - Bundle, accepted ChangeSet, and deterministic target projection
-   * @returns Recomputed validation flags and structured diagnostics
-   */
   validate(input: KnowledgeProjectionValidationInput): Promise<KnowledgeProjectionValidationResult>;
 }
 
-/** Immutable validated material ready to be placed in a durable journal. */
 export interface PreparedChangeSet {
   bundle: KnowledgeBundleConfig;
   changeSet: KnowledgeChangeSet;
@@ -135,33 +87,20 @@ export interface PreparedChangeSet {
   validation: KnowledgeValidationSummary;
 }
 
-/** Strict accepted ChangeSet identity validated without reading Vault files. */
 export interface ValidatedChangeSetInput {
   bundle: KnowledgeBundleConfig;
   changeSet: KnowledgeChangeSet;
   changeSetDigest: string;
 }
 
-/** Reports deterministic ChangeSet defects that must block every file write. */
 export class ChangeSetValidationError extends Error {
-  /**
-   * Creates a validation failure containing only structured safe diagnostics.
-   *
-   * @param diagnostics - Deterministic validation issues
-   */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("Knowledge ChangeSet is not safe to apply");
     this.name = "ChangeSetValidationError";
   }
 }
 
-/** Reports an unavailable validation dependency without retaining raw errors. */
 export class ChangeSetValidationInfrastructureError extends Error {
-  /**
-   * Creates a sanitized infrastructure failure.
-   *
-   * @param stage - Validation dependency that could not complete
-   */
   constructor(
     public readonly stage: "file_observation" | "artifact_resolution" | "projection_validation"
   ) {
@@ -170,14 +109,6 @@ export class ChangeSetValidationInfrastructureError extends Error {
   }
 }
 
-/**
- * Appends one deterministic validation error.
- *
- * @param diagnostics - Mutable validation collection
- * @param code - Stable machine-readable error code
- * @param field - ChangeSet field associated with the error
- * @param message - Safe human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -187,13 +118,6 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Appends nested diagnostics beneath a stable field prefix.
- *
- * @param target - Destination diagnostic collection
- * @param prefix - Parent field path
- * @param nested - Diagnostics emitted by a nested validator
- */
 function appendNestedDiagnostics(
   target: KnowledgeDiagnostic[],
   prefix: string,
@@ -207,22 +131,10 @@ function appendNestedDiagnostics(
   }
 }
 
-/**
- * Computes the stable identity of an exact accepted ChangeSet payload.
- *
- * @param changeSet - Strictly parsed JSON-compatible ChangeSet
- * @returns Namespaced lowercase SHA-256 digest
- */
 export function createKnowledgeChangeSetDigest(changeSet: KnowledgeChangeSet): string {
   return createChangeSetTransactionDigest(changeSet);
 }
 
-/**
- * Converts one exact file observation into a journal pre-state.
- *
- * @param observation - Current target observation
- * @returns Missing or content-addressed file state
- */
 function toTransactionFileState(observation: KnowledgeFileObservation): TransactionFileState {
   if (observation.kind === "missing") {
     return { kind: "missing" };
@@ -237,12 +149,6 @@ function toTransactionFileState(observation: KnowledgeFileObservation): Transact
   };
 }
 
-/**
- * Creates the intended post-state for one typed file change.
- *
- * @param change - Strictly parsed ChangeSet file operation
- * @returns Exact post-state persisted for recovery
- */
 function createAfterState(change: KnowledgeFileChange): TransactionFileState {
   if (change.operation === "delete") {
     return { kind: "missing" };
@@ -250,13 +156,6 @@ function createAfterState(change: KnowledgeFileChange): TransactionFileState {
   return { kind: "file", content: change.afterContent, contentHash: change.afterHash };
 }
 
-/**
- * Compares deterministic Windows path keys without locale-dependent collation.
- *
- * @param left - First transaction target
- * @param right - Second transaction target
- * @returns Standard sort comparator result
- */
 function compareTargets(left: TransactionTarget, right: TransactionTarget): number {
   if (left.windowsPathKey < right.windowsPathKey) {
     return -1;
@@ -267,12 +166,6 @@ function compareTargets(left: TransactionTarget, right: TransactionTarget): numb
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
-/**
- * Derives the canonical Vault-relative parent of one already validated target.
- *
- * @param path - Strict descendant target path accepted by ChangeSet validation
- * @returns Non-empty Vault-relative parent directory path
- */
 function getTargetParentPath(path: string): string {
   const separatorIndex = path.lastIndexOf("/");
   if (separatorIndex < 1) {
@@ -281,27 +174,13 @@ function getTargetParentPath(path: string): string {
   return path.slice(0, separatorIndex);
 }
 
-/**
- * Checks whether every persisted review-time validation flag is affirmative.
- *
- * @param summary - Validation flags stored with the accepted ChangeSet
- * @returns Whether the user accepted a fully valid proposal
- */
 function hasAffirmativeDeclaredValidation(summary: KnowledgeValidationSummary): boolean {
   return summary.okfValid && summary.citationsValid && summary.linksValid;
 }
 
-/** Deterministic preflight validator for recoverable knowledge writes. */
 export class ChangeSetValidator {
   private readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
 
-  /**
-   * Creates a validator with all I/O and semantic dependencies injected.
-   *
-   * @param fileStore - Exact Vault file observation boundary
-   * @param artifactResolver - Parser material used to re-check citations
-   * @param projectionValidator - Projected OKF and link validator
-   */
   constructor(
     private readonly fileStore: KnowledgeFileStore,
     private readonly artifactResolver: SourceArtifactResolver,
@@ -321,18 +200,6 @@ export class ChangeSetValidator {
     this.mutationCapabilities = Object.freeze({ ...mutationCapabilities });
   }
 
-  /**
-   * Strictly validates and detaches apply identity before any Vault file access.
-   *
-   * This pure boundary lets a durable authority adapter prove the exact Bundle,
-   * accepted ChangeSet, and job input before target observations or semantic
-   * projection adapters run. {@link prepare} repeats this validation before it
-   * captures target pre-state.
-   *
-   * @param value - Unknown persisted or model-produced ChangeSet
-   * @param bundleValue - Bundle whose Wiki boundary authorizes the write
-   * @returns Detached accepted input and canonical digest
-   */
   validateAcceptedInput(value: unknown, bundleValue: unknown): ValidatedChangeSetInput {
     const diagnostics: KnowledgeDiagnostic[] = [];
     const bundleValidation = validateKnowledgeBundleConfig(bundleValue);
@@ -381,17 +248,6 @@ export class ChangeSetValidator {
     };
   }
 
-  /**
-   * Validates an accepted ChangeSet and captures every target pre-state.
-   *
-   * No journal or Vault mutation occurs in this method. Any deterministic
-   * defect is returned as {@link ChangeSetValidationError}; unavailable I/O is
-   * reported separately so callers never reinterpret it as model output.
-   *
-   * @param value - Unknown persisted or model-produced ChangeSet
-   * @param bundleValue - Bundle whose Wiki boundary authorizes the write
-   * @returns Parsed, revalidated, deterministically ordered journal material
-   */
   async prepare(value: unknown, bundleValue: unknown): Promise<PreparedChangeSet> {
     const diagnostics: KnowledgeDiagnostic[] = [];
     const validated = this.validateAcceptedInput(value, bundleValue);
@@ -442,13 +298,6 @@ export class ChangeSetValidator {
     };
   }
 
-  /**
-   * Rejects operations the concrete file adapter cannot make atomic before a
-   * transaction journal or any Vault mutation exists.
-   *
-   * @param changeSet - Strict accepted ChangeSet
-   * @param diagnostics - Mutable deterministic validation diagnostics
-   */
   private validateMutationCapabilities(
     changeSet: KnowledgeChangeSet,
     diagnostics: KnowledgeDiagnostic[]
@@ -466,12 +315,6 @@ export class ChangeSetValidator {
     });
   }
 
-  /**
-   * Reads every target before any semantic adapter is invoked.
-   *
-   * @param changeSet - Strictly parsed ChangeSet
-   * @returns Observations retaining ChangeSet order
-   */
   private async observeTargets(changeSet: KnowledgeChangeSet): Promise<KnowledgeFileObservation[]> {
     try {
       return await Promise.all(
@@ -482,16 +325,6 @@ export class ChangeSetValidator {
     }
   }
 
-  /**
-   * Reads create parents only when the concrete CAS adapter requires them.
-   *
-   * Existing create conflicts do not need a parent read because they already
-   * fail deterministic target validation. Returned slots retain ChangeSet order.
-   *
-   * @param changeSet - Strictly parsed ChangeSet
-   * @param targetObservations - Exact observations in ChangeSet order
-   * @returns Optional parent observations aligned with ChangeSet changes
-   */
   private async observeCreateParents(
     changeSet: KnowledgeChangeSet,
     targetObservations: readonly KnowledgeFileObservation[]
@@ -512,16 +345,6 @@ export class ChangeSetValidator {
     }
   }
 
-  /**
-   * Rejects creates whose required parent is missing or is a regular file.
-   *
-   * This keeps a known adapter limitation out of the durable transaction:
-   * parent directory creation is not journaled and must never occur implicitly.
-   *
-   * @param changeSet - Strictly parsed ChangeSet
-   * @param observations - Optional parent observations in ChangeSet order
-   * @param diagnostics - Mutable deterministic validation diagnostics
-   */
   private validateCreateParents(
     changeSet: KnowledgeChangeSet,
     observations: readonly (KnowledgeFileObservation | undefined)[],
@@ -550,15 +373,6 @@ export class ChangeSetValidator {
     });
   }
 
-  /**
-   * Validates one observed target against create/update/delete CAS semantics.
-   *
-   * @param change - Typed file change
-   * @param observation - Exact current target state
-   * @param index - Change index used by diagnostics
-   * @param diagnostics - Mutable validation collection
-   * @returns Journal target, or null when preflight fails
-   */
   private createTarget(
     change: KnowledgeFileChange,
     observation: KnowledgeFileObservation,
@@ -614,13 +428,6 @@ export class ChangeSetValidator {
     };
   }
 
-  /**
-   * Re-resolves every citation against current parser-owned artifact material.
-   *
-   * @param changeSet - Strictly parsed ChangeSet
-   * @param diagnostics - Mutable validation collection
-   * @returns Whether every citation resolved materially
-   */
   private async validateCitations(
     changeSet: KnowledgeChangeSet,
     diagnostics: KnowledgeDiagnostic[]
@@ -660,14 +467,6 @@ export class ChangeSetValidator {
     return valid;
   }
 
-  /**
-   * Invokes the projected OKF and link validator with sanitized failure handling.
-   *
-   * @param bundle - Validated Bundle boundary
-   * @param changeSet - Validated accepted ChangeSet
-   * @param targets - Deterministically sorted projected file targets
-   * @returns Adapter-computed validation result
-   */
   private async validateProjection(
     bundle: KnowledgeBundleConfig,
     changeSet: KnowledgeChangeSet,

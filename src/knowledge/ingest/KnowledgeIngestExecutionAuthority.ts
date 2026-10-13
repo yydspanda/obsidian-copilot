@@ -29,7 +29,6 @@ const MODEL_SAFE_STAGES = [
   "validating",
 ] as const satisfies readonly KnowledgeAuthorizedExecutionStage[];
 
-/** Stable execution-authority failure categories with no durable or provider payload. */
 export type KnowledgeIngestExecutionAuthorityErrorCode =
   | "dependency_invalid"
   | "claim_invalid"
@@ -40,9 +39,7 @@ export type KnowledgeIngestExecutionAuthorityErrorCode =
   | "stage_invalid"
   | "authority_invalid";
 
-/** Sanitized execution-authority failure that retains no token, path, or lower-level error. */
 export class KnowledgeIngestExecutionAuthorityError extends Error {
-  /** Creates one stable execution-authority failure. */
   constructor(public readonly code: KnowledgeIngestExecutionAuthorityErrorCode) {
     super("The knowledge ingest execution authority is invalid");
     this.name = "KnowledgeIngestExecutionAuthorityError";
@@ -77,7 +74,6 @@ const authorityStates = new WeakMap<object, KnowledgeIngestExecutionAuthoritySta
 const binderStates = new WeakMap<object, KnowledgeIngestExecutionAuthorityBinderState>();
 const boundQueueClaims = new WeakSet<object>();
 
-/** Captures the canonical branded Runtime-facade proof method once. */
 function captureRuntimeProofPortMethod(): KnowledgeRuntimeIngestExecutionProofPort["prove"] {
   const descriptor = Object.getOwnPropertyDescriptor(
     KnowledgeRuntimeIngestExecutionProofPort.prototype,
@@ -91,19 +87,16 @@ function captureRuntimeProofPortMethod(): KnowledgeRuntimeIngestExecutionProofPo
 
 const runtimeProofPortMethod = captureRuntimeProofPortMethod();
 
-/** Compares strings by code unit without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates a sanitized cancellation without retaining an arbitrary abort reason. */
 function createAbortError(): Error {
   const error = new Error("The knowledge ingest execution was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/** Reads one exact plain record entirely through own enumerable data descriptors. */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -133,17 +126,14 @@ function snapshotExactRecord(
   }
 }
 
-/** Checks one non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** Returns the monotonic rank of one model-safe execution stage. */
 function getStageRank(value: unknown): number {
   return MODEL_SAFE_STAGES.indexOf(value as KnowledgeAuthorizedExecutionStage);
 }
 
-/** Projects and revalidates the exact Queue-owned processing attempt. */
 function projectQueueClaim(
   claim: IngestExecutionClaim
 ): Readonly<KnowledgeIngestExecutionProofRequest> {
@@ -172,7 +162,6 @@ function projectQueueClaim(
   }
 }
 
-/** Strictly snapshots one Runtime proof and verifies its exact claim echo. */
 function verifyProof(
   value: unknown,
   request: Readonly<KnowledgeIngestExecutionProofRequest>
@@ -240,7 +229,6 @@ function verifyProof(
   });
 }
 
-/** Throws cancellation or stale-claim failure before an authority operation. */
 function assertLocalClaimCurrent(
   state: Pick<KnowledgeIngestExecutionAuthorityState, "signal" | "queueClaim">
 ): void {
@@ -250,7 +238,6 @@ function assertLocalClaimCurrent(
   }
 }
 
-/** Calls the captured Runtime proof method without retaining its failures. */
 async function callProof(
   state: Pick<KnowledgeIngestExecutionAuthorityState, "request" | "prove" | "signal" | "queueClaim">
 ): Promise<Readonly<KnowledgeIngestExecutionProof>> {
@@ -266,7 +253,6 @@ async function callProof(
   return verifyProof(value, state.request);
 }
 
-/** Returns module-private authority state only for an authentic instance. */
 function requireAuthorityState(value: unknown): KnowledgeIngestExecutionAuthorityState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeIngestExecutionAuthorityError("authority_invalid");
@@ -278,7 +264,6 @@ function requireAuthorityState(value: unknown): KnowledgeIngestExecutionAuthorit
   return state;
 }
 
-/** Returns module-private binder state only for an authentic instance. */
 function requireBinderState(value: unknown): KnowledgeIngestExecutionAuthorityBinderState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeIngestExecutionAuthorityError("authority_invalid");
@@ -290,11 +275,7 @@ function requireBinderState(value: unknown): KnowledgeIngestExecutionAuthorityBi
   return state;
 }
 
-/**
- * Opaque, revocable authority joining one Queue controller to durable Runtime proof.
- */
 export class KnowledgeIngestExecutionAuthority {
-  /** Rejects direct construction without the module-private binder token. */
   constructor(token: symbol) {
     if (token !== AUTHORITY_TOKEN) {
       throw new KnowledgeIngestExecutionAuthorityError("authority_invalid");
@@ -302,37 +283,27 @@ export class KnowledgeIngestExecutionAuthority {
     Object.freeze(this);
   }
 
-  /** Requires an authentic binder-issued authority. */
   static assert(value: unknown): asserts value is KnowledgeIngestExecutionAuthority {
     requireAuthorityState(value);
   }
 
-  /** Returns the immutable, non-token claim identity used by read-only preparation. */
   getClaim(): Readonly<KnowledgeIngestExecutionProofRequest> {
     return requireAuthorityState(this).request;
   }
 
-  /** Returns the exact Queue-owned cancellation signal. */
   getSignal(): AbortSignal {
     return requireAuthorityState(this).signal;
   }
 
-  /** Returns the Manifest authority atomically observed with the initial Queue proof. */
   getManifestAuthority(): Readonly<{ revision: number; digest: string }> {
     const state = requireAuthorityState(this);
     return Object.freeze({ revision: state.manifestRevision, digest: state.manifestDigest });
   }
 
-  /** Returns the opaque App/Vault/workflow lifecycle owner joined by Runtime and Queue. */
   getExecutionOwner(): KnowledgeExecutionOwner {
     return requireAuthorityState(this).executionOwner;
   }
 
-  /**
-   * Re-proves this exact claim at one expected monotonic processing stage.
-   *
-   * @param expectedStage - Current Queue stage required by the caller
-   */
   async reprove(expectedStage: KnowledgeAuthorizedExecutionStage): Promise<void> {
     const state = requireAuthorityState(this);
     const expectedRank = getStageRank(expectedStage);
@@ -364,9 +335,7 @@ export class KnowledgeIngestExecutionAuthority {
 Object.freeze(KnowledgeIngestExecutionAuthority.prototype);
 Object.freeze(KnowledgeIngestExecutionAuthority);
 
-/** Binds only authentic Queue claims to a captured Runtime proof capability. */
 export class KnowledgeIngestExecutionAuthorityBinder {
-  /** Captures only an authentic Runtime proof facade and its canonical data method. */
   constructor(proofPort: KnowledgeRuntimeIngestExecutionProofPort) {
     try {
       KnowledgeRuntimeIngestExecutionProofPort.assert(proofPort);
@@ -388,7 +357,6 @@ export class KnowledgeIngestExecutionAuthorityBinder {
     Object.freeze(this);
   }
 
-  /** Proves a fresh parsing claim and issues one process-local durable authority. */
   async bind(queueClaim: IngestExecutionClaim): Promise<KnowledgeIngestExecutionAuthority> {
     const request = projectQueueClaim(queueClaim);
     const binderState = requireBinderState(this);

@@ -59,12 +59,6 @@ const DEFAULT_CALLBACKS = {
   onReviewJob: jest.fn(),
 };
 
-/**
- * Creates one immutable Activity item fixture.
- *
- * @param overrides - Fields that differ from a queued job
- * @returns Activity item suitable for rendering
- */
 function createItem(
   overrides: Partial<KnowledgeActivityItem> = {}
 ): Readonly<KnowledgeActivityItem> {
@@ -84,13 +78,6 @@ function createItem(
   };
 }
 
-/**
- * Derives consistent aggregate counts for fixture items.
- *
- * @param items - Complete fixture item collection
- * @param hiddenTerminal - Terminal rows omitted from the visible collection
- * @returns Consistent Activity counts
- */
 function createCounts(
   items: readonly Readonly<KnowledgeActivityItem>[],
   hiddenTerminal = 0
@@ -110,12 +97,6 @@ function createCounts(
   };
 }
 
-/**
- * Creates one complete Activity model fixture.
- *
- * @param options - Optional items, controls, and hidden history
- * @returns Activity model suitable for the pure panel
- */
 function createModel(
   options: {
     items?: readonly Readonly<KnowledgeActivityItem>[];
@@ -133,7 +114,6 @@ function createModel(
   };
 }
 
-/** Returns one named button with its concrete disabled-state type. */
 function getButton(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name });
 }

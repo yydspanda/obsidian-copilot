@@ -4,12 +4,6 @@ import type { ComponentProps } from "react";
 
 type ModelSelectorProps = ComponentProps<typeof ModelSelector>;
 
-/**
- * The Copilot row as `lockedCopilotEntries` builds it, written out as a fixture
- * so the story stays deterministic if the lineup or the default-on set changes.
- * `_needsLicense` draws the lock and makes activation open pricing without
- * selecting the model.
- */
 const LOCKED_COPILOT_ROW: ModelSelectorEntry = {
   name: "copilot-plus-flash",
   provider: "copilot-plus",
@@ -22,7 +16,6 @@ const LOCKED_COPILOT_ROW: ModelSelectorEntry = {
   _subtitle: "The default model: fastest responses and the most quota.",
 };
 
-/** The models an unlicensed OpenCode user has of their own. */
 const OWN_MODELS: ModelSelectorEntry[] = [
   {
     name: "grok-code",
@@ -61,21 +54,14 @@ const meta = {
 } satisfies Meta<ModelSelectorProps>;
 export default meta;
 
-/** A licensed user: their models, nothing locked. Open the picker to see the rows. */
 export const Licensed: StoryObj<ModelSelectorProps> = {};
 
-/**
- * No license: the locked row shows its capability blurb and license tooltip.
- * Click the row or the lock, or use arrow keys and Enter/Space, to open pricing
- * with model-picker-lock attribution. The selected model must stay unchanged.
- */
 export const Unlicensed: StoryObj<ModelSelectorProps> = {
   args: {
     models: [LOCKED_COPILOT_ROW, ...OWN_MODELS],
   },
 };
 
-/** The case a brand-new user hits: nothing of their own, so the offer is all there is. */
 export const UnlicensedWithNoModelsOfTheirOwn: StoryObj<ModelSelectorProps> = {
   args: {
     value: "",
@@ -83,13 +69,10 @@ export const UnlicensedWithNoModelsOfTheirOwn: StoryObj<ModelSelectorProps> = {
   },
 };
 
-/**
- * A retained selection that is unsafe to redirect silently. The disabled
- * current row explains the state while the remaining rows stay selectable.
- */
 export const UnavailableSavedModel: StoryObj<ModelSelectorProps> = {
   args: {
     value: "__chat_model_unavailable__|",
     models: [UNAVAILABLE_SAVED_MODEL, ...OWN_MODELS],
   },
 };
+export const CommandNeedsSelection: StoryObj<ModelSelectorProps> = { args: { value: "" } };

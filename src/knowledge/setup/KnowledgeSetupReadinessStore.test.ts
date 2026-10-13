@@ -16,7 +16,6 @@ const CONFIGURED_CHAT: KnowledgeSetupReadinessContext = Object.freeze({
   chatModel: Object.freeze({ reason: "configured" }),
 });
 
-/** Creates one immutable projector output for a unique read-ready Bundle. */
 function createReadyProjection(): KnowledgeSetupReadinessProjection {
   return projectKnowledgeSetupReadiness(
     { generation: 1, status: "workflow_read_ready", bundleIds: ["personal"] },
@@ -24,7 +23,6 @@ function createReadyProjection(): KnowledgeSetupReadinessProjection {
   );
 }
 
-/** Copies public state fields so listener observations do not retain store snapshots by identity. */
 function copySnapshot(snapshot: KnowledgeSetupReadinessSnapshot): KnowledgeSetupReadinessSnapshot {
   return {
     revision: snapshot.revision,

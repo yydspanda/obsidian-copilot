@@ -6,7 +6,6 @@ import type {
 } from "@/knowledge/model/types";
 import { validateSourceLocator } from "@/knowledge/model/validation";
 
-/** Parsed Markdown heading boundary used for material locator checks. */
 export interface MarkdownHeadingObservation {
   heading: string;
   occurrence: number;
@@ -14,13 +13,11 @@ export interface MarkdownHeadingObservation {
   endLine: number;
 }
 
-/** Parsed PDF page text used for material locator checks. */
 export interface PdfPageObservation {
   page: number;
   text: string;
 }
 
-/** Artifact text made available by an injected Markdown parser. */
 export interface MarkdownArtifactObservation {
   kind: "markdown";
   sourceId: string;
@@ -30,7 +27,6 @@ export interface MarkdownArtifactObservation {
   headings: readonly MarkdownHeadingObservation[];
 }
 
-/** Artifact text made available by an injected PDF parser. */
 export interface PdfArtifactObservation {
   kind: "pdf";
   sourceId: string;
@@ -39,7 +35,6 @@ export interface PdfArtifactObservation {
   pages: readonly PdfPageObservation[];
 }
 
-/** Plain artifact text used by quote-only locators. */
 export interface TextArtifactObservation {
   kind: "text";
   sourceId: string;
@@ -48,20 +43,11 @@ export interface TextArtifactObservation {
   text: string;
 }
 
-/** Parser-neutral material that can prove a source locator still resolves. */
 export type SourceArtifactObservation =
   | MarkdownArtifactObservation
   | PdfArtifactObservation
   | TextArtifactObservation;
 
-/**
- * Appends one material-validation error.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable issue code
- * @param field - Locator field associated with the issue
- * @param message - Human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -71,22 +57,10 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Builds a validation result from material diagnostics.
- *
- * @param diagnostics - Collected validation issues
- * @returns Aggregate validation result
- */
 function toResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValidationResult {
   return { valid: diagnostics.length === 0, diagnostics };
 }
 
-/**
- * Reads all normalized text represented by one artifact observation.
- *
- * @param artifact - Parser-produced artifact observation
- * @returns Text with line endings normalized for citation matching
- */
 function getNormalizedArtifactText(artifact: SourceArtifactObservation): string {
   if (artifact.kind === "pdf") {
     return artifact.pages.map((page) => normalizeCitationText(page.text)).join("\n");
@@ -94,14 +68,6 @@ function getNormalizedArtifactText(artifact: SourceArtifactObservation): string 
   return normalizeCitationText(artifact.text);
 }
 
-/**
- * Reads a 1-based inclusive Markdown line range.
- *
- * @param text - Markdown artifact text
- * @param startLine - First 1-based line
- * @param endLine - Last inclusive 1-based line
- * @returns Range text, or undefined when the coordinates exceed the artifact
- */
 function readMarkdownLineRange(
   text: string,
   startLine: number,
@@ -114,17 +80,6 @@ function readMarkdownLineRange(
   return lines.slice(startLine - 1, endLine).join("\n");
 }
 
-/**
- * Verifies that a typed locator resolves against parser-injected artifact text.
- *
- * This function performs no Vault I/O and no PDF or Markdown parsing. Callers
- * inject a parser observation, keeping material grounding deterministic and
- * independently testable.
- *
- * @param locator - Structurally parsed source locator
- * @param artifact - Matching parser observation for the referenced artifact
- * @returns Whether identifiers, coordinates, and excerpt all still resolve
- */
 export function validateSourceLocatorAgainstArtifact(
   locator: SourceLocator,
   artifact: SourceArtifactObservation

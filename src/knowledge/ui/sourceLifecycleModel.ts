@@ -1,19 +1,16 @@
 import type { SourceCustody } from "@/knowledge/model/types";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Source conditions that require a user-visible lifecycle decision. */
 export type KnowledgeSourceLifecycleIssueReason =
   | "source_missing"
   | "source_deleted"
   | "source_renamed";
 
-/** Optimistic UI hints; every production command must re-prove current authority. */
 export interface KnowledgeSourceLifecycleActions {
   canCheckAgain: boolean;
   canRemove: boolean;
 }
 
-/** Exact immutable authority captured when a user opens source-removal confirmation. */
 export interface KnowledgeSourceRemovalConfirmation {
   sourceId: string;
   sourcePath: string;
@@ -22,7 +19,6 @@ export interface KnowledgeSourceRemovalConfirmation {
   manifestRevision: number;
 }
 
-/** Stable blockers that can deny an otherwise requested source retirement. */
 export type KnowledgeSourceLifecycleRetirementBlocker =
   | "active_transaction"
   | "forward_revision_overlay_active"
@@ -34,7 +30,6 @@ export type KnowledgeSourceLifecycleRetirementBlocker =
   | "source_observation_pending"
   | "revision_overflow";
 
-/** Fields shared by every active source row. */
 interface KnowledgeSourceLifecycleItemBase {
   sourceId: string;
   sourcePath: string;
@@ -45,24 +40,20 @@ interface KnowledgeSourceLifecycleItemBase {
   actions: Readonly<KnowledgeSourceLifecycleActions>;
 }
 
-/** One active source whose exact Vault path is currently available. */
 export interface KnowledgeSourceLifecycleReadyItem extends KnowledgeSourceLifecycleItemBase {
   status: "ready";
   issueReason?: never;
 }
 
-/** One active source whose exact Vault identity cannot currently be proved. */
 export interface KnowledgeSourceLifecycleMissingItem extends KnowledgeSourceLifecycleItemBase {
   status: "missing";
   issueReason: KnowledgeSourceLifecycleIssueReason;
 }
 
-/** One detached active source row rendered by the lifecycle panel. */
 export type KnowledgeSourceLifecycleItem =
   | KnowledgeSourceLifecycleReadyItem
   | KnowledgeSourceLifecycleMissingItem;
 
-/** Complete immutable source lifecycle projection for one Bundle snapshot. */
 export interface KnowledgeSourceLifecycleModel {
   bundleId: string;
   runtimeRevision: number;
@@ -70,7 +61,6 @@ export interface KnowledgeSourceLifecycleModel {
   sources: readonly Readonly<KnowledgeSourceLifecycleItem>[];
 }
 
-/** Typed input accepted by the strict immutable model snapshotter. */
 export interface KnowledgeSourceLifecycleModelInput {
   bundleId: string;
   runtimeRevision: number;
@@ -78,9 +68,7 @@ export interface KnowledgeSourceLifecycleModelInput {
   sources: readonly KnowledgeSourceLifecycleItem[];
 }
 
-/** Reports a malformed or internally inconsistent lifecycle projection. */
 export class KnowledgeSourceLifecycleModelError extends TypeError {
-  /** Creates a fixed failure that never echoes source identity or path material. */
   constructor() {
     super("Knowledge source lifecycle model is invalid");
     this.name = "KnowledgeSourceLifecycleModelError";
@@ -105,21 +93,18 @@ const RETIREMENT_BLOCKERS = new Set<KnowledgeSourceLifecycleRetirementBlocker>([
   "revision_overflow",
 ]);
 
-/** Rejects any non-empty identifier failure without reflecting the input value. */
 function assertIdentifier(value: unknown): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new KnowledgeSourceLifecycleModelError();
   }
 }
 
-/** Rejects revisions and counts that cannot be represented monotonically. */
 function assertNonNegativeSafeInteger(value: unknown): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new KnowledgeSourceLifecycleModelError();
   }
 }
 
-/** Copies and freezes one complete action matrix. */
 function snapshotActions(value: unknown): Readonly<KnowledgeSourceLifecycleActions> {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSourceLifecycleModelError();
@@ -134,7 +119,6 @@ function snapshotActions(value: unknown): Readonly<KnowledgeSourceLifecycleActio
   });
 }
 
-/** Copies, validates, sorts, and freezes stable source-retirement blockers. */
 function snapshotRetirementBlockers(
   value: unknown
 ): readonly KnowledgeSourceLifecycleRetirementBlocker[] {
@@ -154,7 +138,6 @@ function snapshotRetirementBlockers(
   return Object.freeze(blockers);
 }
 
-/** Creates one detached, internally consistent active source row. */
 function snapshotSource(
   value: KnowledgeSourceLifecycleItem
 ): Readonly<KnowledgeSourceLifecycleItem> {
@@ -208,12 +191,10 @@ function snapshotSource(
   });
 }
 
-/** Compares strings by code unit for deterministic, locale-independent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Sorts active sources by Windows path identity and then exact source identity. */
 function compareSources(
   left: Readonly<KnowledgeSourceLifecycleItem>,
   right: Readonly<KnowledgeSourceLifecycleItem>
@@ -225,15 +206,6 @@ function compareSources(
   );
 }
 
-/**
- * Validates, detaches, sorts, and deeply freezes one source lifecycle projection.
- *
- * The returned action flags are presentation hints only. A caller handling a
- * command must reload durable state and re-prove the opaque retirement reference.
- *
- * @param input - Trusted-or-untrusted projection assembled at the UI boundary
- * @returns Strict immutable lifecycle model with no retained mutable references
- */
 export function createKnowledgeSourceLifecycleModel(
   input: KnowledgeSourceLifecycleModelInput
 ): Readonly<KnowledgeSourceLifecycleModel> {

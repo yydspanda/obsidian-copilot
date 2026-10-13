@@ -28,51 +28,39 @@ import {
 const MAX_CITATION_TARGETS = 512;
 const OPAQUE_TOKEN_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 
-/** Minimal exact-reader boundary used by one query generation. */
 export interface KnowledgeAppliedWikiSnapshotReadPort {
-  /** Reads one stable, exact applied-Wiki snapshot. */
   read(signal: AbortSignal): Promise<KnowledgeVerifiedWikiSnapshot>;
 }
 
-/** Minimal pure lexical boundary used by the coordinator. */
 export interface KnowledgeScopedLexicalRetrievalPort {
-  /** Ranks only the supplied in-memory page snapshots. */
   retrieve(
     query: string,
     pages: readonly Readonly<KnowledgeScopedPageSnapshot>[]
   ): readonly Readonly<KnowledgeScopedLexicalHit>[];
 }
 
-/** Exact source navigation authority kept outside the UI-facing query result. */
 export interface KnowledgeCitationNavigationTarget {
   readonly sourcePath: string;
   readonly citation: Readonly<ClaimCitation>;
 }
 
-/** Platform adapter that opens one coordinator-authorized source citation. */
 export interface KnowledgeCitationNavigationPort {
-  /** Re-proves an exact source citation without changing the workspace. */
   verify(
     target: Readonly<KnowledgeCitationNavigationTarget>,
     signal: AbortSignal
   ): Promise<boolean>;
 
-  /** Opens an exact source target selected through an opaque citation reference. */
   open(target: Readonly<KnowledgeCitationNavigationTarget>, signal: AbortSignal): Promise<void>;
 }
 
-/** Purpose of an opaque identifier requested from the injected factory. */
 export type KnowledgeQueryOpaqueIdKind = "query" | "citation";
 
-/** Creates unpredictable identifier material without coupling core query code to a platform RNG. */
 export type KnowledgeQueryIdFactory = (kind: KnowledgeQueryOpaqueIdKind) => string;
 
-/** Strict request accepted by the scoped retrieval and answer boundary. */
 export interface KnowledgeStudioQueryRequest {
   readonly query: string;
 }
 
-/** Safe location metadata shown by the UI without exposing an actionable locator object. */
 export type KnowledgeSourceCitationLocationSummary =
   | Readonly<{
       kind: "markdown_lines";
@@ -84,7 +72,6 @@ export type KnowledgeSourceCitationLocationSummary =
   | Readonly<{ kind: "pdf_page"; page: number }>
   | Readonly<{ kind: "quote" }>;
 
-/** Opaque UI summary for one exact source-backed citation target. */
 export interface KnowledgeSourceCitationSummary {
   readonly citationRef: string;
   readonly sourceId: string;
@@ -93,7 +80,6 @@ export interface KnowledgeSourceCitationSummary {
   readonly location: KnowledgeSourceCitationLocationSummary;
 }
 
-/** One exact applied-Wiki lexical hit with source-backed navigation summaries. */
 export interface KnowledgeGroundedRetrievalHit {
   readonly pageEvidenceId: string;
   readonly pagePath: string;
@@ -109,7 +95,6 @@ export interface KnowledgeGroundedRetrievalHit {
   readonly citations: readonly Readonly<KnowledgeSourceCitationSummary>[];
 }
 
-/** Frozen retrieval-only result; it intentionally contains no generated answer or write command. */
 export interface KnowledgeGroundedRetrievalResult {
   readonly mode: "grounded_retrieval";
   readonly bundleId: string;
@@ -119,7 +104,6 @@ export interface KnowledgeGroundedRetrievalResult {
   readonly hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[];
 }
 
-/** One validated answer claim whose references were mapped by Core, never by the model. */
 export interface KnowledgeGroundedAnswerResultClaim {
   readonly claimId: string;
   readonly kind: KnowledgeGroundedAnswerClaimKind;
@@ -127,14 +111,12 @@ export interface KnowledgeGroundedAnswerResultClaim {
   readonly citations: readonly Readonly<KnowledgeSourceCitationSummary>[];
 }
 
-/** User-visible answer projection with explicit support and insufficiency categories. */
 export interface KnowledgeGroundedAnswerResultBody {
   readonly status: KnowledgeGroundedAnswer["status"];
   readonly claims: readonly Readonly<KnowledgeGroundedAnswerResultClaim>[];
   readonly insufficientEvidence: readonly string[];
 }
 
-/** Frozen read-only model answer over one exact applied-Wiki and source generation. */
 export interface KnowledgeGroundedAnswerResult {
   readonly mode: "grounded_answer";
   readonly bundleId: string;
@@ -145,21 +127,17 @@ export interface KnowledgeGroundedAnswerResult {
   readonly hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[];
 }
 
-/** H.1 retrieval or H.2 synthesized answer returned through the stable Query port. */
 export type KnowledgeStudioQueryResult =
   | KnowledgeGroundedRetrievalResult
   | KnowledgeGroundedAnswerResult;
 
-/** Independent UI boundary for scoped retrieval and opaque citation navigation. */
 export interface KnowledgeStudioQueryPort {
-  /** Runs one retrieval-only query against the current exact applied Wiki. */
   query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
   ): Promise<KnowledgeStudioQueryResult>;
 
-  /** Opens one source citation previously issued by the current query generation. */
   openCitation(
     bundleId: string,
     queryId: string,
@@ -167,14 +145,11 @@ export interface KnowledgeStudioQueryPort {
     signal: AbortSignal
   ): Promise<void>;
 
-  /** Revokes one exact result, or all current Bundle Query authority when no id is supplied. */
   revokeCurrent(bundleId: string, queryId?: string): void;
 
-  /** Revokes every issued query and citation reference permanently. */
   close(): void;
 }
 
-/** Dependencies captured by one Bundle-scoped query coordinator. */
 export interface KnowledgeScopedQueryCoordinatorInput {
   readonly bundleId: string;
   readonly reader: KnowledgeAppliedWikiSnapshotReadPort;
@@ -185,9 +160,7 @@ export interface KnowledgeScopedQueryCoordinatorInput {
   readonly writeback?: KnowledgeQueryWritebackSubmissionPort;
 }
 
-/** Sanitized failure that never retains a query, path, locator, or adapter cause. */
 export class KnowledgeScopedQueryError extends Error {
-  /** Creates one value-free query boundary failure. */
   constructor() {
     super("The grounded knowledge query is unavailable");
     this.name = "KnowledgeScopedQueryError";
@@ -220,31 +193,26 @@ interface CitationCandidate {
   readonly citation: Readonly<ClaimCitation>;
 }
 
-/** Throws the platform-standard cancellation category at an async boundary. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new DOMException("The operation was aborted", "AbortError");
   }
 }
 
-/** Reports whether a rejection is already the platform cancellation category. */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-/** Compares strings by code unit without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Requires one strict non-empty identifier without returning its value in an error. */
 function assertIdentifier(value: unknown): asserts value is string {
   if (typeof value !== "string" || value.length < 1 || value.length > 512) {
     throw new KnowledgeScopedQueryError();
   }
 }
 
-/** Requires the structural AbortSignal methods used by this cross-realm core boundary. */
 function assertAbortSignal(value: unknown): asserts value is AbortSignal {
   if (
     typeof value !== "object" ||
@@ -257,7 +225,6 @@ function assertAbortSignal(value: unknown): asserts value is AbortSignal {
   }
 }
 
-/** Captures one exact single-field query request without evaluating accessors. */
 function captureQuery(request: unknown): string {
   if (typeof request !== "object" || request === null || Array.isArray(request)) {
     throw new KnowledgeScopedQueryError();
@@ -287,7 +254,6 @@ function captureQuery(request: unknown): string {
   return query;
 }
 
-/** Captures the only user-authored field accepted by Save to Wiki. */
 function captureWritebackTitle(request: unknown): string {
   if (typeof request !== "object" || request === null || Array.isArray(request)) {
     throw new KnowledgeScopedQueryError();
@@ -317,11 +283,9 @@ function captureWritebackTitle(request: unknown): string {
   return title;
 }
 
-/** Links caller and generation cancellation without letting one caller revoke the generation. */
 function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   const controller = new AbortController();
 
-  /** Propagates one parent cancellation to this operation only. */
   function abort(): void {
     controller.abort();
   }
@@ -334,7 +298,6 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
     signal.addEventListener("abort", abort, { once: true });
   }
 
-  /** Removes every parent listener after the operation settles. */
   function dispose(): void {
     for (const signal of signals) {
       signal.removeEventListener("abort", abort);
@@ -344,7 +307,6 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   return Object.freeze({ signal: controller.signal, dispose });
 }
 
-/** Deep-freezes a detached exact ClaimCitation for the navigation authority. */
 function freezeCitation(citation: Readonly<ClaimCitation>): Readonly<ClaimCitation> {
   return Object.freeze({
     ...citation,
@@ -352,7 +314,6 @@ function freezeCitation(citation: Readonly<ClaimCitation>): Readonly<ClaimCitati
   });
 }
 
-/** Serializes one locator into a deterministic exact de-duplication key. */
 function createLocatorKey(locator: Readonly<SourceLocator>): string {
   const common = [
     locator.kind,
@@ -379,7 +340,6 @@ function createLocatorKey(locator: Readonly<SourceLocator>): string {
   }
 }
 
-/** Creates one exact source-and-citation key without trusting citation ids alone. */
 function createCitationKey(sourcePath: string, citation: Readonly<ClaimCitation>): string {
   return JSON.stringify([
     sourcePath,
@@ -390,7 +350,6 @@ function createCitationKey(sourcePath: string, citation: Readonly<ClaimCitation>
   ]);
 }
 
-/** Reduces an exact locator to safe, non-actionable UI location metadata. */
 function createLocationSummary(
   locator: Readonly<SourceLocator>
 ): KnowledgeSourceCitationLocationSummary {
@@ -415,7 +374,6 @@ function createLocationSummary(
   }
 }
 
-/** Aggregates and exactly de-duplicates all accepted source citations for one page. */
 function collectCitationCandidates(
   page: Readonly<KnowledgeVerifiedWikiPage>
 ): readonly Readonly<CitationCandidate>[] {
@@ -457,7 +415,6 @@ function collectCitationCandidates(
   return Object.freeze([...byKey.values()].sort((left, right) => compareText(left.key, right.key)));
 }
 
-/** Verifies that an injected lexical hit is one exact slice of its proven page. */
 function assertExactHit(
   hit: Readonly<KnowledgeScopedLexicalHit>,
   page: Readonly<KnowledgeVerifiedWikiPage>
@@ -481,7 +438,6 @@ function assertExactHit(
   }
 }
 
-/** Freezes one exact retrieval hit and its already-authorized citation summaries. */
 function createGroundedHit(
   hit: Readonly<KnowledgeScopedLexicalHit>,
   citations: readonly Readonly<KnowledgeSourceCitationSummary>[]
@@ -502,7 +458,6 @@ function createGroundedHit(
   });
 }
 
-/** Compares every immutable source and citation field in one applied-page provenance record. */
 function isSameAppliedSourceProvenance(
   before: Readonly<KnowledgeVerifiedWikiPage>["sources"][number],
   after: Readonly<KnowledgeVerifiedWikiPage>["sources"][number]
@@ -527,7 +482,6 @@ function isSameAppliedSourceProvenance(
   );
 }
 
-/** Compares the exact Wiki material that was proven before and after model I/O. */
 function isSameVerifiedWikiSnapshot(
   before: Readonly<KnowledgeVerifiedWikiSnapshot>,
   after: Readonly<KnowledgeVerifiedWikiSnapshot>
@@ -564,7 +518,6 @@ function isSameVerifiedWikiSnapshot(
   });
 }
 
-/** Reports whether one citation can participate in the H.2 Markdown-only answer contract. */
 function isEligibleAnswerTarget(target: Readonly<StoredCitationTarget>): boolean {
   const locator = target.target.citation.locator;
   return locator.kind !== "pdf_page" && locator.excerpt.length > 0;
@@ -575,15 +528,6 @@ interface KnowledgeAnswerModelMaterial {
   readonly targetsByEvidenceId: ReadonlyMap<string, Readonly<StoredCitationTarget>>;
 }
 
-/**
- * Coordinates exact applied-Wiki retrieval and opaque source-citation navigation.
- *
- * An optional narrow answer model can synthesize only from source-reproved
- * evidence prepared inside the same query generation. The coordinator has no
- * Queue, Review, Apply, or file-write dependency. Starting a new query
- * immediately revokes the previous generation and every citation reference it
- * issued.
- */
 export class KnowledgeScopedQueryCoordinator
   implements KnowledgeStudioQueryPort, KnowledgeStudioQueryWritebackPort
 {
@@ -599,7 +543,6 @@ export class KnowledgeScopedQueryCoordinator
   private generationController: AbortController | undefined;
   private current: StoredQueryGeneration | undefined;
 
-  /** Captures one Bundle-specific, read-only query generation. */
   constructor(input: KnowledgeScopedQueryCoordinatorInput) {
     if (
       !input ||
@@ -624,14 +567,12 @@ export class KnowledgeScopedQueryCoordinator
     this.writeback = input.writeback;
   }
 
-  /** Rejects all work after this coordinator generation has been closed. */
   private assertOpen(): void {
     if (this.closed) {
       throw new KnowledgeScopedQueryError();
     }
   }
 
-  /** Creates one generation-scoped opaque id from caller-injected random material. */
   private createOpaqueId(
     kind: KnowledgeQueryOpaqueIdKind,
     generation: number,
@@ -649,7 +590,6 @@ export class KnowledgeScopedQueryCoordinator
     return `knowledge-${kind}-${generation}-${ordinal}-${token}`;
   }
 
-  /** Starts one new generation and revokes all prior query and citation references. */
   private beginGeneration(): Readonly<{ generation: number; controller: AbortController }> {
     this.generationController?.abort();
     this.current = undefined;
@@ -659,7 +599,6 @@ export class KnowledgeScopedQueryCoordinator
     return Object.freeze({ generation: this.generation, controller });
   }
 
-  /** Requires that an async operation still belongs to the active open generation. */
   private assertCurrent(generation: number, signal: AbortSignal): void {
     throwIfAborted(signal);
     if (this.closed || generation !== this.generation) {
@@ -667,7 +606,6 @@ export class KnowledgeScopedQueryCoordinator
     }
   }
 
-  /** Allocates or reuses one opaque navigation target within a query result. */
   private resolveCitationTarget(
     candidate: Readonly<CitationCandidate>,
     generation: number,
@@ -701,7 +639,6 @@ export class KnowledgeScopedQueryCoordinator
     return stored;
   }
 
-  /** Builds only source-reproved model evidence and keeps citation authority private. */
   private async createAnswerModelMaterial(
     question: string,
     hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[],
@@ -816,7 +753,6 @@ export class KnowledgeScopedQueryCoordinator
     return Object.freeze({ request, targetsByEvidenceId });
   }
 
-  /** Maps validated evidence ids to deduplicated opaque UI citation summaries. */
   private createAnswerResultBody(
     answer: Readonly<KnowledgeGroundedAnswer>,
     targetsByEvidenceId: ReadonlyMap<string, Readonly<StoredCitationTarget>>
@@ -842,14 +778,6 @@ export class KnowledgeScopedQueryCoordinator
     });
   }
 
-  /**
-   * Runs one scoped retrieval and optional grounded answer against the exact current applied Wiki.
-   *
-   * @param bundleId - Exact Bundle identity owned by this coordinator
-   * @param request - Strict one-field query request
-   * @param signal - Caller cancellation signal
-   * @returns Frozen grounded result and opaque citation references
-   */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -1010,20 +938,6 @@ export class KnowledgeScopedQueryCoordinator
     }
   }
 
-  /**
-   * Captures the current grounded answer as a managed source for reviewed writeback.
-   *
-   * The coordinator re-proves the complete applied-Wiki snapshot and every
-   * actually used source citation before handing a content-addressed capture to
-   * the narrow production submission edge. It never receives a path or Wiki
-   * payload from the UI and cannot apply the eventual ChangeSet.
-   *
-   * @param bundleId - Exact Bundle identity owned by this coordinator
-   * @param queryId - Opaque current query identity returned by query
-   * @param request - Single user-authored display title
-   * @param signal - Caller cancellation signal
-   * @returns Truthful durable registration result
-   */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -1132,14 +1046,6 @@ export class KnowledgeScopedQueryCoordinator
     }
   }
 
-  /**
-   * Opens one exact source citation authorized by the current opaque reference.
-   *
-   * @param bundleId - Exact Bundle identity owned by this coordinator
-   * @param queryId - Opaque current query identity returned by query
-   * @param citationRef - Opaque source citation reference returned inside a hit
-   * @param signal - Caller cancellation signal
-   */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -1182,7 +1088,6 @@ export class KnowledgeScopedQueryCoordinator
     }
   }
 
-  /** Revokes exact or Bundle-wide Query authority without permanently closing the coordinator. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     this.assertOpen();
     assertIdentifier(bundleId);
@@ -1199,7 +1104,6 @@ export class KnowledgeScopedQueryCoordinator
     controller?.abort();
   }
 
-  /** Permanently closes this generation and revokes every opaque reference. */
   close(): void {
     if (this.closed) return;
     this.closed = true;

@@ -49,31 +49,27 @@ import {
   type KnowledgeSourceRemovalConfirmation,
 } from "@/knowledge/ui/sourceLifecycleModel";
 
-/** Knowledge Studio tabs currently exposed by the Windows desktop surface. */
 export type KnowledgeStudioTab = "query" | "activity" | "review" | "sources" | "recovery";
 
-/** Availability of the runtime adapters behind a UI snapshot. */
 export type KnowledgeStudioAvailability = "ready" | "adapter_unavailable";
 
-/** Commands implemented by the exact adapter generation behind a snapshot. */
 export interface KnowledgeStudioCommandCapabilities {
   pauseBundle: boolean;
   resumeBundle: boolean;
   cancelJob: boolean;
   retryJob: boolean;
-  /** Whether a confirmed completed-source reassessment can be queued without resuming work. */
+
   reanalyzeJob?: boolean;
-  /** Whether one pending material can run without resuming the Bundle. */
+
   runSelectedJob?: boolean;
   reviewReject: boolean;
   reviewAccept: boolean;
-  /** Whether the exact generation exposes dedicated forward Review decisions and Apply. */
+
   forwardRevisionReview?: boolean;
   recoveryContinue?: boolean;
   recoveryAbandon?: boolean;
 }
 
-/** One trusted, read-only render snapshot returned by the orchestration edge. */
 export interface KnowledgeStudioSnapshot {
   bundleId: string;
   revisionToken: string;
@@ -81,46 +77,30 @@ export interface KnowledgeStudioSnapshot {
   commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities>;
   activity: Readonly<KnowledgeActivityModel>;
   reviews: readonly Readonly<KnowledgeReviewPlan>[];
-  /** Pending ordinary proposals incompatible with current source/configuration authority. */
+
   outdatedReviewIds?: readonly string[];
-  /** Independent forward proposals and accepted-but-unapplied work. */
+
   forwardRevisionReviews?: readonly Readonly<KnowledgeForwardRevisionStudioReview>[];
   recovery: Readonly<KnowledgeRecoveryModel>;
-  /** Active registered sources when the exact lifecycle generation is connected. */
+
   sourceLifecycle?: Readonly<KnowledgeSourceLifecycleModel>;
-  /** Optional first-load tab selected by a constrained startup adapter. */
+
   preferredTab?: "sources" | "review";
-  /** Whether the exact adapter generation exposes scoped applied-Wiki Query. */
+
   queryAvailable?: boolean;
-  /** Whether current grounded answers can enter the reviewed writeback pipeline. */
+
   queryWritebackAvailable?: boolean;
-  /** Whether opaque Review evidence references can be re-proved and opened. */
+
   reviewEvidenceAvailable?: boolean;
   notice?: string;
 }
 
-/** Read boundary used by Knowledge Studio; event callbacks are reload hints only. */
 export interface KnowledgeStudioReadPort {
-  /**
-   * Loads one complete, durable UI snapshot.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param signal - Cancellation signal owned by the controller
-   * @returns Current trusted snapshot
-   */
   load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot>;
 
-  /**
-   * Subscribes to non-authoritative change hints for one Bundle.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param onHint - Callback that must trigger a fresh durable read
-   * @returns Unsubscribe callback
-   */
   subscribe(bundleId: string, onHint: () => void): () => void;
 }
 
-/** Result of submitting one exact, opaque review decision. */
 export type KnowledgeStudioReviewSubmissionResult =
   | { kind: "applied" }
   | { kind: "rejected" }
@@ -128,67 +108,64 @@ export type KnowledgeStudioReviewSubmissionResult =
   | { kind: "stale" }
   | { kind: "blocked"; diagnostics: readonly KnowledgeDiagnostic[] };
 
-/** Result of one exact explicit recovery action. */
 export type KnowledgeStudioRecoverySubmissionResult =
   | { kind: "completed" }
   | { kind: "stale" }
   | { kind: "recovery_required" }
   | { kind: "blocked" };
 
-/** Mutation boundary used by Knowledge Studio; implementations own all durable writes. */
 export interface KnowledgeStudioCommandPort {
-  /** Pauses an entire Bundle. */
   pauseBundle(bundleId: string, expectedQueueRevision: number, signal: AbortSignal): Promise<void>;
-  /** Resumes an entire Bundle when its durable gate permits it. */
+
   resumeBundle(bundleId: string, expectedQueueRevision: number, signal: AbortSignal): Promise<void>;
-  /** Cancels one cancellable queue job. */
+
   cancelJob(
     bundleId: string,
     jobId: string,
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
-  /** Retries one retryable failed queue job. */
+
   retryJob(
     bundleId: string,
     jobId: string,
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
-  /** Queues a new assessment of one exact completed job, preserving its history. */
+
   reanalyzeJob?(
     bundleId: string,
     jobId: string,
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
-  /** Runs one confirmed pending material while all other queued work remains paused. */
+
   runSelectedJob?(
     bundleId: string,
     jobId: string,
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
-  /** Submits content-free review decisions to the core review boundary. */
+
   submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
     signal: AbortSignal
   ): Promise<KnowledgeStudioReviewSubmissionResult>;
-  /** Submits one dedicated opaque forward Review or accepted-ready Apply action. */
+
   submitForwardRevisionStudio?(
     bundleId: string,
     command: KnowledgeForwardRevisionStudioCommand,
     signal: AbortSignal
   ): Promise<KnowledgeForwardRevisionStudioSubmissionResult>;
-  /** Continues an exact accepted apply after fresh durable re-proof. */
+
   continueRecovery?(
     bundleId: string,
     recoveryId: string,
     expectedRuntimeRevision: number,
     signal: AbortSignal
   ): Promise<KnowledgeStudioRecoverySubmissionResult>;
-  /** Abandons an exact no-journal apply before any Wiki mutation began. */
+
   abandonRecovery?(
     bundleId: string,
     recoveryId: string,
@@ -197,7 +174,6 @@ export interface KnowledgeStudioCommandPort {
   ): Promise<KnowledgeStudioRecoverySubmissionResult>;
 }
 
-/** Controller lifecycle independent of any particular React render root. */
 export type KnowledgeStudioLoadStatus =
   | "idle"
   | "refreshing"
@@ -206,7 +182,6 @@ export type KnowledgeStudioLoadStatus =
   | "ready"
   | "error";
 
-/** User-visible action currently serialized by the controller. */
 export interface KnowledgeStudioPendingAction {
   kind:
     | "pause"
@@ -226,14 +201,12 @@ export interface KnowledgeStudioPendingAction {
   targetId?: string;
 }
 
-/** Safe feedback produced by command outcomes without retaining raw errors. */
 export interface KnowledgeStudioFeedback {
   kind: "success" | "blocked" | "error";
   message: string;
   diagnostics?: readonly KnowledgeDiagnostic[];
 }
 
-/** Ephemeral scoped-query state that is never written into the durable Runtime. */
 export interface KnowledgeStudioQueryState {
   status: "idle" | "loading" | "ready" | "error";
   result?: Readonly<KnowledgeStudioQueryResult>;
@@ -242,7 +215,6 @@ export interface KnowledgeStudioQueryState {
   savingToWiki?: boolean;
 }
 
-/** Immutable controller state consumed by React through subscription. */
 export interface KnowledgeStudioState {
   status: KnowledgeStudioLoadStatus;
   activeTab: KnowledgeStudioTab;
@@ -259,13 +231,12 @@ export interface KnowledgeStudioState {
   query?: Readonly<KnowledgeStudioQueryState>;
   openingReviewEvidenceRef?: string;
   reviewEvidenceError?: string;
-  /** Independent notice for session-only Review text revoked by a new durable snapshot. */
+
   reviewDraftNotice?: string;
-  /** Monotonic render hint for private, controller-owned Review draft changes. */
+
   reviewDraftRevision?: number;
 }
 
-/** Callback used by a UI binding to observe controller state changes. */
 export type KnowledgeStudioStateListener = () => void;
 
 const REVIEW_APPLY_PAUSED_MESSAGE =
@@ -298,7 +269,6 @@ const EMPTY_ACTIVITY_COUNTS: Readonly<KnowledgeActivityCounts> = Object.freeze({
   byStatus: EMPTY_STATUS_COUNTS,
 });
 
-/** Fail-closed command capabilities shared by unavailable and read-only adapters. */
 export const NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities> =
   Object.freeze({
     pauseBundle: false,
@@ -312,21 +282,13 @@ export const NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioC
     recoveryAbandon: false,
   });
 
-/** Sanitized error used by the temporary shell command port. */
 export class KnowledgeStudioAdapterUnavailableError extends Error {
-  /** Creates a stable adapter-unavailable error without implementation details. */
   constructor() {
     super("Knowledge Studio runtime adapters are not configured yet");
     this.name = "KnowledgeStudioAdapterUnavailableError";
   }
 }
 
-/**
- * Creates the empty snapshot used before the durable Windows adapters are connected.
- *
- * @param bundleId - Bundle selected for the future adapter
- * @returns Read-only unavailable snapshot with no fabricated activity
- */
 export function createUnavailableKnowledgeStudioSnapshot(
   bundleId: string,
   notice = "Knowledge Studio is ready for its durable Windows adapter. No files can be changed from this shell."
@@ -356,18 +318,11 @@ export function createUnavailableKnowledgeStudioSnapshot(
   });
 }
 
-/** Read/command port that keeps the first UI entry fail-closed until adapters exist. */
 export class UnavailableKnowledgeStudioPort
   implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort
 {
-  /**
-   * Creates a fail-closed port with an optional sanitized readiness notice.
-   *
-   * @param notice - User-facing explanation of the remaining runtime gate
-   */
   constructor(private readonly notice?: string) {}
 
-  /** Loads an explicit unavailable snapshot without reading Vault files. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     if (signal.aborted) {
       throw new DOMException("The operation was aborted", "AbortError");
@@ -375,12 +330,10 @@ export class UnavailableKnowledgeStudioPort
     return createUnavailableKnowledgeStudioSnapshot(bundleId, this.notice);
   }
 
-  /** Registers no hint source because no runtime adapter is active. */
   subscribe(_bundleId: string, _onHint: () => void): () => void {
     return () => undefined;
   }
 
-  /** Rejects a pause request while adapters are unavailable. */
   async pauseBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -389,7 +342,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects a resume request while adapters are unavailable. */
   async resumeBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -398,7 +350,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects a cancel request while adapters are unavailable. */
   async cancelJob(
     _bundleId: string,
     _jobId: string,
@@ -408,7 +359,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects a retry request while adapters are unavailable. */
   async retryJob(
     _bundleId: string,
     _jobId: string,
@@ -418,7 +368,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects review submission while adapters are unavailable. */
   async submitReview(
     _bundleId: string,
     _command: KnowledgeReviewCommand,
@@ -427,7 +376,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects forward Review submission while adapters are unavailable. */
   async submitForwardRevisionStudio(
     _bundleId: string,
     _command: KnowledgeForwardRevisionStudioCommand,
@@ -436,7 +384,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects recovery continuation while adapters are unavailable. */
   async continueRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -446,7 +393,6 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects recovery abandonment while adapters are unavailable. */
   async abandonRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -457,20 +403,8 @@ export class UnavailableKnowledgeStudioPort
   }
 }
 
-/**
- * Reports whether an unknown rejection represents intentional cancellation.
- *
- * @param error - Unknown rejection
- * @returns Whether the error uses the platform AbortError convention
- */
 const isAbortError = isKnowledgeAbortError;
 
-/**
- * Validates the minimum cross-object identity contract of one trusted snapshot.
- *
- * @param bundleId - Bundle requested by the controller
- * @param snapshot - Snapshot returned by the read port
- */
 function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnapshot): void {
   const commandCapabilities = snapshot.commandCapabilities;
   const forwardReviews = snapshot.forwardRevisionReviews ?? [];
@@ -534,12 +468,6 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
   }
 }
 
-/**
- * Reads one exact, frozen, data-only source-removal authority token.
- *
- * A copied frozen value prevents accessors or later caller mutation from changing
- * the authority that was validated before the Runtime command is submitted.
- */
 function snapshotRemovalConfirmation(
   value: Readonly<KnowledgeSourceRemovalConfirmation>
 ): Readonly<KnowledgeSourceRemovalConfirmation> | undefined {
@@ -586,12 +514,6 @@ function snapshotRemovalConfirmation(
   });
 }
 
-/**
- * Captures one exact value-free Review evidence result without invoking accessors.
- *
- * @param value - Untrusted result returned by the optional navigation boundary
- * @returns Frozen canonical result, or undefined when the receipt is malformed
- */
 function snapshotReviewEvidenceOpenResult(
   value: unknown
 ): Readonly<KnowledgeReviewEvidenceOpenResult> | undefined {
@@ -613,12 +535,6 @@ function snapshotReviewEvidenceOpenResult(
   }
 }
 
-/**
- * Coordinates durable Studio state, ephemeral scoped Query, and serialized UI commands.
- *
- * Durable queue/review snapshots remain authoritative. Subscription events never
- * mutate rows optimistically; they only schedule a fresh `load` through the port.
- */
 export class KnowledgeStudioController {
   private state: KnowledgeStudioState = {
     status: "idle",
@@ -641,16 +557,6 @@ export class KnowledgeStudioController {
   private pendingForwardRevisionFocusRef?: string;
   private readonly reviewDrafts = new KnowledgeReviewDraftStore();
 
-  /**
-   * Creates a controller over explicit read and command ports.
-   *
-   * @param readPort - Durable snapshot read boundary
-   * @param commandPort - Durable mutation orchestration boundary
-   * @param queryPort - Optional scoped Query and citation-navigation boundary
-   * @param queryWritebackPort - Optional current-answer capture boundary
-   * @param sourceLifecyclePort - Optional source inventory and lifecycle command boundary
-   * @param reviewEvidencePort - Optional opaque Review evidence navigation boundary
-   */
   constructor(
     private readonly readPort: KnowledgeStudioReadPort,
     private readonly commandPort: KnowledgeStudioCommandPort,
@@ -660,28 +566,16 @@ export class KnowledgeStudioController {
     private readonly reviewEvidencePort?: KnowledgeStudioReviewEvidencePort
   ) {}
 
-  /** Returns the current immutable-by-contract controller state. */
   getState(): KnowledgeStudioState {
     return this.state;
   }
 
-  /**
-   * Subscribes a renderer and immediately exposes the current state.
-   *
-   * @param listener - React-compatible external-store callback
-   * @returns Unsubscribe callback
-   */
   subscribe(listener: KnowledgeStudioStateListener): () => void {
     this.listeners.add(listener);
     listener();
     return () => this.listeners.delete(listener);
   }
 
-  /**
-   * Starts one Bundle session, replacing any previous session.
-   *
-   * @param bundleId - Stable non-empty Bundle identifier
-   */
   start(bundleId: string): void {
     if (typeof bundleId !== "string" || bundleId.trim().length === 0) {
       throw new TypeError("bundleId must be a non-empty string");
@@ -708,11 +602,6 @@ export class KnowledgeStudioController {
     void this.refresh();
   }
 
-  /**
-   * Presents a fail-closed explanation without inventing or loading a Bundle identity.
-   *
-   * @param notice - Sanitized user-facing reason no exact Bundle session can start
-   */
   showUnavailable(notice: string): void {
     if (typeof notice !== "string" || notice.trim().length === 0) {
       throw new TypeError("Knowledge Studio unavailable notice must be a non-empty string");
@@ -727,13 +616,6 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /**
-   * Presents a transient, action-free refresh state while runtime ownership is rebuilt.
-   *
-   * This state deliberately retains no Bundle identity, snapshot, or command
-   * capability. Callers must start a freshly admitted Bundle generation before
-   * the Studio exposes durable state again.
-   */
   showRefreshing(): void {
     // Keep the receipt visible while admission rebuilds, but never retain the
     // old snapshot or Query authority. Repeated refresh signals share this handoff.
@@ -751,7 +633,6 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /** Stops the current Bundle session and cancels in-flight work. */
   stop(): void {
     this.cancelSessionWork();
     this.state = {
@@ -762,17 +643,11 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /** Stops the session and releases all render subscriptions. */
   destroy(): void {
     this.stop();
     this.listeners.clear();
   }
 
-  /**
-   * Selects a top-level Knowledge Studio tab.
-   *
-   * @param tab - Query, Activity, Review, Sources, or Recovery tab
-   */
   selectTab(tab: KnowledgeStudioTab): void {
     const snapshot = this.state.snapshot;
     if (tab === "query" && snapshot?.queryAvailable !== true) return;
@@ -790,11 +665,6 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /**
-   * Runs a read-only query against the exact applied Wiki generation.
-   *
-   * @param query - User question or search phrase
-   */
   async runQuery(query: string): Promise<void> {
     const bundleId = this.state.bundleId;
     if (
@@ -866,11 +736,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /**
-   * Opens one coordinator-issued source citation without accepting a path from React.
-   *
-   * @param citationRef - Opaque reference present in the current query result
-   */
   async openQueryCitation(citationRef: string): Promise<void> {
     const bundleId = this.state.bundleId;
     const currentQuery = this.state.query;
@@ -939,11 +804,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /**
-   * Registers the current grounded answer as a managed source for Review/Apply.
-   *
-   * @param title - User-selected display title embedded in the immutable capture
-   */
   async saveCurrentQueryToWiki(title: string): Promise<void> {
     const bundleId = this.state.bundleId;
     const currentQuery = this.state.query;
@@ -1046,7 +906,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /** Requires the exact value-free receipt returned by the writeback boundary. */
   private assertQueryWritebackResult(
     value: KnowledgeStudioQueryWritebackResult
   ): asserts value is Readonly<{ kind: "registered" }> {
@@ -1060,11 +919,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /**
-   * Opens one current review plan by its opaque ChangeSet identity.
-   *
-   * @param changeSetId - Review proposal selected from Activity or the inbox
-   */
   openReview(changeSetId: string): void {
     this.cancelReviewEvidenceWork();
     const review = this.state.snapshot?.reviews.find(
@@ -1094,7 +948,6 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /** Opens one current dedicated forward row by its opaque product reference. */
   openForwardRevision(reviewRef: string): void {
     this.cancelReviewEvidenceWork();
     const review = this.state.snapshot?.forwardRevisionReviews?.find(
@@ -1124,11 +977,6 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
-  /**
-   * Focuses one just-published opaque forward row after a fresh durable reload.
-   *
-   * @param reviewRef - Product-only reference derived from the committed proposal receipt
-   */
   focusPublishedForwardRevision(reviewRef: string): void {
     if (!/^forward-studio-review-[a-f0-9]{64}$/.test(reviewRef)) {
       throw new TypeError("Forward revision review reference is invalid");
@@ -1148,12 +996,6 @@ export class KnowledgeStudioController {
     void this.refresh();
   }
 
-  /**
-   * Reads session-local decisions only when the supplied plan is still exact.
-   *
-   * @param plan - Plan currently rendered by React
-   * @returns Immutable saved decisions, or an empty draft for stale input
-   */
   getReviewDraft(plan: Readonly<KnowledgeReviewPlan>): KnowledgeReviewDraftState {
     const bundleId = this.state.bundleId;
     const current = this.getCurrentReview(plan);
@@ -1161,7 +1003,6 @@ export class KnowledgeStudioController {
     return this.reviewDrafts.read(createKnowledgeReviewDraftIdentity(bundleId, current));
   }
 
-  /** Reads the bounded active editor retained for one exact current Review. */
   getReviewActiveEdit(
     plan: Readonly<KnowledgeReviewPlan>
   ): Readonly<KnowledgeReviewActiveEdit> | undefined {
@@ -1171,12 +1012,6 @@ export class KnowledgeStudioController {
     return this.reviewDrafts.readActiveEdit(createKnowledgeReviewDraftIdentity(bundleId, current));
   }
 
-  /**
-   * Saves complete decisions without retaining any active textarea buffer.
-   *
-   * @param plan - Exact plan that produced the UI decision
-   * @param draft - Complete replacement decision map
-   */
   updateReviewDraft(
     plan: Readonly<KnowledgeReviewPlan>,
     draft: KnowledgeReviewDraftState
@@ -1202,7 +1037,6 @@ export class KnowledgeStudioController {
     return true;
   }
 
-  /** Saves or closes one bounded active editor for an exact current Review. */
   updateReviewActiveEdit(
     plan: Readonly<KnowledgeReviewPlan>,
     activeEdit: Readonly<KnowledgeReviewActiveEdit> | undefined
@@ -1228,12 +1062,9 @@ export class KnowledgeStudioController {
     return true;
   }
 
-  /** Resolves a supplied plan only when every exact identity field remains current. */
   private getCurrentReview(
     plan: Readonly<KnowledgeReviewPlan>
   ): Readonly<KnowledgeReviewPlan> | undefined {
-    // React receives these exact frozen plan instances from the current controller snapshot.
-    // Identity comparison avoids reading any property from a caller-owned impostor.
     return (
       this.state.snapshot?.reviews.find((candidate) => candidate === plan) ??
       this.state.snapshot?.forwardRevisionReviews?.find(
@@ -1243,11 +1074,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Opens one opaque evidence reference using only identities from the current Review plan.
-   *
-   * @param evidenceRef - Opaque reference emitted by the current plan projection
-   */
   async openReviewEvidence(evidenceRef: string): Promise<void> {
     const bundleId = this.state.bundleId;
     const plan = this.state.snapshot?.reviews.find(
@@ -1332,7 +1158,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /** Maps one value-free evidence outcome to optional safe user feedback. */
   private getReviewEvidenceResultMessage(
     result: Readonly<KnowledgeReviewEvidenceOpenResult>
   ): string | undefined {
@@ -1348,16 +1173,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /**
-   * Detaches one coherent Studio projection from the current read generation.
-   *
-   * Source lifecycle data must already belong to the read port's Runtime
-   * consistency sandwich. The separate lifecycle port is command-only here so the
-   * controller never combines independently observed revisions.
-   *
-   * @param base - Snapshot returned by the Studio read boundary
-   * @returns Original snapshot or a copy with a strict detached lifecycle model
-   */
   private snapshotStudioRead(base: KnowledgeStudioSnapshot): KnowledgeStudioSnapshot {
     const rawSourceLifecycle = base.sourceLifecycle;
     if (rawSourceLifecycle === undefined) return base;
@@ -1371,7 +1186,6 @@ export class KnowledgeStudioController {
     return Object.freeze({ ...base, sourceLifecycle });
   }
 
-  /** Reloads the current durable snapshot without optimistic status changes. */
   async refresh(): Promise<void> {
     const bundleId = this.state.bundleId;
     if (!bundleId) return;
@@ -1493,7 +1307,6 @@ export class KnowledgeStudioController {
     }
   }
 
-  /** Requests a durable Bundle-wide user pause. */
   async pauseBundle(): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1509,7 +1322,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Requests a durable Bundle resume when its recovery gate allows it. */
   async resumeBundle(): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1527,11 +1339,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Cancels one job through the orchestration port.
-   *
-   * @param jobId - Opaque durable job identifier
-   */
   async cancelJob(jobId: string): Promise<void> {
     const pending = this.state.pendingAction;
     if (pending) {
@@ -1608,11 +1415,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Retries one eligible failed job through the orchestration port.
-   *
-   * @param jobId - Opaque durable job identifier
-   */
   async retryJob(jobId: string): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1630,11 +1432,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Queues one confirmed reassessment without resuming work or changing old history.
-   *
-   * @param jobId - Completed job selected from the current paused Activity snapshot
-   */
   async reanalyzeJob(jobId: string): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1666,12 +1463,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Runs one explicitly confirmed pending material without resuming its Bundle.
-   *
-   * @param jobId - Pending job selected from the current user-paused Activity snapshot
-   * @param confirmedQueueRevision - Queue revision shown when the user confirmed paid execution
-   */
   async runSelectedJob(jobId: string, confirmedQueueRevision: number): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1704,12 +1495,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Rechecks one currently missing source against fresh durable watcher state.
-   *
-   * @param sourceId - Opaque source identity from the current lifecycle snapshot
-   * @param callerSignal - Optional view-owned cancellation signal
-   */
   async checkSourceAgain(sourceId: string, callerSignal?: AbortSignal): Promise<void> {
     if (this.state.pendingAction) return;
     const sourceLifecyclePort = this.sourceLifecyclePort;
@@ -1739,12 +1524,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /**
-   * Requests retirement of one exact active source without deleting generated Wiki pages.
-   *
-   * @param confirmation - Exact frozen row and revision authority shown to the user
-   * @param callerSignal - Optional view-owned cancellation signal
-   */
   async retireSource(
     confirmation: Readonly<KnowledgeSourceRemovalConfirmation>,
     callerSignal?: AbortSignal
@@ -1786,7 +1565,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Validates one path-free retirement receipt and maps it to stable feedback. */
   private createSourceRetirementFeedback(
     result: Readonly<KnowledgeSourceRetirementUiReceipt>
   ): KnowledgeStudioFeedback {
@@ -1816,11 +1594,6 @@ export class KnowledgeStudioController {
     };
   }
 
-  /**
-   * Strictly snapshots one identity-bound Review command and reloads durable truth.
-   *
-   * @param command - Opaque decisions bound to the currently rendered snapshot
-   */
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
     this.cancelReviewEvidenceWork();
     if (this.state.pendingAction) return;
@@ -1959,7 +1732,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Converts one reusable pending Review command into the distinct forward action boundary. */
   async submitForwardRevisionReview(
     reviewRef: string,
     command: KnowledgeReviewCommand
@@ -1993,7 +1765,6 @@ export class KnowledgeStudioController {
     await this.submitForwardRevisionCommand(captured, draftIdentity);
   }
 
-  /** Retries fresh validation and Apply for one durable accepted-ready forward decision. */
   async applyForwardRevision(reviewRef: string): Promise<void> {
     const review = this.state.snapshot?.forwardRevisionReviews?.find(
       (candidate) => candidate.reviewRef === reviewRef && candidate.state === "accepted_ready"
@@ -2009,7 +1780,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Ends one accepted-ready workflow only while no Apply journal or Wiki write has begun. */
   async abandonForwardRevision(reviewRef: string): Promise<void> {
     const review = this.state.snapshot?.forwardRevisionReviews?.find(
       (candidate) => candidate.reviewRef === reviewRef && candidate.state === "accepted_ready"
@@ -2025,7 +1795,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Rechecks one sticky Forward journal and retries only from its exact safe before state. */
   async retryForwardRevisionRecovery(reviewRef: string): Promise<void> {
     const review = this.state.snapshot?.forwardRevisionReviews?.find(
       (candidate) => candidate.reviewRef === reviewRef && candidate.state === "recovery_required"
@@ -2043,7 +1812,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Keeps the freshly observed Wiki value only when sticky recovery proves zero-write closure. */
   async keepCurrentForwardRevision(reviewRef: string): Promise<void> {
     const review = this.state.snapshot?.forwardRevisionReviews?.find(
       (candidate) => candidate.reviewRef === reviewRef && candidate.state === "recovery_required"
@@ -2061,7 +1829,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Serializes one current opaque Forward command and always reloads durable truth. */
   private async submitForwardRevisionCommand(
     commandValue: Readonly<KnowledgeForwardRevisionStudioCommand>,
     draftIdentity?: ReturnType<typeof createKnowledgeReviewDraftIdentity>,
@@ -2182,7 +1949,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Continues one exact accepted apply selected from the current recovery snapshot. */
   async continueRecovery(recoveryId: string): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -2207,7 +1973,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Abandons one exact no-journal apply selected from the current recovery snapshot. */
   async abandonRecovery(recoveryId: string): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -2232,7 +1997,6 @@ export class KnowledgeStudioController {
     );
   }
 
-  /** Maps one sanitized recovery result into stable user feedback. */
   private createRecoveryFeedback(
     result: KnowledgeStudioRecoverySubmissionResult,
     completedAction: "continued" | "abandoned"
@@ -2265,14 +2029,12 @@ export class KnowledgeStudioController {
     }
   }
 
-  /** Emits current state to all external-store subscribers. */
   private emit(): void {
     for (const listener of this.listeners) {
       listener();
     }
   }
 
-  /** Treats a runtime event as a request to reload durable truth. */
   private handleReloadHint(): void {
     // Capture creation emits hints before registration finishes. Defer these hints,
     // not explicit refresh/close cancellation or the coordinator's snapshot checks.
@@ -2295,7 +2057,6 @@ export class KnowledgeStudioController {
     void this.refresh();
   }
 
-  /** Publishes a fail-closed action result and reconciles the durable snapshot. */
   private async rejectUnavailableAction(message: string): Promise<void> {
     this.state = {
       ...this.state,
@@ -2305,7 +2066,6 @@ export class KnowledgeStudioController {
     await this.refresh();
   }
 
-  /** Cancels reads, commands, and hint subscriptions for the current session. */
   private cancelSessionWork(): void {
     this.refreshingBundleId = undefined;
     this.unsubscribeHints?.();
@@ -2328,7 +2088,6 @@ export class KnowledgeStudioController {
     this.reviewDrafts.clear();
   }
 
-  /** Cancels only ephemeral Query and citation-navigation work. */
   private cancelQueryWork(bundleWide = false): void {
     this.queryAbort?.abort();
     this.queryAbort = undefined;
@@ -2337,14 +2096,12 @@ export class KnowledgeStudioController {
     this.queryWritebackRefreshQueued = false;
   }
 
-  /** Cancels only ephemeral Review evidence navigation and revokes late publication. */
   private cancelReviewEvidenceWork(): void {
     this.reviewEvidenceAbort?.abort();
     this.reviewEvidenceAbort = undefined;
     this.reviewEvidenceGeneration += 1;
   }
 
-  /** Revokes exact UI refs, or all Bundle refs for an authoritative durable hint. */
   private revokeCurrentQueryCapability(bundleWide: boolean): void {
     const bundleId = this.state.bundleId;
     const query = this.state.query;
@@ -2353,15 +2110,6 @@ export class KnowledgeStudioController {
     this.queryPort.revokeCurrent(bundleId, bundleWide ? undefined : queryId);
   }
 
-  /**
-   * Runs exactly one UI command at a time and reconciles via a durable reload.
-   *
-   * @param pendingAction - Safe action descriptor shown by the UI
-   * @param operation - Port call receiving the current Bundle and cancellation signal
-   * @param toFeedback - Successful result mapper
-   * @param shouldRefreshAfterSuccess - Optional durable reload policy for successful results
-   * @param callerSignal - Optional view-owned signal bridged to controller cancellation
-   */
   private async executeAction<T>(
     pendingAction: KnowledgeStudioPendingAction,
     operation: (bundleId: string, signal: AbortSignal) => Promise<T>,

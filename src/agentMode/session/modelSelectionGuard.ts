@@ -1,14 +1,6 @@
 import type { BackendDescriptor, BackendId, ModelSelection } from "@/agentMode/session/types";
 import type { CopilotSettings } from "@/settings/model";
 
-/**
- * Reject an invalid saved preference or an unconfirmed backend identity before a session sends.
- *
- * @param descriptor - Backend policy for interpreting persisted and reported model identities.
- * @param current - Model confirmed by the live backend, if it reports one.
- * @param settings - Current persisted inventory and per-backend preferences.
- * @param backendId - Backend whose saved preference applies to this session.
- */
 export function assertSessionModelSelectionSupported(
   descriptor: Pick<BackendDescriptor, "normalizeSelection"> | undefined,
   current: ModelSelection | undefined,

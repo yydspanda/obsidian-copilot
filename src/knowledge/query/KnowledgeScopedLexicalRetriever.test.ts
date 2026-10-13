@@ -4,7 +4,6 @@ import {
   KnowledgeScopedPageSnapshot,
 } from "./KnowledgeScopedLexicalRetriever";
 
-/** Creates one immutable page snapshot for retrieval tests. */
 function page(
   evidenceId: string,
   path: string,

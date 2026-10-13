@@ -15,27 +15,23 @@ import {
 import { NotePreviewCache } from "@/components/chat-components/utils/notePreviewUtils";
 
 interface NoteCommandPluginProps {
-  isCopilotPlus?: boolean;
   currentActiveFile?: TFile | null;
 }
 
 export function NoteCommandPlugin({
-  isCopilotPlus = false,
   currentActiveFile = null,
 }: NoteCommandPluginProps): JSX.Element {
   const app = useApp();
   const [editor] = useLexicalComposerContext();
   const [currentQuery, setCurrentQuery] = useState("");
 
-  // Use shared preview cache
   const [previewCache] = useState(() => new NotePreviewCache(app));
   const [previewContent, setPreviewContent] = useState<Map<string, string>>(() => new Map());
 
-  // Function to load note content for preview using shared cache
   const loadNoteContent = useCallback(
     async (file: TFile): Promise<string> => {
       try {
-        const content = await previewCache.getOrLoadContent(file, 500);
+        const content = await previewCache.getOrLoadContent(file);
         setPreviewContent((prev) => {
           const newMap = new Map(prev);
           newMap.set(file.path, content);
@@ -55,26 +51,20 @@ export function NoteCommandPlugin({
     [previewCache]
   );
 
-  // Use unified note search hook with standard configuration
-  const searchResults = useNoteSearch(currentQuery, isCopilotPlus, {}, currentActiveFile);
+  const searchResults = useNoteSearch(currentQuery, {}, currentActiveFile);
 
-  // Add preview content from cache to the results
   const filteredNotes = searchResults.map((note) => ({
     ...note,
     content: previewContent.get(note.file.path) || "",
   }));
 
-  // Shared selection handler
   const handleSelect = useCallback(
     (option: NoteSearchOption) => {
-      // Check if this is the "Active Note" option by its category
       if (option.category === "activeNote") {
-        // Create ActiveNotePillNode instead of regular NotePillNode
         editor.update(() => {
           $replaceTriggeredTextWithPill("[[", { type: "active-note" });
         });
       } else {
-        // Regular note pill
         const pillData: PillData = {
           type: "notes",
           title: option.title,
@@ -89,7 +79,6 @@ export function NoteCommandPlugin({
     [editor]
   );
 
-  // Use the shared typeahead hook
   const { state, handleHighlight } = useTypeaheadPlugin({
     triggerConfig: {
       char: "[[",
@@ -102,14 +91,12 @@ export function NoteCommandPlugin({
       setCurrentQuery(newState.query);
     },
     onHighlight: (_index: number, option: NoteSearchOption) => {
-      // Load content for the highlighted note if not already loaded
       if (option && !previewContent.has(option.file.path)) {
         void loadNoteContent(option.file);
       }
     },
   });
 
-  // Load content for the first note when filteredNotes change
   useEffect(() => {
     if (filteredNotes.length > 0 && !previewContent.has(filteredNotes[0].file.path)) {
       void loadNoteContent(filteredNotes[0].file);

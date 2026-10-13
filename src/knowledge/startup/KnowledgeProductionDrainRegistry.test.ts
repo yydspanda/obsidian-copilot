@@ -8,7 +8,6 @@ interface Deferred {
   resolve(): void;
 }
 
-/** Creates one externally settled Promise for generation-drain assertions. */
 function createDeferred(): Deferred {
   let resolve!: () => void;
   const promise = new Promise<void>((resolvePromise) => {

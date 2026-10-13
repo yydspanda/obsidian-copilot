@@ -22,20 +22,17 @@ import {
   type KnowledgeCitationTargetResolution,
 } from "@/knowledge/query/KnowledgeCitationTargetResolver";
 
-/** Read-only citation navigation request accepted at the Obsidian edge. */
 export interface ObsidianKnowledgeCitationNavigationRequest {
   sourcePath: string;
   citation: ClaimCitation;
 }
 
-/** Value-free navigation outcome safe to expose outside the Vault adapter. */
 export type ObsidianKnowledgeCitationNavigationResult =
   | { status: "opened" }
   | { status: "stale" }
   | { status: "unsupported" }
   | { status: "unavailable" };
 
-/** Value-free source verification result that performs no workspace mutation. */
 export type ObsidianKnowledgeCitationVerificationResult =
   | { status: "verified" }
   | { status: "stale" }
@@ -54,43 +51,28 @@ interface KnowledgeCitationNavigationQueueState {
 
 const navigationQueueStates = new WeakMap<object, KnowledgeCitationNavigationQueueState>();
 
-// Captured intrinsic performs a non-spoofable ArrayBuffer internal-slot check.
 // eslint-disable-next-line @typescript-eslint/unbound-method -- capture the intrinsic getter for a non-spoofable receiver check
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength"
 )?.get;
 
-/** Exact resolved PDF page whose artifact bytes have been re-proved. */
 interface KnowledgeCitationPdfPageTarget {
   readonly kind: "pdf_page";
   readonly sourcePath: string;
   readonly page: number;
 }
 
-/** Sanitized result of resolving one PDF citation against current raw bytes. */
 type KnowledgeCitationPdfPageResolution =
   | { status: "resolved"; target: KnowledgeCitationPdfPageTarget }
   | { status: "stale" }
   | { status: "unsupported" }
   | { status: "unavailable" };
 
-/**
- * Reports cancellation without retaining a caller-provided abort reason.
- *
- * @param signal - Optional caller cancellation signal
- * @returns Whether navigation must stop at the current boundary
- */
 function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
-/**
- * Tests exact ArrayBuffer identity across renderer realms.
- *
- * @param value - Unknown Vault binary-read result
- * @returns Whether ArrayBuffer's intrinsic byteLength getter accepts the receiver
- */
 function isExactArrayBuffer(value: unknown): value is ArrayBuffer {
   if (!ARRAY_BUFFER_BYTE_LENGTH_GETTER || typeof value !== "object" || value === null) {
     return false;
@@ -103,18 +85,6 @@ function isExactArrayBuffer(value: unknown): value is ArrayBuffer {
   }
 }
 
-/**
- * Resolves a structurally valid PDF locator against exact current source bytes.
- *
- * Page numbers are admitted only through the shared ClaimCitation validator,
- * which requires a positive safe integer. The raw-byte SHA-256 must match before
- * the page can become actionable; no decoded PDF text or private viewer state is
- * trusted by this navigation boundary.
- *
- * @param request - Source path and typed claim citation
- * @param bytes - Exact bytes returned by the captured Vault
- * @returns A hash-proved PDF page or one sanitized failure category
- */
 function resolvePdfPageTarget(
   request: ObsidianKnowledgeCitationNavigationRequest,
   bytes: Uint8Array
@@ -138,12 +108,6 @@ function resolvePdfPageTarget(
   });
 }
 
-/**
- * Converts a pure resolver failure into the public value-free edge result.
- *
- * @param resolution - Pure citation resolution result
- * @returns Matching sanitized navigator outcome
- */
 function mapResolutionFailure(
   resolution: Exclude<KnowledgeCitationTargetResolution, { status: "resolved" }>
 ): ObsidianKnowledgeCitationNavigationResult {
@@ -152,7 +116,6 @@ function mapResolutionFailure(
   return UNAVAILABLE_RESULT;
 }
 
-/** Converts a pure resolver failure into the no-mutation verification result. */
 function mapVerificationFailure(
   resolution: Exclude<KnowledgeCitationTargetResolution, { status: "resolved" }>
 ): ObsidianKnowledgeCitationVerificationResult {
@@ -161,13 +124,6 @@ function mapVerificationFailure(
   return UNAVAILABLE_RESULT;
 }
 
-/**
- * Confirms that a resolved range exists inside the currently displayed editor.
- *
- * @param editor - Editor owned by the confirmed MarkdownView
- * @param target - Hash-verified Markdown range
- * @returns Whether both endpoints are valid for the displayed document
- */
 function isRangeAvailableInEditor(
   editor: Editor,
   target: KnowledgeCitationMarkdownRangeTarget
@@ -190,41 +146,23 @@ function isRangeAvailableInEditor(
   );
 }
 
-/**
- * Opens hash-verified citations using only a captured Obsidian owner.
- *
- * The adapter performs no writes. It re-reads the source after opening its leaf,
- * confirms the resulting view is a MarkdownView, and refuses exact navigation
- * whenever the Vault or displayed editor changed during the operation.
- */
 export class ObsidianKnowledgeCitationNavigator {
   private readonly appOwner: App;
   private readonly vaultOwner: Vault;
   private readonly workspaceOwner: Workspace;
 
-  /**
-   * Captures the exact App, Vault, and Workspace generation used by this adapter.
-   *
-   * @param app - Obsidian App owner captured at composition time
-   */
   constructor(app: App) {
     this.appOwner = app;
     this.vaultOwner = app.vault;
     this.workspaceOwner = app.workspace;
   }
 
-  /**
-   * Reports whether the captured Vault and Workspace still belong to this App.
-   *
-   * @returns Whether navigation may continue on the captured owner generation
-   */
   private isCurrentOwner(): boolean {
     return (
       this.appOwner.vault === this.vaultOwner && this.appOwner.workspace === this.workspaceOwner
     );
   }
 
-  /** Returns the navigation queue shared by every adapter for this exact App owner. */
   private getNavigationQueue(): KnowledgeCitationNavigationQueueState {
     const existing = navigationQueueStates.get(this.appOwner);
     if (existing) return existing;
@@ -233,13 +171,6 @@ export class ObsidianKnowledgeCitationNavigator {
     return created;
   }
 
-  /**
-   * Re-reads and resolves one exact PDF page without changing the workspace.
-   *
-   * @param request - Source path and typed claim citation
-   * @param signal - Optional cancellation checked around the binary Vault read
-   * @returns Current PDF page resolution or a sanitized failure
-   */
   private async resolveCurrentPdfPage(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
@@ -267,17 +198,6 @@ export class ObsidianKnowledgeCitationNavigator {
     return resolvePdfPageTarget(request, bytes);
   }
 
-  /**
-   * Opens a hash-proved PDF page through Obsidian's canonical public link contract.
-   *
-   * The exact raw bytes are re-read after the asynchronous workspace operation,
-   * matching the Markdown navigator's fail-closed drift check. Private PDF view,
-   * DOM, and ephemeral-state APIs are intentionally not used.
-   *
-   * @param request - Source path and typed PDF claim citation
-   * @param signal - Optional cancellation checked around every async boundary
-   * @returns Opened, stale, unsupported, or unavailable
-   */
   private async navigatePdfPage(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
@@ -298,12 +218,6 @@ export class ObsidianKnowledgeCitationNavigator {
     return current.status === "resolved" ? OPENED_RESULT : mapResolutionFailure(current);
   }
 
-  /**
-   * Finds an already-open exact Markdown source without assuming the active window.
-   *
-   * @param sourcePath - Canonical Vault path from the grounded citation authority
-   * @returns Existing leaf in any main or pop-out window, when present
-   */
   private findOpenMarkdownLeaf(sourcePath: string): WorkspaceLeaf | undefined {
     let matchingLeaf: WorkspaceLeaf | undefined;
     this.workspaceOwner.iterateAllLeaves((leaf) => {
@@ -316,13 +230,6 @@ export class ObsidianKnowledgeCitationNavigator {
     return matchingLeaf;
   }
 
-  /**
-   * Re-proves one exact Markdown source citation without opening a leaf or changing selection.
-   *
-   * @param request - Source path and typed claim citation
-   * @param signal - Optional cancellation checked around the Vault read
-   * @returns Verified, stale, unsupported, or unavailable
-   */
   async verify(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
@@ -367,17 +274,6 @@ export class ObsidianKnowledgeCitationNavigator {
     }
   }
 
-  /**
-   * Navigates to one exact grounded Markdown range or hash-proved PDF page.
-   *
-   * PDF pages use Obsidian's public canonical `path#page=N` link contract. All
-   * exceptions and unavailable views collapse to a value-free result; source
-   * paths and adapter causes are never returned.
-   *
-   * @param request - Source path and typed claim citation
-   * @param signal - Optional cancellation checked around every asynchronous boundary
-   * @returns Opened, stale, unsupported, or unavailable
-   */
   private async navigateCurrent(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
@@ -464,17 +360,6 @@ export class ObsidianKnowledgeCitationNavigator {
     }
   }
 
-  /**
-   * Serializes workspace navigation across every adapter sharing this App owner.
-   *
-   * An Obsidian `openFile` or `openLinkText` already in progress cannot be
-   * cancelled. Waiting for that concrete side effect to settle before starting
-   * the next request ensures a newer citation remains the final visible target.
-   *
-   * @param request - Source path and typed claim citation
-   * @param signal - Optional cancellation checked before and throughout navigation
-   * @returns Opened, stale, unsupported, or unavailable
-   */
   async navigate(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal

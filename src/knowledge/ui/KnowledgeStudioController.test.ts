@@ -44,21 +44,18 @@ import type {
   KnowledgeSourceRemovalConfirmation,
 } from "@/knowledge/ui/sourceLifecycleModel";
 
-/** Promise whose completion is controlled explicitly by one test. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
   reject(reason: unknown): void;
 }
 
-/** One recorded read-only Query call. */
 interface RecordedQueryCall {
   bundleId: string;
   request: Readonly<KnowledgeStudioQueryRequest>;
   signal: AbortSignal;
 }
 
-/** One recorded opaque citation-navigation call. */
 interface RecordedCitationCall {
   bundleId: string;
   queryId: string;
@@ -66,7 +63,6 @@ interface RecordedCitationCall {
   signal: AbortSignal;
 }
 
-/** One recorded current-answer writeback call. */
 interface RecordedQueryWritebackCall {
   bundleId: string;
   queryId: string;
@@ -74,21 +70,18 @@ interface RecordedQueryWritebackCall {
   signal: AbortSignal;
 }
 
-/** One recorded source lifecycle recheck. */
 interface RecordedSourceCheckCall {
   bundleId: string;
   sourceId: string;
   signal: AbortSignal;
 }
 
-/** One recorded source retirement. */
 interface RecordedSourceRetirementCall {
   bundleId: string;
   request: Readonly<KnowledgeSourceRetirementRequest>;
   signal: AbortSignal;
 }
 
-/** Creates a manually controlled promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -99,13 +92,11 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Flushes promise continuations scheduled by controller fire-and-forget calls. */
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/** Creates a compact current review plan for controller identity tests. */
 function createReviewPlan(token = "b".repeat(64)): KnowledgeReviewPlan {
   return {
     changeSetId: "changeset-1",
@@ -141,7 +132,6 @@ function createReviewPlan(token = "b".repeat(64)): KnowledgeReviewPlan {
   };
 }
 
-/** Creates a ready snapshot by replacing only the unavailable shell metadata. */
 function createSnapshot(
   revisionToken = "revision-1",
   reviews: readonly KnowledgeReviewPlan[] = [createReviewPlan()]
@@ -173,7 +163,6 @@ const FORWARD_REVIEW_REF = `forward-studio-review-${"d".repeat(64)}`;
 const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"e".repeat(64)}`;
 const FORWARD_BLOCK_REF = `review-block-${"f".repeat(64)}`;
 
-/** Creates one current pending forward row over the reusable single-file Review plan. */
 function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPendingReview> {
   const plan = createReviewPlan("c".repeat(64));
   return Object.freeze({
@@ -205,7 +194,6 @@ function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPe
   });
 }
 
-/** Creates one sticky Forward recovery row with an exact opaque snapshot identity. */
 function createForwardRecoveryReview(
   snapshotRef = FORWARD_SNAPSHOT_REF
 ): Readonly<Extract<KnowledgeForwardRevisionStudioReview, { state: "recovery_required" }>> {
@@ -223,7 +211,6 @@ function createForwardRecoveryReview(
   });
 }
 
-/** Embeds exact forward work in an otherwise ready Studio snapshot. */
 function createForwardSnapshot(
   revisionToken: string,
   reviews: readonly Readonly<KnowledgeForwardRevisionStudioReview>[]
@@ -239,7 +226,6 @@ function createForwardSnapshot(
   };
 }
 
-/** Creates one source lifecycle projection embedded in a Studio read snapshot. */
 function createSourceLifecycle(
   sources: readonly KnowledgeSourceLifecycleItem[] = [
     {
@@ -263,7 +249,6 @@ function createSourceLifecycle(
   };
 }
 
-/** Embeds one exact lifecycle model in an otherwise ready Studio snapshot. */
 function createSourceSnapshot(
   revisionToken: string,
   sourceLifecycle: Readonly<KnowledgeSourceLifecycleModel> = createSourceLifecycle()
@@ -271,7 +256,6 @@ function createSourceSnapshot(
   return { ...createSnapshot(revisionToken, []), sourceLifecycle };
 }
 
-/** Freezes the exact source-removal authority emitted by the lifecycle panel. */
 function createRemovalConfirmation(
   overrides: Partial<KnowledgeSourceRemovalConfirmation> = {}
 ): Readonly<KnowledgeSourceRemovalConfirmation> {
@@ -285,7 +269,6 @@ function createRemovalConfirmation(
   });
 }
 
-/** Creates the two actionable recovery rows used by controller command tests. */
 function createRecoveryItems(): readonly KnowledgeRecoveryItem[] {
   return [
     {
@@ -303,7 +286,6 @@ function createRecoveryItems(): readonly KnowledgeRecoveryItem[] {
   ];
 }
 
-/** Creates a ready snapshot with explicit recovery capabilities and rows. */
 function createRecoverySnapshot(
   revisionToken = "recovery-revision",
   runtimeRevision = 41,
@@ -325,7 +307,6 @@ function createRecoverySnapshot(
   };
 }
 
-/** Creates one exact grounded-retrieval result for controller lifecycle tests. */
 function createQueryResult(queryId = "knowledge-query-1"): KnowledgeGroundedRetrievalResult {
   return {
     mode: "grounded_retrieval",
@@ -360,7 +341,6 @@ function createQueryResult(queryId = "knowledge-query-1"): KnowledgeGroundedRetr
   };
 }
 
-/** Creates one exact grounded-answer result over the same opaque retrieval authority. */
 function createAnswerQueryResult(
   queryId = "knowledge-query-answer-1"
 ): KnowledgeGroundedAnswerResult {
@@ -408,7 +388,6 @@ type ForwardRevisionCommandHandler = (
   signal: AbortSignal
 ) => Promise<KnowledgeForwardRevisionStudioSubmissionResult>;
 
-/** Scriptable read/command port that records every boundary call. */
 class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort {
   readonly loadCalls: { bundleId: string; signal: AbortSignal }[] = [];
   readonly pauseCalls: { bundleId: string; expectedQueueRevision: number; signal: AbortSignal }[] =
@@ -452,7 +431,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   hint?: () => void;
   unsubscribed = false;
 
-  /** Creates a fake around explicit read and optional command handlers. */
   constructor(
     private readonly loadHandler: LoadHandler,
     private readonly voidCommandHandler: VoidCommandHandler = async () => undefined,
@@ -467,13 +445,11 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     })
   ) {}
 
-  /** Records and delegates one snapshot load. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     this.loadCalls.push({ bundleId, signal });
     return this.loadHandler(bundleId, signal);
   }
 
-  /** Retains the reload hint and reports unsubscription. */
   subscribe(_bundleId: string, onHint: () => void): () => void {
     this.hint = onHint;
     return () => {
@@ -481,7 +457,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     };
   }
 
-  /** Records and delegates a Bundle pause. */
   async pauseBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -491,7 +466,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.voidCommandHandler(bundleId, "pause", expectedQueueRevision, signal);
   }
 
-  /** Records and delegates a Bundle resume. */
   async resumeBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -501,7 +475,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.voidCommandHandler(bundleId, "resume", expectedQueueRevision, signal);
   }
 
-  /** Records and delegates one job cancellation. */
   async cancelJob(
     bundleId: string,
     jobId: string,
@@ -512,7 +485,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.voidCommandHandler(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /** Records and delegates one job retry. */
   async retryJob(
     bundleId: string,
     jobId: string,
@@ -523,7 +495,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.voidCommandHandler(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /** Records and delegates an opaque review command. */
   async submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -533,7 +504,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.reviewCommandHandler(bundleId, command, signal);
   }
 
-  /** Records and delegates one dedicated opaque forward Review or Apply command. */
   async submitForwardRevisionStudio(
     bundleId: string,
     command: KnowledgeForwardRevisionStudioCommand,
@@ -543,7 +513,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     return this.forwardRevisionCommandHandler(bundleId, command, signal);
   }
 
-  /** Records and delegates one exact recovery continuation. */
   async continueRecovery(
     bundleId: string,
     recoveryId: string,
@@ -565,7 +534,6 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     );
   }
 
-  /** Records and delegates one exact no-journal abandonment. */
   async abandonRecovery(
     bundleId: string,
     recoveryId: string,
@@ -588,14 +556,12 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   }
 }
 
-/** Scriptable scoped-Query port that records opaque boundary calls and cancellation. */
 class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
   readonly queryCalls: RecordedQueryCall[] = [];
   readonly citationCalls: RecordedCitationCall[] = [];
   readonly revokeCalls: Array<{ bundleId: string; queryId?: string }> = [];
   closed = false;
 
-  /** Creates a fake around optional asynchronous handlers. */
   constructor(
     private readonly queryHandler: (
       call: RecordedQueryCall
@@ -604,7 +570,6 @@ class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
       undefined
   ) {}
 
-  /** Records one scoped retrieval or grounded-answer Query request. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -615,7 +580,6 @@ class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
     return this.queryHandler(call);
   }
 
-  /** Records one opaque citation jump. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -627,29 +591,24 @@ class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
     return this.citationHandler(call);
   }
 
-  /** Records synchronous revocation of one Bundle's current Query capability. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     this.revokeCalls.push({ bundleId, ...(queryId === undefined ? {} : { queryId }) });
   }
 
-  /** Records lifecycle closure without performing external work. */
   close(): void {
     this.closed = true;
   }
 }
 
-/** Scriptable reviewed-writeback port that records exact opaque query authority. */
 class FakeKnowledgeStudioQueryWritebackPort implements KnowledgeStudioQueryWritebackPort {
   readonly calls: RecordedQueryWritebackCall[] = [];
 
-  /** Creates a fake around one optional asynchronous registration handler. */
   constructor(
     private readonly handler: (
       call: RecordedQueryWritebackCall
     ) => Promise<KnowledgeStudioQueryWritebackResult> = async () => ({ kind: "registered" })
   ) {}
 
-  /** Records one current-answer registration request. */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -662,13 +621,11 @@ class FakeKnowledgeStudioQueryWritebackPort implements KnowledgeStudioQueryWrite
   }
 }
 
-/** Scriptable source lifecycle port that records only opaque command material. */
 class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
   readonly loadCalls: Array<{ bundleId: string; signal: AbortSignal }> = [];
   readonly checkCalls: RecordedSourceCheckCall[] = [];
   readonly retirementCalls: RecordedSourceRetirementCall[] = [];
 
-  /** Creates a fake around one model and optional command handlers. */
   constructor(
     private readonly model: Readonly<KnowledgeSourceLifecycleModel> = createSourceLifecycle(),
     private readonly checkHandler: (call: RecordedSourceCheckCall) => Promise<void> = async () =>
@@ -681,7 +638,6 @@ class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
     })
   ) {}
 
-  /** Records lifecycle loads so tests can prove Controller does not cross-read revisions. */
   async loadSources(
     bundleId: string,
     signal: AbortSignal
@@ -690,14 +646,12 @@ class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
     return this.model;
   }
 
-  /** Records and delegates one source recheck. */
   async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
     const call = { bundleId, sourceId, signal };
     this.checkCalls.push(call);
     return this.checkHandler(call);
   }
 
-  /** Records and delegates one exact source retirement. */
   async retireSource(
     bundleId: string,
     request: Readonly<KnowledgeSourceRetirementRequest>,
@@ -709,7 +663,6 @@ class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
   }
 }
 
-/** Builds the content-free command expected by the controller boundary. */
 function createReviewCommand(token = "b".repeat(64)): KnowledgeReviewCommand {
   return {
     changeSetId: "changeset-1",
@@ -719,7 +672,6 @@ function createReviewCommand(token = "b".repeat(64)): KnowledgeReviewCommand {
   };
 }
 
-/** Builds one reusable Review command bound to the pending forward render plan. */
 function createForwardReviewCommand(
   decision: KnowledgeReviewCommand["decisions"][number]
 ): KnowledgeReviewCommand {

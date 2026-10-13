@@ -14,7 +14,6 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 
-/** Checks for non-whitespace text without transforming persisted input. */
 function hasNonWhitespaceText(value: string): boolean {
   return value.trim().length > 0;
 }
@@ -24,7 +23,6 @@ const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const nonNegativeIntegerSchema = z.number().int().safe().nonnegative();
 const positiveIntegerSchema = z.number().int().safe().positive();
 
-/** Runtime schema for recursive JSON metadata. */
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
@@ -36,7 +34,6 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   ])
 );
 
-/** Strict runtime schema for one knowledge bundle. */
 export const knowledgeBundleConfigSchema: z.ZodType<KnowledgeBundleConfig> = z
   .object({
     version: z.literal(1),
@@ -83,7 +80,6 @@ const sourceCompileFailureSchema = z
   })
   .strict();
 
-/** Strict runtime schema for one active or durably archived source entry. */
 export const sourceManifestEntrySchema = z
   .object({
     sourceId: nonEmptyStringSchema,
@@ -96,7 +92,6 @@ export const sourceManifestEntrySchema = z
   })
   .strict();
 
-/** Strict runtime schema for a persisted source manifest. */
 export const sourceManifestSchema: z.ZodType<SourceManifest> = z
   .object({
     version: z.literal(1),
@@ -115,7 +110,6 @@ const sourceLocatorBaseShape = {
   quoteHash: sha256Schema,
 };
 
-/** Strict runtime schema for every supported source locator. */
 export const sourceLocatorSchema: z.ZodType<SourceLocator> = z.discriminatedUnion("kind", [
   z
     .object({
@@ -151,7 +145,6 @@ export const sourceLocatorSchema: z.ZodType<SourceLocator> = z.discriminatedUnio
     .strict(),
 ]);
 
-/** Strict runtime schema for a claim citation. */
 export const claimCitationSchema: z.ZodType<ClaimCitation> = z
   .object({
     citationId: nonEmptyStringSchema,
@@ -194,7 +187,6 @@ const okfLogDocumentSchema = z
   })
   .strict();
 
-/** Strict runtime schema for an OKF-compatible document. */
 export const okfDocumentSchema: z.ZodType<OkfDocument> = z.discriminatedUnion("kind", [
   okfConceptDocumentSchema,
   okfIndexDocumentSchema,
@@ -214,7 +206,6 @@ const ingestJobBaseShape = {
   updatedAt: nonNegativeIntegerSchema,
 };
 
-/** Strict runtime schema for legal ingest job state combinations. */
 export const knowledgeIngestJobSchema: z.ZodType<KnowledgeIngestJob> = z.discriminatedUnion(
   "status",
   [
@@ -302,7 +293,6 @@ const fileChangeBaseShape = {
   reason: nonEmptyStringSchema,
 };
 
-/** Strict runtime schema for create, update, and delete file changes. */
 export const knowledgeFileChangeSchema: z.ZodType<KnowledgeFileChange> = z.discriminatedUnion(
   "operation",
   [
@@ -334,7 +324,6 @@ export const knowledgeFileChangeSchema: z.ZodType<KnowledgeFileChange> = z.discr
   ]
 );
 
-/** Strict runtime schema for a persisted user-reviewable ChangeSet. */
 export const knowledgeChangeSetSchema: z.ZodType<KnowledgeChangeSet> = z
   .object({
     id: nonEmptyStringSchema,
@@ -355,12 +344,6 @@ export const knowledgeChangeSetSchema: z.ZodType<KnowledgeChangeSet> = z
   })
   .strict();
 
-/**
- * Converts a Zod path to the field notation used by knowledge diagnostics.
- *
- * @param path - Zod issue path
- * @returns Stable dotted and indexed field path
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
@@ -371,7 +354,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/** Keeps schema diagnostic codes stable across Zod's combined value issue. */
 function formatIssueCode(issue: z.ZodIssue): string {
   if (issue.code !== "invalid_value") {
     return issue.code;
@@ -380,13 +362,6 @@ function formatIssueCode(issue: z.ZodIssue): string {
   return issue.values.length === 1 ? "invalid_literal" : "invalid_enum_value";
 }
 
-/**
- * Parses unknown data with a strict schema without exposing Zod to callers.
- *
- * @param schema - Internal runtime schema
- * @param value - Unknown persisted or model-produced value
- * @returns Typed value or stable validation issues
- */
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): KnowledgeParseResult<T> {
   const result = schema.safeParse(value);
   if (result.success) {
@@ -401,46 +376,38 @@ function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): KnowledgePars
   return { ok: false, issues };
 }
 
-/** Parses an unknown bundle configuration. */
 export function parseKnowledgeBundleConfig(
   value: unknown
 ): KnowledgeParseResult<KnowledgeBundleConfig> {
   return parseWithSchema(knowledgeBundleConfigSchema, value);
 }
 
-/** Parses an unknown persisted source manifest. */
 export function parseSourceManifest(value: unknown): KnowledgeParseResult<SourceManifest> {
   return parseWithSchema(sourceManifestSchema, value);
 }
 
-/** Parses an unknown source locator. */
 export function parseSourceLocator(value: unknown): KnowledgeParseResult<SourceLocator> {
   return parseWithSchema(sourceLocatorSchema, value);
 }
 
-/** Parses an unknown claim citation. */
 export function parseClaimCitation(value: unknown): KnowledgeParseResult<ClaimCitation> {
   return parseWithSchema(claimCitationSchema, value);
 }
 
-/** Parses an unknown durable ingest job. */
 export function parseKnowledgeIngestJob(value: unknown): KnowledgeParseResult<KnowledgeIngestJob> {
   return parseWithSchema(knowledgeIngestJobSchema, value);
 }
 
-/** Parses an unknown file change. */
 export function parseKnowledgeFileChange(
   value: unknown
 ): KnowledgeParseResult<KnowledgeFileChange> {
   return parseWithSchema(knowledgeFileChangeSchema, value);
 }
 
-/** Parses an unknown ChangeSet. */
 export function parseKnowledgeChangeSet(value: unknown): KnowledgeParseResult<KnowledgeChangeSet> {
   return parseWithSchema(knowledgeChangeSetSchema, value);
 }
 
-/** Parses an unknown OKF-compatible document. */
 export function parseOkfDocument(value: unknown): KnowledgeParseResult<OkfDocument> {
   return parseWithSchema(okfDocumentSchema, value);
 }

@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 
-// A child process isolates V8 flags from the other Jest suites and production settings.
 describe("redactLog", () => {
   describe("redactLogText()", () => {
     it("redacts complete 16 MiB credentials and addresses without regexp optimization, preserving surrounding text (https://github.com/yydspanda/obsidian-copilot/issues/12)", () => {

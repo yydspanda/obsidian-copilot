@@ -35,27 +35,18 @@ const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 const MANIFEST_HASH = "c".repeat(64);
 
-/**
- * Clones JSON-compatible durable state for adapter-isolation assertions.
- *
- * @param value - JSON-compatible value
- * @returns Detached clone
- */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** In-memory atomic Review Store used only by cross-module protocol tests. */
 class MemoryReviewStorage implements ReviewStorage {
   private readonly values = new Map<string, ChangeSetReviewSnapshot>();
 
-  /** {@inheritDoc ReviewStorage.read} */
   async read(bundleId: string): Promise<unknown> {
     const value = this.values.get(bundleId);
     return value ? cloneJson(value) : null;
   }
 
-  /** {@inheritDoc ReviewStorage.write} */
   async write(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -70,17 +61,14 @@ class MemoryReviewStorage implements ReviewStorage {
   }
 }
 
-/** In-memory atomic Queue Store used only by cross-module protocol tests. */
 class MemoryQueueStorage implements QueueStorage {
   private readonly values = new Map<string, IngestQueueSnapshot>();
 
-  /** {@inheritDoc QueueStorage.read} */
   async read(bundleId: string): Promise<unknown> {
     const value = this.values.get(bundleId);
     return value ? cloneJson(value) : null;
   }
 
-  /** {@inheritDoc QueueStorage.write} */
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -99,12 +87,6 @@ class MemoryQueueStorage implements QueueStorage {
   }
 }
 
-/**
- * Creates the deterministic proposal persisted by the integrated executor.
- *
- * @param context - Exact claimed queue attempt
- * @returns Valid proposed ChangeSet
- */
 function createProposal(context: IngestExecutionContext): KnowledgeChangeSet {
   const content = `# ${context.job.sourceId}\n`;
   return {
@@ -131,7 +113,6 @@ function createProposal(context: IngestExecutionContext): KnowledgeChangeSet {
   };
 }
 
-/** Creates the strict Manifest plan owned by one integrated compiler proposal. */
 function createManifestCommitPlan(
   context: IngestExecutionContext,
   proposal: KnowledgeChangeSet
@@ -159,13 +140,6 @@ function createManifestCommitPlan(
   };
 }
 
-/**
- * Converts a real pending Review Store record into the queue hand-off receipt.
- *
- * @param bundleId - Owning Bundle
- * @param record - Durable pending record
- * @returns Pending queue receipt
- */
 function toPendingReceipt(
   bundleId: string,
   record: PendingChangeSetReviewRecord
@@ -181,13 +155,6 @@ function toPendingReceipt(
   };
 }
 
-/**
- * Converts a real accepted Review Store record into the queue hand-off receipt.
- *
- * @param bundleId - Owning Bundle
- * @param record - Durable accepted record
- * @returns Accepted queue receipt
- */
 function toAcceptedReceipt(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
@@ -205,13 +172,6 @@ function toAcceptedReceipt(
   };
 }
 
-/**
- * Converts a real rejected Review Store record into the queue hand-off receipt.
- *
- * @param bundleId - Owning Bundle
- * @param record - Durable rejected record
- * @returns Rejected queue receipt
- */
 function toRejectedReceipt(
   bundleId: string,
   record: RejectedChangeSetReviewRecord
@@ -227,12 +187,9 @@ function toRejectedReceipt(
   };
 }
 
-/** Executor that persists a proposal before returning an awaiting-review result. */
 class ReviewPersistingExecutor implements IngestExecutor {
-  /** Creates an executor over the real review repository. */
   constructor(private readonly reviews: ChangeSetReviewRepository) {}
 
-  /** {@inheritDoc IngestExecutor.execute} */
   async execute(context: IngestExecutionContext): Promise<IngestExecutionResult> {
     const proposal = createProposal(context);
     const manifestCommitPlan = createManifestCommitPlan(context, proposal);
@@ -268,7 +225,6 @@ interface ReviewQueueHarness {
   setReviewNow(value: number): void;
 }
 
-/** Creates real queue/repository cores over isolated atomic memory adapters. */
 function createHarness(): ReviewQueueHarness {
   let queueNow = 100;
   let reviewNow = 110;
@@ -291,7 +247,6 @@ function createHarness(): ReviewQueueHarness {
   };
 }
 
-/** Loads and narrows one required durable review record for the test. */
 async function requireRecord(
   reviews: ChangeSetReviewRepository,
   changeSetId: string

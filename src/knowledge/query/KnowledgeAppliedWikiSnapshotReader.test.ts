@@ -31,7 +31,6 @@ const BUNDLE: KnowledgeBundleConfig = {
   reviewMode: "always",
 };
 
-/** Creates one current applied provenance projection for reader tests. */
 function createProjection(
   runtimeRevision = 7,
   overrides: Partial<KnowledgeRuntimeAppliedProvenanceSnapshot> = {}
@@ -85,14 +84,12 @@ function createProjection(
   };
 }
 
-/** Creates one typed Runtime port backed by a Jest implementation. */
 function createRuntime(
   implementation: () => Promise<KnowledgeRuntimeAppliedProvenanceSnapshot>
 ): KnowledgeAppliedProvenanceReadPort & { readAppliedProvenance: jest.Mock } {
   return { readAppliedProvenance: jest.fn(implementation) };
 }
 
-/** Creates one resolver that echoes exact file observations for requested pages. */
 function createResolver(content = PAGE_CONTENT): CompilerTargetResolver & { resolve: jest.Mock } {
   return {
     resolve: jest.fn(async (requests: readonly CompilerTargetRequest[]) =>

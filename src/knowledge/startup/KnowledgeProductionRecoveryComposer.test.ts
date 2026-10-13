@@ -1,18 +1,15 @@
 jest.mock("obsidian", () => {
   class FileSystemAdapter {
-    /** Returns the fake desktop Vault root. */
     getBasePath(): string {
       return "C:\\KnowledgeVault";
     }
 
-    /** Resolves one fake native path without touching the filesystem. */
     getFullPath(path: string): string {
       return `C:\\KnowledgeVault\\${path.replaceAll("/", "\\")}`;
     }
   }
 
   class TFile {
-    /** Creates one fake loaded file. */
     constructor(public readonly path: string) {}
   }
 
@@ -73,13 +70,11 @@ import {
   type KnowledgeProductionRecoveryState,
 } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 
-/** Promise controls used to hold one recovery Gate across lifecycle transitions. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
 }
 
-/** Creates externally controlled asynchronous work. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -88,23 +83,19 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Minimal atomic memory file used by the real production Runtime facade graph. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
 
-  /** Initializes the exact first Runtime bytes once. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) this.content = initialContent;
   }
 
-  /** Returns the exact current Runtime bytes. */
   async read(): Promise<string> {
     if (this.content === undefined) throw new Error("Runtime is not initialized");
     return this.content;
   }
 
-  /** Serializes one atomic plaintext transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     const previous = this.tail;
     let release: () => void = () => undefined;
@@ -122,7 +113,6 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   }
 }
 
-/** Creates one strict non-overlapping Bundle configuration. */
 function createBundle(id = "personal"): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -134,12 +124,10 @@ function createBundle(id = "personal"): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one mocked loaded file while preserving the Obsidian `TFile` runtime brand. */
 function createTestTFile(path: string): TFile {
   return Object.assign(new TFile(), { path });
 }
 
-/** Creates an in-memory Vault whose exact Wiki I/O remains observable. */
 function createVault(): {
   vault: Vault;
   files: Map<string, string>;
@@ -191,7 +179,6 @@ interface AuthorizedRecoveryFixture {
   targetPath: string;
 }
 
-/** Builds one exact accepted-review authority set for an interrupted create transaction. */
 function createAuthorizedRecoveryFixture(bundle: KnowledgeBundleConfig): AuthorizedRecoveryFixture {
   const sourceId = "source-recovery";
   const sourceRoot = bundle.sourceRoots[0];
@@ -390,7 +377,6 @@ function createAuthorizedRecoveryFixture(bundle: KnowledgeBundleConfig): Authori
   return { manifest, journal, queue, review, targetPath };
 }
 
-/** Persists one fully authorized interrupted journal through real Runtime facades. */
 async function createAuthorizedRecoveryHarness(): Promise<{
   runtime: KnowledgeRuntimeStore;
   transaction: KnowledgeRuntimeTransactionStorage;
@@ -434,7 +420,6 @@ async function createAuthorizedRecoveryHarness(): Promise<{
   return { runtime, transaction, manifest, queue, bundle, fixture, vault: createVault() };
 }
 
-/** Creates one initialized Runtime and a recovery composer over strict Bundle values. */
 async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]): Promise<{
   file: MemoryAtomicRuntimeFile;
   runtime: KnowledgeRuntimeStore;
@@ -442,8 +427,6 @@ async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]
   vault: ReturnType<typeof createVault>;
   releaseStartupRecovery: jest.SpyInstance;
 }> {
-  // Install the observation hook on the prototype before an authentic Runtime is
-  // created. The forward Studio facade later seals each exact Runtime instance.
   const releaseStartupRecovery = jest.spyOn(
     KnowledgeRuntimeStore.prototype,
     "releaseStartupRecovery"
@@ -461,7 +444,6 @@ async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]
   };
 }
 
-/** Creates one source-bearing Queue safely paused before an applying boundary. */
 function createPausedQueue(
   bundleId: string,
   reason: Extract<IngestQueuePauseReason, "user" | "rate_limit" | "startup_recovery">
@@ -512,7 +494,6 @@ function createPausedQueue(
   };
 }
 
-/** Creates one exact interrupted-apply Queue behind its sticky recovery gate. */
 function createRecoveryRequiredQueue(bundleId: string): IngestQueueSnapshot {
   const sourceId = "source-interrupted-apply";
   const createdAt = 100;
@@ -570,7 +551,6 @@ function createRecoveryRequiredQueue(bundleId: string): IngestQueueSnapshot {
   };
 }
 
-/** Persists a source-bearing Queue through the real Runtime observation authority. */
 async function writeObservedQueue(
   runtime: KnowledgeRuntimeStore,
   snapshot: IngestQueueSnapshot
@@ -596,7 +576,6 @@ async function writeObservedQueue(
   });
 }
 
-/** Creates the minimum Gate result consumed by the sanitizing composer boundary. */
 function createGateResult(
   bundleId: string,
   disposition: KnowledgeStartupGateResult["disposition"] = "observed_clear"
@@ -1166,7 +1145,6 @@ describe("KnowledgeProductionRecoveryComposer", () => {
       >();
 
       class ControlledForwardRecoveryRunner {
-        /** Captures one exact Runtime/Vault pair and deterministic recovery result sequence. */
         constructor(
           runtime: object,
           vault: object,
@@ -1176,21 +1154,18 @@ describe("KnowledgeProductionRecoveryComposer", () => {
           Object.freeze(this);
         }
 
-        /** Accepts only runners minted by this isolated production-composer test. */
         static assert(value: unknown): void {
           if (typeof value !== "object" || value === null || !runnerStates.has(value)) {
             throw new TypeError("invalid controlled runner");
           }
         }
 
-        /** Preserves the production composer's exact Runtime/Vault pairing check. */
         static matchesRuntimeAndVault(value: unknown, runtime: unknown, vault: unknown): boolean {
           if (typeof value !== "object" || value === null) return false;
           const state = runnerStates.get(value);
           return state !== undefined && state.runtime === runtime && state.vault === vault;
         }
 
-        /** Returns the next durable recovery classification without any model work. */
         async recoverActive(): Promise<Readonly<Record<string, unknown>>> {
           const state = runnerStates.get(this);
           if (!state) throw new TypeError("invalid controlled runner");
@@ -1205,12 +1180,10 @@ describe("KnowledgeProductionRecoveryComposer", () => {
           runtimeModule
         );
       class ControlledForwardStudioPort {
-        /** Retains only the exact Runtime receiver used to find its one-envelope fixture. */
         constructor(private readonly runtime: object) {
           if (!(runtime instanceof actualRuntime.KnowledgeRuntimeStore)) throw new TypeError();
         }
 
-        /** Returns the exact Bundle snapshot assigned to this Runtime scenario. */
         async readForwardRevisionStudioBundle(
           bundleId: string
         ): Promise<Readonly<Record<string, unknown>>> {

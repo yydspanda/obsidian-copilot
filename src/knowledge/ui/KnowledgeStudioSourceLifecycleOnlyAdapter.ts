@@ -21,7 +21,6 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioController";
 import { sha256 } from "@/utils/hash";
 
-/** Inputs captured by one pre-release source-lifecycle-only generation. */
 export interface KnowledgeStudioSourceLifecycleOnlyAdapterInput {
   bundleId: string;
   sourceLifecycle: KnowledgeSourceLifecyclePort;
@@ -38,12 +37,10 @@ interface SourceLifecycleOnlyState {
 
 const sourceLifecycleOnlyStates = new WeakMap<object, SourceLifecycleOnlyState>();
 
-/** Creates the standard cancellation category for stale lifecycle generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Finds one source lifecycle data method without evaluating accessors. */
 function captureLifecycleMethod<K extends keyof KnowledgeSourceLifecyclePort>(
   owner: object,
   key: K
@@ -64,7 +61,6 @@ function captureLifecycleMethod<K extends keyof KnowledgeSourceLifecyclePort>(
   throw createAbortError();
 }
 
-/** Returns hidden authentic adapter state or rejects a forged receiver. */
 function requireState(value: unknown): SourceLifecycleOnlyState {
   if (
     typeof value !== "object" ||
@@ -78,7 +74,6 @@ function requireState(value: unknown): SourceLifecycleOnlyState {
   return state;
 }
 
-/** Proves exact Bundle, caller signal, and upstream observation ownership. */
 function assertInvocation(
   state: SourceLifecycleOnlyState,
   bundleId: string,
@@ -93,7 +88,6 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Detaches a strict lifecycle model from the generation-owned coordinator result. */
 function snapshotLifecycleModel(
   value: Readonly<KnowledgeSourceLifecycleModel>
 ): Readonly<KnowledgeSourceLifecycleModel> {
@@ -105,7 +99,6 @@ function snapshotLifecycleModel(
   });
 }
 
-/** Creates a content-free revision token from Runtime, Manifest, and retirement authority. */
 function createRevisionToken(model: Readonly<KnowledgeSourceLifecycleModel>): string {
   const material: JsonValue = {
     version: 1,
@@ -122,16 +115,9 @@ function createRevisionToken(model: Readonly<KnowledgeSourceLifecycleModel>): st
   return `knowledge-source-lifecycle-${sha256(canonicalizeJson(material))}`;
 }
 
-/**
- * Pre-release Studio adapter exposing only source inventory, recheck, and retirement.
- *
- * It has no Query, model, Queue, Review, Apply, Wiki, or Vault capability. Ordinary
- * Studio commands are present only to satisfy the stable port and always reject.
- */
 export class KnowledgeStudioSourceLifecycleOnlyAdapter
   implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeSourceLifecyclePort
 {
-  /** Captures only three lifecycle methods plus current-generation proof. */
   constructor(input: KnowledgeStudioSourceLifecycleOnlyAdapterInput) {
     if (
       typeof input !== "object" ||
@@ -160,7 +146,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     Object.freeze(this);
   }
 
-  /** Loads a source-only ready snapshot that explicitly opens the Sources tab. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     const state = requireState(this);
     assertInvocation(state, bundleId, signal);
@@ -180,14 +165,12 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     });
   }
 
-  /** Registers no speculative hint source while the startup observation is blocked. */
   subscribe(bundleId: string, _onHint: () => void): () => void {
     const state = requireState(this);
     assertInvocation(state, bundleId, new AbortController().signal);
     return () => undefined;
   }
 
-  /** Loads the exact current source lifecycle projection. */
   async loadSources(
     bundleId: string,
     signal: AbortSignal
@@ -199,14 +182,12 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     return model;
   }
 
-  /** Delegates one exact current missing-source recheck. */
   async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
     const state = requireState(this);
     assertInvocation(state, bundleId, signal);
     await state.checkAgain(bundleId, sourceId, signal);
   }
 
-  /** Delegates one atomic retirement; its durable receipt wins over later invalidation. */
   async retireSource(
     bundleId: string,
     request: Readonly<KnowledgeSourceRetirementRequest>,
@@ -217,7 +198,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     return state.retireSource(bundleId, request, signal);
   }
 
-  /** Rejects Queue pause while the release gate remains held. */
   async pauseBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -226,7 +206,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects Queue resume while the release gate remains held. */
   async resumeBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -235,7 +214,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects Queue cancellation while the release gate remains held. */
   async cancelJob(
     _bundleId: string,
     _jobId: string,
@@ -245,7 +223,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects Queue retry while the release gate remains held. */
   async retryJob(
     _bundleId: string,
     _jobId: string,
@@ -255,7 +232,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects every Review or Apply decision before startup release. */
   async submitReview(
     _bundleId: string,
     _command: KnowledgeReviewCommand,
@@ -264,7 +240,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects recovery continuation because this adapter owns no recovery authority. */
   async continueRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -274,7 +249,6 @@ export class KnowledgeStudioSourceLifecycleOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects recovery abandonment because this adapter owns no recovery authority. */
   async abandonRecovery(
     _bundleId: string,
     _recoveryId: string,

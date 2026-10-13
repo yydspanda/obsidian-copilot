@@ -1,3 +1,4 @@
+import { APPLY_VIEW_TYPE } from "@/constants";
 import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
 import { getSettings, updateSetting } from "@/settings/model";
@@ -14,17 +15,13 @@ import { ensureFolderExists } from "@/utils";
 import { SideBySideDiffBlock, SplitDiffBlock } from "@/components/composer/DiffPreview";
 import { safeAsyncHandler } from "@/utils/safeAsyncHandler";
 
-export const APPLY_VIEW_TYPE = "obsidian-copilot-apply-view";
-
 export interface ApplyViewState {
   changes: Change[];
   path: string;
   resultCallback?: (result: ApplyViewResult) => void;
-  /** When true, hides per-block accept/reject buttons (used by editFile) */
   simple?: boolean;
 }
 
-// Extended Change interface to track user acceptance
 interface ExtendedChange extends Change {
   accepted: boolean | null;
 }
@@ -35,28 +32,23 @@ export class ApplyView extends ItemView {
   private result: ApplyViewResult | null = null;
   private windowMigrationDestroy: (() => void) | null = null;
 
-  /** Creates a preview view attached to one Obsidian workspace leaf. */
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
   }
 
-  /** Returns the stable workspace view type. */
   getViewType(): string {
     return APPLY_VIEW_TYPE;
   }
 
-  /** Returns the user-facing workspace title. */
   getDisplayText(): string {
     return "Preview Changes";
   }
 
-  /** Stores a new preview state and renders it into the current window. */
   async setState(state: ApplyViewState): Promise<void> {
     this.state = state;
     this.render();
   }
 
-  /** Mounts the preview and prepares it to follow popout-window migrations. */
   async onOpen(): Promise<void> {
     this.render();
     this.windowMigrationDestroy?.();
@@ -66,7 +58,6 @@ export class ApplyView extends ItemView {
     });
   }
 
-  /** Unmounts the preview and resolves an unfinished session as aborted. */
   async onClose(): Promise<void> {
     this.windowMigrationDestroy?.();
     this.windowMigrationDestroy = null;
@@ -75,13 +66,11 @@ export class ApplyView extends ItemView {
     this.state?.resultCallback?.(this.result ? this.result : "aborted");
   }
 
-  /** Unmounts the current React root from the exact document that owns it. */
   private unmountRoot(): void {
     this.root?.unmount();
     this.root = null;
   }
 
-  /** Creates a React root only when the current window does not already own one. */
   private ensureRoot(): void {
     if (this.root) return;
 
@@ -91,13 +80,11 @@ export class ApplyView extends ItemView {
     this.root = createPluginRoot(rootEl, this.app);
   }
 
-  /** Renders the current state without detaching an existing React root host. */
   private render(): void {
     if (!this.state) return;
 
     this.ensureRoot();
 
-    // Pass a close function that takes a result
     this.root?.render(
       <ApplyViewRoot
         app={this.app}
@@ -117,34 +104,28 @@ interface ApplyViewRootProps {
   close: (result: ApplyViewResult) => void;
 }
 
-/** Renders one interactive legacy single-file preview session. */
 const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
   const simple = state.simple ?? false;
   const [diff, setDiff] = useState<ExtendedChange[]>(() => {
     return state.changes.map((change) => ({
       ...change,
-      accepted: null, // Start with null (undecided)
+      accepted: null,
     }));
   });
 
-  // View mode state with settings persistence (fallback to "split" for users with old settings)
   const [viewMode, setViewMode] = useState<"side-by-side" | "split">(
     () => getSettings().diffViewMode ?? "split"
   );
 
-  /** Persists and applies the selected visual comparison mode. */
   const handleViewModeChange = (mode: "side-by-side" | "split") => {
     setViewMode(mode);
     updateSetting("diffViewMode", mode);
   };
 
-  // Group changes into blocks for better UI presentation
   const changeBlocks = getChangeBlocks(diff);
 
-  // Add refs to track change blocks
   const blockRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Add defensive check for state after hooks
   if (!state || !state.changes) {
     logError("Invalid state:", state);
     return (
@@ -157,35 +138,14 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     );
   }
 
-  /** Applies every accepted or still-undecided change and closes the preview. */
   const handleAccept = async () => {
     try {
-      // Mark all undecided changes as accepted
       const updatedDiff = diff.map((change) =>
         change.accepted === null ? { ...change, accepted: true } : change
       );
 
       const result = await applyDecidedChangesToFile(updatedDiff);
-      close(result ? "accepted" : "failed"); // Pass result
-    } catch (error) {
-      logError("Error applying changes:", error);
-      new Notice(
-        `Error applying changes: ${error instanceof Error ? error.message : String(error)}`
-      );
-      close("failed"); // fallback, but you may want to handle this differently
-    }
-  };
-
-  /** Rejects every undecided change while preserving earlier block decisions. */
-  const handleReject = async () => {
-    try {
-      // Mark all undecided changes as rejected
-      const updatedDiff = diff.map((change) =>
-        change.accepted === null ? { ...change, accepted: false } : change
-      );
-
-      const result = await applyDecidedChangesToFile(updatedDiff, false);
-      close(result ? "rejected" : "failed"); // Pass result
+      close(result ? "accepted" : "failed");
     } catch (error) {
       logError("Error applying changes:", error);
       new Notice(
@@ -195,13 +155,28 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     }
   };
 
-  /** Resolves or creates the legacy preview target file. */
+  const handleReject = async () => {
+    try {
+      const updatedDiff = diff.map((change) =>
+        change.accepted === null ? { ...change, accepted: false } : change
+      );
+
+      const result = await applyDecidedChangesToFile(updatedDiff, false);
+      close(result ? "rejected" : "failed");
+    } catch (error) {
+      logError("Error applying changes:", error);
+      new Notice(
+        `Error applying changes: ${error instanceof Error ? error.message : String(error)}`
+      );
+      close("failed");
+    }
+  };
+
   const getFile = async (file_path: string) => {
     const file = app.vault.getAbstractFileByPath(file_path);
     if (file) {
       return file;
     }
-    // Create the folder if it doesn't exist (supports nested paths)
     if (file_path.includes("/")) {
       const folderPath = file_path.split("/").slice(0, -1).join("/");
       await ensureFolderExists(app.vault, folderPath);
@@ -209,17 +184,15 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     return await app.vault.create(file_path, "");
   };
 
-  /** Reconstructs and writes the content selected by the current block decisions. */
   const applyDecidedChangesToFile = async (
     updatedDiff: ExtendedChange[],
     showSuccessNotice = true
   ) => {
-    // Apply changes based on their accepted status
     const newContent = updatedDiff
       .filter((change) => {
-        if (change.added) return change.accepted === true; // Include if accepted
-        if (change.removed) return change.accepted === false; // Include if rejected
-        return true; // Keep unchanged lines
+        if (change.added) return change.accepted === true;
+        if (change.removed) return change.accepted === false;
+        return true;
       })
       .map((change) => change.value)
       .join("");
@@ -238,11 +211,9 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     return true;
   };
 
-  /** Scrolls the next undecided change block into view. */
   const focusNextChangeBlock = (currentBlockIndex: number) => {
     if (!changeBlocks) return;
 
-    // Find the next block with changes that is undecided
     let nextBlockIndex = -1;
     for (let i = currentBlockIndex + 1; i < changeBlocks.length; i++) {
       const block = changeBlocks[i];
@@ -257,13 +228,11 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
       }
     }
 
-    // If there's a next block, scroll to it
     if (nextBlockIndex !== -1 && blockRefs.current[nextBlockIndex]) {
       blockRefs.current[nextBlockIndex]?.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   };
 
-  /** Schedules focus movement in the window that owns the current block. */
   const scheduleNextBlockFocus = (currentBlockIndex: number) => {
     const currentBlock = blockRefs.current[currentBlockIndex];
     if (!currentBlock) return;
@@ -271,7 +240,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     currentBlock.win.setTimeout(() => focusNextChangeBlock(currentBlockIndex), 0);
   };
 
-  /** Accepts one visual block without applying it to the file yet. */
   const acceptBlock = (blockIndex: number) => {
     setDiff((prevDiff) => {
       const newDiff = [...prevDiff];
@@ -279,7 +247,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
 
       if (!block) return newDiff;
 
-      // Find the indices of the changes in this block
       block.forEach((blockChange) => {
         const index = newDiff.findIndex((change) => change === blockChange);
         if (index !== -1) {
@@ -296,7 +263,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     scheduleNextBlockFocus(blockIndex);
   };
 
-  /** Rejects one visual block without applying it to the file yet. */
   const rejectBlock = (blockIndex: number) => {
     setDiff((prevDiff) => {
       const newDiff = [...prevDiff];
@@ -304,7 +270,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
 
       if (!block) return newDiff;
 
-      // Find the indices of the changes in this block
       block.forEach((blockChange) => {
         const index = newDiff.findIndex((change) => change === blockChange);
         if (index !== -1) {
@@ -361,10 +326,8 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
 
       <div className="tw-flex-1 tw-overflow-auto tw-p-2">
         {changeBlocks?.map((block, blockIndex) => {
-          // Check if this block contains any changes (added or removed)
           const hasChanges = block.some((change) => change.added || change.removed);
 
-          // Get the result status for this block
           const blockStatus = hasChanges
             ? block.every(
                 (change) =>
@@ -388,7 +351,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
               className={cn("tw-mb-4 tw-overflow-hidden tw-rounded-md")}
             >
               {blockStatus === "accepted" ? (
-                // Show only the accepted version
                 <div className="tw-flex-1 tw-whitespace-pre-wrap tw-px-2 tw-py-1 tw-font-mono tw-text-sm tw-text-normal">
                   {block
                     .filter((change) => !change.removed)
@@ -398,7 +360,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
                     ))}
                 </div>
               ) : blockStatus === "rejected" ? (
-                // Show only the original version
                 <div className="tw-flex-1 tw-whitespace-pre-wrap tw-px-2 tw-py-1 tw-font-mono tw-text-sm tw-text-normal">
                   {block
                     .filter((change) => !change.added)
@@ -408,14 +369,11 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
                     ))}
                 </div>
               ) : viewMode === "side-by-side" ? (
-                // Side-by-side view
                 <SideBySideDiffBlock block={block} />
               ) : (
-                // Split view (default) - old and new shown separately
                 <SplitDiffBlock block={block} />
               )}
 
-              {/* Only show accept/reject buttons for blocks with changes that are undecided */}
               {!simple && hasChanges && blockStatus === "undecided" && (
                 <div className="tw-flex tw-items-center tw-justify-end tw-border-0 tw-border-t tw-border-solid tw-border-border tw-p-2">
                   <div className="tw-flex tw-items-center tw-gap-2">
@@ -431,7 +389,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
                 </div>
               )}
 
-              {/* Show status for decided blocks with revert option */}
               {!simple &&
                 hasChanges &&
                 (blockStatus === "accepted" || blockStatus === "rejected") && (
@@ -454,7 +411,6 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
                         variant="secondary"
                         size="sm"
                         onClick={() => {
-                          // Reset the block to undecided state
                           setDiff((prevDiff) => {
                             const newDiff = [...prevDiff];
                             const block = changeBlocks?.[blockIndex];

@@ -39,7 +39,6 @@ const SCHEMA_PATH = "Schema/knowledge.md";
 const PARSER_ID = "markdown-utf8";
 const PARSER_VERSION = "1";
 
-/** Creates one strict project-owned knowledge Bundle. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -52,7 +51,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: PROJECT_ID, config };
 }
 
-/** Creates the durable Manifest used by one loader collection. */
 function createManifest(revision = 1): SourceManifest {
   return {
     version: 1,
@@ -69,12 +67,10 @@ function createManifest(revision = 1): SourceManifest {
   };
 }
 
-/** Creates an empty durable Manifest for parser-registry boundary tests. */
 function createEmptyManifest(): SourceManifest {
   return { version: 1, bundleId: BUNDLE_ID, revision: 0, entries: [] };
 }
 
-/** Creates the exact profile advertised by the default fake parser. */
 function createParserProfile(
   overrides: Partial<KnowledgeSourceParserProfile> = {}
 ): KnowledgeSourceParserProfile {
@@ -90,7 +86,6 @@ function createParserProfile(
   };
 }
 
-/** Creates one complete secret-free behavior profile. */
 function createPipelineProfile(
   parsers: readonly KnowledgeSourceParserProfile[] = [createParserProfile()]
 ): KnowledgeBundlePipelineProfile {
@@ -118,7 +113,6 @@ function createPipelineProfile(
   };
 }
 
-/** Creates a detached exact-reader success around the supplied byte reference. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return {
     sourcePath,
@@ -127,7 +121,6 @@ function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSource
   };
 }
 
-/** Creates one strict parser result for the supplied source. */
 function createParsedSource(sourceId = SOURCE_ID, text = "parsed source text") {
   return {
     artifact: {
@@ -140,7 +133,6 @@ function createParsedSource(sourceId = SOURCE_ID, text = "parsed source text") {
   };
 }
 
-/** Creates one strict PDF parser result bound to exact raw source bytes. */
 function createParsedPdfSource(request: Readonly<KnowledgeByteParserRequest>) {
   return {
     artifact: {
@@ -197,7 +189,6 @@ interface Harness {
   };
 }
 
-/** Creates narrow mutable fake ports around immutable production payloads. */
 function createHarness(options: HarnessOptions = {}): Harness {
   const owner = createOwner();
   const executionOwner = options.executionOwner ?? createKnowledgeExecutionOwner();
@@ -283,7 +274,6 @@ function createHarness(options: HarnessOptions = {}): Harness {
   };
 }
 
-/** Loads an authentic plan and builds a matching Queue-owned job projection. */
 async function loadPlanAndJob(
   harness: Harness
 ): Promise<{ plan: KnowledgeSourceExecutionPlan; job: KnowledgeSourceParseJob }> {
@@ -302,7 +292,6 @@ async function loadPlanAndJob(
   };
 }
 
-/** Captures one sanitized workflow error from an asynchronous operation. */
 async function expectWorkflowError(
   action: () => Promise<unknown>,
   code: KnowledgeSourceWorkflowPlanError["code"],
@@ -321,7 +310,6 @@ async function expectWorkflowError(
   return failure;
 }
 
-/** Captures one sanitized workflow error from a synchronous operation. */
 function expectWorkflowErrorSync(
   action: () => unknown,
   code: KnowledgeSourceWorkflowPlanError["code"],

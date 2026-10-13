@@ -11,15 +11,12 @@ const mockVerify = jest.fn<
 
 jest.mock("@/knowledge/query/ObsidianKnowledgeCitationNavigator", () => ({
   ObsidianKnowledgeCitationNavigator: class TestKnowledgeCitationNavigator {
-    /** Captures no platform authority in the isolated adapter test. */
     constructor(_app: unknown) {}
 
-    /** Forwards exact navigation requests to the test spy. */
     navigate(request: unknown, signal?: AbortSignal) {
       return mockNavigate(request, signal);
     }
 
-    /** Forwards exact no-mutation verification requests to the test spy. */
     verify(request: unknown, signal?: AbortSignal) {
       return mockVerify(request, signal);
     }
@@ -61,7 +58,6 @@ interface Deferred<T> {
   resolve(value: T): void;
 }
 
-/** Creates one externally settled promise for close-race assertions. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -70,7 +66,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one strict Bundle fixture for a distinct source and Wiki root. */
 function createBundle(id: string): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -82,7 +77,6 @@ function createBundle(id: string): KnowledgeBundleConfig {
   };
 }
 
-/** Creates deterministic byte-filling Web Crypto authority for opaque-id tests. */
 function createSecureRandom(): KnowledgeQuerySecureRandomPort {
   let sequence = 0;
   return {
@@ -95,7 +89,6 @@ function createSecureRandom(): KnowledgeQuerySecureRandomPort {
   };
 }
 
-/** Creates one empty atomic applied-provenance projection. */
 function createEmptyProjection(bundleId: string): KnowledgeRuntimeAppliedProvenanceSnapshot {
   return {
     bundleId,
@@ -105,7 +98,6 @@ function createEmptyProjection(bundleId: string): KnowledgeRuntimeAppliedProvena
   };
 }
 
-/** Creates one exact source-backed applied Wiki projection. */
 function createAppliedProjection(
   sourcePath = SOURCE_PATH,
   bundleId = "personal"
@@ -160,7 +152,6 @@ function createAppliedProjection(
   };
 }
 
-/** Creates an exact resolver that returns the immutable Wiki fixture. */
 function createTargetResolver(): jest.Mocked<CompilerTargetResolver> {
   return {
     resolve: jest.fn(async (requests: readonly CompilerTargetRequest[], _signal: AbortSignal) =>
@@ -174,12 +165,10 @@ function createTargetResolver(): jest.Mocked<CompilerTargetResolver> {
   };
 }
 
-/** Creates the platform owner whose navigator behavior is mocked above. */
 function createApp(): App {
   return { vault: {}, workspace: {} } as unknown as App;
 }
 
-/** Creates an authentic production lease owner with an isolated fake answer transport. */
 function createAnswerRouteOwner(
   bundleId: string,
   invoke: (

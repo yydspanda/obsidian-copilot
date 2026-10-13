@@ -41,7 +41,6 @@ function createGate() {
   return { promise, release };
 }
 
-/** Replaces storage and model I/O only; cancellation, captures and registration use production code. */
 async function createFixture(options: { emitCreateHint?: boolean; failFileCas?: boolean } = {}) {
   const created = createGate();
   const completeCas = createGate();

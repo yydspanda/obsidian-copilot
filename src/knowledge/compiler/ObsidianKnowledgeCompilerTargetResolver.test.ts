@@ -1,11 +1,9 @@
 jest.mock("obsidian", () => {
   class TFile {
-    /** Creates one fake loaded file with canonical Vault spelling. */
     constructor(public readonly path: string) {}
   }
 
   class TFolder {
-    /** Creates one fake loaded folder with canonical Vault spelling. */
     constructor(public readonly path: string) {}
   }
 
@@ -24,19 +22,16 @@ import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecu
 import { ObsidianKnowledgeOutputObservationReader } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Creates one fake TFile despite Obsidian's opaque public constructors. */
 function createTestFile(path: string): TFile {
   const Constructor = TFile as unknown as new (value: string) => TFile;
   return new Constructor(path);
 }
 
-/** Creates one fake TFolder despite Obsidian's opaque public constructors. */
 function createTestFolder(path: string): TFolder {
   const Constructor = TFolder as unknown as new (value: string) => TFolder;
   return new Constructor(path);
 }
 
-/** Creates one exact compiler target request. */
 function createRequest(
   path: string,
   access: CompilerTargetRequest["access"] = "authorized",
@@ -45,7 +40,6 @@ function createRequest(
   return { targetId, path, intent: "write", access };
 }
 
-/** In-memory App/Vault boundary with inspectable index, stat, and content reads. */
 class ResolverHarness {
   loaded: Array<TFile | TFolder> = [];
   readonly contents = new Map<string, string>();
@@ -92,17 +86,14 @@ class ResolverHarness {
 
   readonly appOwner: { vault: Vault } = { vault: this.vault };
 
-  /** Returns the exact mutable App owner used by the resolver lifecycle. */
   get app(): App {
     return this.appOwner as unknown as App;
   }
 
-  /** Creates a resolver after the harness's exact owner methods are installed. */
   createResolver(): ObsidianKnowledgeCompilerTargetResolver {
     return new ObsidianKnowledgeCompilerTargetResolver(this.app);
   }
 
-  /** Installs one canonical loaded file and its exact text bytes. */
   addFile(path: string, content: string): TFile {
     const file = createTestFile(path);
     this.loaded.push(file);
@@ -115,7 +106,6 @@ class ResolverHarness {
     return file;
   }
 
-  /** Installs one canonical loaded folder and matching adapter stat state. */
   addFolder(path: string): TFolder {
     const folder = createTestFolder(path);
     this.loaded.push(folder);
@@ -124,7 +114,6 @@ class ResolverHarness {
   }
 }
 
-/** Requires one rejected resolver promise to contain exactly the expected safe code. */
 async function expectResolverCode(
   promise: Promise<unknown>,
   code: ObsidianKnowledgeCompilerTargetResolverErrorCode

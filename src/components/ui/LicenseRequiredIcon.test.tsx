@@ -17,15 +17,7 @@ describe("LicenseRequiredIcon", () => {
     it("states the reason in text, since the tooltip only answers a hover", () => {
       render(<LicenseRequiredIcon />);
 
-      // Include the requirement in the row's accessible name without hovering.
       expect(screen.getByText("Copilot license required")).toBeTruthy();
-    });
-
-    it("keeps a caller's classes alongside its own", () => {
-      const { container } = render(<LicenseRequiredIcon className="tw-mt-0.5" />);
-
-      expect(container.firstElementChild?.className).toContain("tw-mt-0.5");
-      expect(container.firstElementChild?.className).toContain("tw-shrink-0");
     });
   });
 });

@@ -6,13 +6,11 @@ import {
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 
-/** Dependencies retained by the synchronous applied-Wiki command check. */
 export interface KnowledgeWikiInspectionCommandInput {
   readonly index: KnowledgeAppliedWikiPathIndex;
   readonly openInspector: (request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>) => void;
 }
 
-/** Requires one authentic advisory index owned by this plugin lifecycle. */
 function isAuthenticIndex(value: unknown): value is KnowledgeAppliedWikiPathIndex {
   try {
     return (
@@ -25,7 +23,6 @@ function isAuthenticIndex(value: unknown): value is KnowledgeAppliedWikiPathInde
   }
 }
 
-/** Accepts one exact advisory row without invoking array or row accessors. */
 function hasOneExactAdvisoryRow(value: unknown, pagePath: string): boolean {
   try {
     if (!Array.isArray(value)) return false;
@@ -73,18 +70,6 @@ function hasOneExactAdvisoryRow(value: unknown, pagePath: string): boolean {
   }
 }
 
-/**
- * Checks or opens inspection for the active exact applied Knowledge Wiki file.
- *
- * The TFile path and value-only request are captured synchronously so a later
- * active-leaf change cannot redirect the command to another page. Runtime and
- * Vault authority are re-proved asynchronously by the inspector coordinator.
- *
- * @param checking - Obsidian command-discovery phase when true
- * @param file - Active Markdown file captured by the editor command callback
- * @param input - Stable advisory index and Modal-opening callback
- * @returns Whether the command is currently available
- */
 export function checkKnowledgeWikiInspectionCommand(
   checking: boolean,
   file: TFile | null,

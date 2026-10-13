@@ -25,20 +25,12 @@ import {
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/**
- * Current persisted transaction-journal version.
- *
- * Version 3 deliberately has no extension bag. Adding, removing, or renaming a
- * persisted field requires a new version and an explicit migration.
- */
 export const TRANSACTION_JOURNAL_VERSION = 3 as const;
 
-/** Exact Vault file state captured before or expected after one change. */
 export type TransactionFileState =
   | { kind: "missing" }
   | { kind: "file"; content: string; contentHash: string };
 
-/** One deterministic file target with enough state for verification and recovery. */
 export interface TransactionTarget {
   changeId: string;
   path: string;
@@ -48,7 +40,6 @@ export interface TransactionTarget {
   after: TransactionFileState;
 }
 
-/** Complete immutable identity of the ingest input and job attempt that owns the transaction. */
 export interface TransactionJobClaim {
   readonly jobId: string;
   readonly attempt: number;
@@ -59,10 +50,8 @@ export interface TransactionJobClaim {
   readonly inputRevision: number;
 }
 
-/** Stable conflict codes that require explicit transaction recovery. */
 export type TransactionConflictCode = "file_state_conflict" | "post_write_verification_failed";
 
-/** One observed Vault state conflict that prevented safe automatic progress. */
 export interface TransactionConflict {
   path: string;
   code: TransactionConflictCode;
@@ -70,7 +59,6 @@ export interface TransactionConflict {
   actualHash?: string;
 }
 
-/** Fields persisted for every phase of one global active transaction. */
 interface ChangeSetTransactionJournalBase {
   version: typeof TRANSACTION_JOURNAL_VERSION;
   transactionId: string;
@@ -89,12 +77,6 @@ interface ChangeSetTransactionJournalBase {
   updatedAt: number;
 }
 
-/**
- * Complete durable journal occupying the Vault-global active transaction slot.
- *
- * A committed journal remains active until its caller durably completes all
- * dependent bookkeeping and clears the slot through compare-and-swap.
- */
 export type ChangeSetTransactionJournal = ChangeSetTransactionJournalBase &
   (
     | { phase: "prepared" }
@@ -103,42 +85,19 @@ export type ChangeSetTransactionJournal = ChangeSetTransactionJournalBase &
     | { phase: "recovery_required"; conflicts: TransactionConflict[] }
   );
 
-/** ABA-safe optimistic token for the single active transaction slot. */
 export interface TransactionStorageToken {
   transactionId: string;
   revision: number;
 }
 
-/**
- * Signals that durable transaction state lacks the authority required to read
- * or advance an unfinished apply.
- *
- * Storage adapters may subclass this safe error so the transaction runtime can
- * fail closed without hiding the actionable durable-precondition reason behind
- * a generic infrastructure wrapper.
- */
 export class TransactionStorageAuthorityError extends Error {
-  /**
-   * Creates a safe transaction authority failure.
-   *
-   * @param message - Sanitized durable-precondition description
-   */
   constructor(message: string) {
     super(message);
     this.name = "TransactionStorageAuthorityError";
   }
 }
 
-/**
- * Signals that the Vault-global transaction slot no longer matches a caller's token.
- */
 export class TransactionStorageRevisionConflictError extends Error {
-  /**
-   * Creates an optimistic transaction-slot conflict.
-   *
-   * @param expectedToken - Token observed by the caller, or null for slot creation
-   * @param actualToken - Optional token observed atomically by the storage adapter
-   */
   constructor(
     public readonly expectedToken: TransactionStorageToken | null,
     public readonly actualToken?: TransactionStorageToken | null
@@ -159,45 +118,14 @@ export class TransactionStorageRevisionConflictError extends Error {
   }
 }
 
-/** Persistence port for the one Vault-global active transaction journal. */
 export interface TransactionStorage {
-  /**
-   * Reads the complete active journal as untrusted persisted JSON.
-   *
-   * @returns Unknown JSON, or null when the Vault has no active transaction
-   */
   readActive(): Promise<unknown>;
 
-  /**
-   * Atomically compares the active slot and durably replaces its whole journal.
-   *
-   * For creation, `expectedToken` must be null, the slot must be empty, and the
-   * journal revision must be zero. For an update, the stored transaction id and
-   * revision must both equal `expectedToken`, the transaction id must remain
-   * unchanged, and the new revision must equal `expectedToken.revision + 1`.
-   * Comparing and replacing MUST be one atomic adapter operation. The promise
-   * MUST resolve only after the replacement is durable. An adapter MUST throw
-   * {@link TransactionStorageRevisionConflictError} on any token mismatch.
-   *
-   * @param journal - Complete validated next journal revision
-   * @param expectedToken - Exact previously observed token, or null for creation
-   */
   writeActive(
     journal: ChangeSetTransactionJournal,
     expectedToken: TransactionStorageToken | null
   ): Promise<void>;
 
-  /**
-   * Atomically compares and durably clears the active slot.
-   *
-   * Both transaction id and revision MUST match `expectedToken`; this prevents a
-   * delayed clear from deleting a newer transaction whose revision was reused.
-   * Comparing and clearing MUST be one atomic adapter operation, and the promise
-   * MUST resolve only once the cleared state is durable. An adapter MUST throw
-   * {@link TransactionStorageRevisionConflictError} on mismatch.
-   *
-   * @param expectedToken - Exact token of the journal that may be cleared
-   */
   clearActive(expectedToken: TransactionStorageToken): Promise<void>;
 }
 
@@ -269,7 +197,6 @@ const transactionJournalBaseShape = {
   updatedAt: nonNegativeIntegerSchema,
 };
 
-/** Strict version-3 schema for the complete active transaction journal. */
 const changeSetTransactionJournalSchema: z.ZodType<ChangeSetTransactionJournal> =
   z.discriminatedUnion("phase", [
     z.object({ ...transactionJournalBaseShape, phase: z.literal("prepared") }).strict(),
@@ -290,22 +217,10 @@ const changeSetTransactionJournalSchema: z.ZodType<ChangeSetTransactionJournal> 
       .strict(),
   ]);
 
-/**
- * Computes the canonical identity of the exact accepted ChangeSet stored in a journal.
- *
- * @param changeSet - Complete ChangeSet whose persisted identity is required
- * @returns Namespaced lowercase SHA-256 digest
- */
 export function createChangeSetTransactionDigest(changeSet: KnowledgeChangeSet): string {
   return sha256(`knowledge-changeset-v1\n${canonicalizeJson(changeSet as unknown as JsonValue)}`);
 }
 
-/**
- * Computes the canonical identity of one complete persisted transaction journal.
- *
- * @param journal - Complete journal whose exact durable identity is required
- * @returns Namespaced lowercase SHA-256 digest
- */
 export function createChangeSetTransactionJournalDigest(
   journal: ChangeSetTransactionJournal
 ): string {
@@ -316,22 +231,10 @@ export function createChangeSetTransactionJournalDigest(
   );
 }
 
-/**
- * Formats one Zod issue path for stable diagnostics.
- *
- * @param path - Zod property and array-index path
- * @returns Dotted diagnostic field
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.map(String).join(".");
 }
 
-/**
- * Strictly parses unknown persisted transaction JSON.
- *
- * @param value - Runtime value expected to contain the complete active journal
- * @returns Parsed detached journal or structural diagnostics
- */
 export function parseChangeSetTransactionJournal(
   value: unknown
 ): KnowledgeParseResult<ChangeSetTransactionJournal> {
@@ -350,14 +253,6 @@ export function parseChangeSetTransactionJournal(
   };
 }
 
-/**
- * Appends one deterministic semantic validation error.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable issue code
- * @param field - Journal field associated with the issue
- * @param message - Human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -367,13 +262,6 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Appends diagnostics emitted by one nested validator below a field prefix.
- *
- * @param diagnostics - Mutable destination collection
- * @param prefix - Parent journal field
- * @param nested - Nested validation result
- */
 function appendNestedDiagnostics(
   diagnostics: KnowledgeDiagnostic[],
   prefix: string,
@@ -387,13 +275,6 @@ function appendNestedDiagnostics(
   }
 }
 
-/**
- * Validates that a file state carries the hash of its exact content.
- *
- * @param state - Captured or expected file state
- * @param field - Journal field containing the state
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateFileState(
   state: TransactionFileState,
   field: string,
@@ -409,14 +290,6 @@ function validateFileState(
   }
 }
 
-/**
- * Checks one target against the corresponding accepted file change.
- *
- * @param target - Durable transaction target
- * @param change - Accepted ChangeSet operation referenced by the target
- * @param field - Target field prefix for diagnostics
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateTargetAgainstChange(
   target: TransactionTarget,
   change: KnowledgeFileChange,
@@ -500,12 +373,6 @@ function validateTargetAgainstChange(
   }
 }
 
-/**
- * Validates all cross-field invariants of a persisted transaction journal.
- *
- * @param value - Unknown or typed active transaction journal
- * @returns Deterministic structural and semantic validation result
- */
 export function validateChangeSetTransactionJournal(value: unknown): KnowledgeValidationResult {
   const parsed = parseChangeSetTransactionJournal(value);
   if (!parsed.ok) {

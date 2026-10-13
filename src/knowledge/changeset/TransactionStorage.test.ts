@@ -30,7 +30,6 @@ const NEW_B = "# New B\n";
 const SOURCE_CONTENT_HASH = "a".repeat(64);
 const PIPELINE_FINGERPRINT = "b".repeat(64);
 
-/** Creates the validated Bundle whose boundaries are persisted for recovery. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -42,7 +41,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the complete immutable ingest identity persisted by the transaction. */
 function createJobClaim(overrides: Partial<TransactionJobClaim> = {}): TransactionJobClaim {
   return {
     jobId: "job-1",
@@ -56,7 +54,6 @@ function createJobClaim(overrides: Partial<TransactionJobClaim> = {}): Transacti
   };
 }
 
-/** Creates the accepted create, update, and delete operations used by journal tests. */
 function createChanges(): KnowledgeFileChange[] {
   return [
     {
@@ -90,7 +87,6 @@ function createChanges(): KnowledgeFileChange[] {
   ];
 }
 
-/** Creates a complete accepted ChangeSet with affirmative deterministic validation. */
 function createChangeSet(): KnowledgeChangeSet {
   return {
     id: "changeset-1",
@@ -105,7 +101,6 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
-/** Creates the exact final Manifest projection bound to the accepted test ChangeSet. */
 function createManifestCommitIntent(
   changeSet: KnowledgeChangeSet = createChangeSet()
 ): ManifestCommitIntent {
@@ -144,7 +139,6 @@ function createManifestCommitIntent(
   };
 }
 
-/** Creates deterministic transaction targets with exact pre- and post-state content. */
 function createTargets(): TransactionTarget[] {
   return [
     {
@@ -174,7 +168,6 @@ function createTargets(): TransactionTarget[] {
   ];
 }
 
-/** Creates a valid prepared journal at its initial persisted revision. */
 function createPreparedJournal(): ChangeSetTransactionJournal {
   const bundle = createBundle();
   const changeSet = createChangeSet();
@@ -199,17 +192,14 @@ function createPreparedJournal(): ChangeSetTransactionJournal {
   };
 }
 
-/** Returns the diagnostic codes emitted by semantic journal validation. */
 function diagnosticCodes(value: unknown): string[] {
   return validateChangeSetTransactionJournal(value).diagnostics.map(({ code }) => code);
 }
 
-/** Creates the ABA-safe token for one journal revision. */
 function createToken(journal: ChangeSetTransactionJournal): TransactionStorageToken {
   return { transactionId: journal.transactionId, revision: journal.revision };
 }
 
-/** Compares both fields of a transaction storage token. */
 function tokensEqual(
   left: TransactionStorageToken | null,
   right: TransactionStorageToken | null
@@ -223,16 +213,13 @@ function tokensEqual(
   );
 }
 
-/** Reference in-memory adapter used to exercise the documented atomic CAS contract. */
 class InMemoryTransactionStorage implements TransactionStorage {
   private active: ChangeSetTransactionJournal | null = null;
 
-  /** Reads the one global active slot. */
   async readActive(): Promise<unknown> {
     return this.active;
   }
 
-  /** Atomically compares and replaces the complete in-memory journal. */
   async writeActive(
     journal: ChangeSetTransactionJournal,
     expectedToken: TransactionStorageToken | null
@@ -250,7 +237,6 @@ class InMemoryTransactionStorage implements TransactionStorage {
     this.active = journal;
   }
 
-  /** Atomically compares and clears the complete in-memory journal. */
   async clearActive(expectedToken: TransactionStorageToken): Promise<void> {
     const actualToken = this.active ? createToken(this.active) : null;
     if (!tokensEqual(expectedToken, actualToken)) {

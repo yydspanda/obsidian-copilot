@@ -13,7 +13,6 @@ import {
   type KnowledgeSourceRemovalConfirmation,
 } from "@/knowledge/ui/sourceLifecycleModel";
 
-/** Creates one externally controlled promise for in-flight command assertions. */
 function createDeferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -25,7 +24,6 @@ function createDeferred<T>(): {
   return { promise, resolve };
 }
 
-/** Creates one ready source row. */
 function createReady(
   overrides: Partial<KnowledgeSourceLifecycleReadyItem> = {}
 ): KnowledgeSourceLifecycleReadyItem {
@@ -42,7 +40,6 @@ function createReady(
   };
 }
 
-/** Creates one missing source row. */
 function createMissing(
   overrides: Partial<KnowledgeSourceLifecycleMissingItem> = {}
 ): KnowledgeSourceLifecycleMissingItem {
@@ -60,7 +57,6 @@ function createMissing(
   };
 }
 
-/** Creates one immutable model around selected active sources. */
 function createModel(sources: KnowledgeSourceLifecycleItem[] = [createReady(), createMissing()]) {
   return createKnowledgeSourceLifecycleModel({
     bundleId: "personal",
@@ -70,7 +66,6 @@ function createModel(sources: KnowledgeSourceLifecycleItem[] = [createReady(), c
   });
 }
 
-/** Creates fresh command spies and renders the lifecycle panel. */
 function renderPanel(
   model = createModel(),
   overrides: Partial<Pick<KnowledgeSourceLifecyclePanelProps, "onCheckAgain" | "onRemove">> = {}

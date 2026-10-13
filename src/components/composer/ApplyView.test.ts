@@ -23,7 +23,6 @@ jest.mock("obsidian", () => {
     containerEl: HTMLElement;
     leaf: unknown;
 
-    /** Creates the minimum popout-aware ItemView surface needed by this suite. */
     constructor(leaf: unknown) {
       this.leaf = leaf;
       const container = window.document.createElement("div");
@@ -76,12 +75,10 @@ interface RootRecord {
   root: Root;
 }
 
-/** Creates one detached test leaf with an observable detach action. */
 function createLeaf(): WorkspaceLeaf {
   return { detach: jest.fn() } as unknown as WorkspaceLeaf;
 }
 
-/** Creates one valid preview state for lifecycle-only rendering. */
 function createState(resultCallback = jest.fn()): ApplyViewState {
   return {
     path: "Wiki/Test.md",

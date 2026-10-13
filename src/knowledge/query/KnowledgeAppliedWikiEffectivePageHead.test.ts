@@ -13,7 +13,6 @@ const CONTEXT = Object.freeze({
   sourceIds: Object.freeze(["source-1"]),
 });
 
-/** Creates one exact canonical forward-overlay origin. */
 function createForwardOrigin() {
   return {
     kind: "forward_revision" as const,

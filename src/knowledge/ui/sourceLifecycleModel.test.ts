@@ -8,7 +8,6 @@ import {
   type KnowledgeSourceLifecycleRetirementBlocker,
 } from "@/knowledge/ui/sourceLifecycleModel";
 
-/** Creates one ready source with removable, fail-closed action defaults. */
 function createReady(
   overrides: Partial<KnowledgeSourceLifecycleReadyItem> = {}
 ): KnowledgeSourceLifecycleReadyItem {
@@ -25,7 +24,6 @@ function createReady(
   };
 }
 
-/** Creates one missing source with all recovery actions available. */
 function createMissing(
   overrides: Partial<KnowledgeSourceLifecycleMissingItem> = {}
 ): KnowledgeSourceLifecycleMissingItem {
@@ -43,7 +41,6 @@ function createMissing(
   };
 }
 
-/** Creates one complete lifecycle model input around selected sources. */
 function createInput(
   sources: KnowledgeSourceLifecycleItem[] = [createReady(), createMissing()]
 ): KnowledgeSourceLifecycleModelInput {

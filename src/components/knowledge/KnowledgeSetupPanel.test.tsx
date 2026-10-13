@@ -27,7 +27,6 @@ const READY_PROJECTION: KnowledgeSetupReadinessProjection = {
   networkVerification: "not_tested",
 };
 
-/** Creates a navigation spy with no settings, file, or model authority. */
 function createNavigation(): KnowledgeSetupNavigationPort & {
   [Key in keyof KnowledgeSetupNavigationPort]: jest.Mock;
 } {

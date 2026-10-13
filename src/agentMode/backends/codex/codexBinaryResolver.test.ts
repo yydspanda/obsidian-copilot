@@ -181,7 +181,7 @@ describe("codexBinaryResolver", () => {
             name: metadataPath.startsWith(prefixes[1])
               ? "@zed-industries/codex-acp"
               : "@agentclientprotocol/codex-acp",
-            version: "1.10.0",
+            version: "2.0.0",
             bin: { "codex-acp": "dist/index.js" },
           }),
       };
@@ -207,7 +207,6 @@ describe("codexBinaryResolver", () => {
       expect(accepts.mock.calls).toEqual([[entries[1]], [entries[2]]]);
     });
 
-    // This exercises actual Windows filesystem and process semantics; portable path cases above always run.
     const itOnWindows = process.platform === "win32" ? it : it.skip;
     itOnWindows(
       "discovers a real Windows npm-layout package and preserves its Node argv and stdio — https://github.com/logancyang/obsidian-copilot/issues/2967",
@@ -227,7 +226,7 @@ describe("codexBinaryResolver", () => {
             path.join(packageRoot, "package.json"),
             JSON.stringify({
               name: "@agentclientprotocol/codex-acp",
-              version: "1.10.0",
+              version: "2.0.0",
               bin: { "codex-acp": "dist/index.js" },
             })
           );

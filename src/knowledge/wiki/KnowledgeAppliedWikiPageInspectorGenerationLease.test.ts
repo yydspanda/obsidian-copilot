@@ -5,7 +5,6 @@ import {
 import type { KnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 import type { KnowledgeAppliedWikiPathIndexLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 
-/** Creates one inert delegate identity for lease tests. */
 function createDelegate(): KnowledgeAppliedWikiPageInspectorPort {
   return {
     inspectPage: async () => {
@@ -15,7 +14,6 @@ function createDelegate(): KnowledgeAppliedWikiPageInspectorPort {
   };
 }
 
-/** Creates a recording lease harness with optional reentrant invalidation point. */
 function createHarness(invalidateDuring?: "install" | "replace"): {
   input: KnowledgeAppliedWikiPageInspectorGenerationLeaseInput;
   events: string[];

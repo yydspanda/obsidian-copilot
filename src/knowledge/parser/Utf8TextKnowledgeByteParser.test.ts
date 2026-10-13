@@ -12,7 +12,6 @@ import { createFileContentHash, createSourceContentHash } from "@/knowledge/mode
 const MAX_BYTES = 1_024;
 const MAX_CHARACTERS = 1_024;
 
-/** Creates the built-in parser with stable test limits. */
 function createParser(
   limits: { maxBytes?: number; maxCharacters?: number } = {}
 ): Utf8TextKnowledgeByteParser {
@@ -24,7 +23,6 @@ function createParser(
   });
 }
 
-/** Creates one exact parser request over already observed bytes. */
 function createRequest(bytes: Uint8Array): KnowledgeByteParserRequest {
   return {
     sourceId: "source-1",

@@ -49,7 +49,6 @@ const UPDATED_HASH = createFileContentHash(UPDATED_CONTENT);
 const REVIEWED_CONTENT = "# Reviewed\n";
 const REVIEWED_HASH = createFileContentHash(REVIEWED_CONTENT);
 
-/** Creates the canonical Windows-only Bundle used by domain tests. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -61,7 +60,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one complete Manifest page with a required content hash. */
 function createPage(
   path: string,
   contentHash: string,
@@ -70,7 +68,6 @@ function createPage(
   return { path, ownership, contentHash };
 }
 
-/** Creates one registered source entry with an optional successful projection. */
 function createSourceEntry(
   sourceId: string,
   sourcePath: string,
@@ -99,7 +96,6 @@ function createSourceEntry(
   };
 }
 
-/** Creates an exact Source Manifest with replaceable entries and revision. */
 function createManifest(
   entries: SourceManifestEntry[] = [
     createSourceEntry("source-1", "Sources/Primary.md", [
@@ -112,7 +108,6 @@ function createManifest(
   return { version: 1, bundleId: "personal", revision, entries };
 }
 
-/** Creates one create file change whose after hash matches exact content. */
 function createCreateChange(
   id = "change-create",
   path = "Wiki/New.md",
@@ -130,7 +125,6 @@ function createCreateChange(
   };
 }
 
-/** Creates one update file change with exact before and after hashes. */
 function createUpdateChange(
   id = "change-update",
   path = "Wiki/Alpha.md",
@@ -149,7 +143,6 @@ function createUpdateChange(
   };
 }
 
-/** Creates one delete file change bound to a last-generated hash. */
 function createDeleteChange(
   id = "change-delete",
   path = "Wiki/Alpha.md",
@@ -165,7 +158,6 @@ function createDeleteChange(
   };
 }
 
-/** Creates a semantically valid proposal or accepted ingest ChangeSet. */
 function createChangeSet(
   changes: KnowledgeFileChange[],
   status: KnowledgeChangeSet["status"] = "proposed",
@@ -185,7 +177,6 @@ function createChangeSet(
   };
 }
 
-/** Creates the resolved Manifest mutation paired with one file change. */
 function createMutation(
   change: KnowledgeFileChange,
   ownership: ManifestCommitMutation["ownership"],
@@ -201,7 +192,6 @@ function createMutation(
   };
 }
 
-/** Builds a valid plan for one exact proposal using the standard fixtures. */
 function createPlan(
   changeSet: KnowledgeChangeSet,
   mutations: readonly ManifestCommitMutation[],
@@ -219,12 +209,10 @@ function createPlan(
   });
 }
 
-/** Returns stable diagnostic codes from one public validation result. */
 function diagnosticCodes(result: { diagnostics: readonly { code: string }[] }): string[] {
   return result.diagnostics.map((diagnostic) => diagnostic.code);
 }
 
-/** Requires one callback to fail with a selected typed diagnostic code. */
 function expectManifestFailure(invoke: () => unknown, code: string): void {
   try {
     invoke();
@@ -411,7 +399,7 @@ describe("createManifestCommitPlan", () => {
   it("binds selected forward heads per mutation without adopting rejected overlay pages", () => {
     const alphaEffectiveHash = createFileContentHash("# Forward Alpha\n");
     const untouchedEffectiveHash = createFileContentHash("# Forward Untouched\n");
-    /** Creates one canonical forward overlay for a source-applied fixture page. */
+
     const createOverlay = (
       pagePath: string,
       sourceAppliedContentHash: string,

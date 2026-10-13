@@ -5,7 +5,6 @@ import type {
 
 type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
 
-/** Reports whether an unknown receipt names one exact ordered Bundle sequence. */
 export function hasExactKnowledgeBundleSequence(
   actual: unknown,
   expected: readonly string[]
@@ -17,7 +16,6 @@ export function hasExactKnowledgeBundleSequence(
   );
 }
 
-/** Narrow capabilities required to install one revocable live Studio generation. */
 export interface KnowledgeStudioReadGenerationLeaseInput {
   delegate: KnowledgeStudioPort;
   subscribeInvalidation(listener: () => void): () => void;
@@ -26,33 +24,24 @@ export interface KnowledgeStudioReadGenerationLeaseInput {
   assertCurrent(): void;
 }
 
-/** Creates the platform-standard cancellation for a stale Studio generation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Invokes cleanup without allowing a stale capability to escape its boundary. */
 function closeSafely(close: () => void): void {
   try {
     close();
   } catch {
     // The associated generation is already non-authoritative.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Revocable ownership token for one installed Studio delegate.
- *
- * Invalidation is registered before delegate replacement. If invalidation is
- * re-entrant during replacement, the unavailable publication wins and install
- * fails instead of reporting a live generation.
- */
 export class KnowledgeStudioReadGenerationLease {
   private active = true;
   private closed = false;
   private unsubscribeInvalidation: () => void = () => undefined;
 
-  /** Installs one exact delegate only after its invalidation hook is active. */
   constructor(private readonly input: KnowledgeStudioReadGenerationLeaseInput) {
     if (
       typeof input !== "object" ||
@@ -88,7 +77,6 @@ export class KnowledgeStudioReadGenerationLease {
     }
   }
 
-  /** Proves both local installation and the upstream observation generation. */
   assertCurrent(): void {
     if (!this.active || this.closed) throw createAbortError();
     try {
@@ -100,7 +88,6 @@ export class KnowledgeStudioReadGenerationLease {
     if (!this.active || this.closed) throw createAbortError();
   }
 
-  /** Idempotently revokes the delegate and publishes an unavailable replacement. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -109,7 +96,6 @@ export class KnowledgeStudioReadGenerationLease {
     this.withdraw();
   }
 
-  /** Makes the unavailable publication win before invoking external cleanup. */
   private withdraw(): void {
     if (!this.active) return;
     this.active = false;

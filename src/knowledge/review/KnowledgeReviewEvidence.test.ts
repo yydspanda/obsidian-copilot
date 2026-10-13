@@ -14,7 +14,6 @@ import { sha256 } from "@/utils/hash";
 const DIGEST = "a".repeat(64);
 const SNAPSHOT = "b".repeat(64);
 
-/** Creates one valid locator around an exact location subtype. */
 function createLocator(
   location: SourceLocator = {
     kind: "markdown_lines",
@@ -31,7 +30,6 @@ function createLocator(
   return location;
 }
 
-/** Creates one citation whose private locator may be varied by a test. */
 function createCitation(
   citationId: string,
   locator: SourceLocator = createLocator()
@@ -44,7 +42,6 @@ function createCitation(
   };
 }
 
-/** Creates a semantically valid proposed ChangeSet for resolver tests. */
 function createProposal(citations: ClaimCitation[]): KnowledgeChangeSet {
   const afterContent = "# Generated\n";
   return {

@@ -1,4 +1,3 @@
-/** Closed local-readiness outcomes rendered by the Knowledge setup surface. */
 export type KnowledgeChatModelReadinessReason =
   | "missing"
   | "ambiguous"
@@ -8,21 +7,18 @@ export type KnowledgeChatModelReadinessReason =
   | "credential_missing"
   | "configured";
 
-/** Secret-free metadata for one saved Chat model reference. */
 export interface KnowledgeChatModelReadinessCandidateInput {
-  /** Exact persisted identity, using the same `name|provider` form as Chat settings. */
   readonly modelKey: string;
-  /** Whether the saved model is enabled for ordinary Chat use. */
+
   readonly enabled: boolean;
-  /** Whether the saved reference passed the caller's runnable-model policy. */
+
   readonly supported: boolean;
-  /** Whether the saved model is explicitly allowed in Project mode. */
+
   readonly projectEnabled: boolean;
-  /** Whether the required credential is present in local configuration. */
+
   readonly credentialConfigured: boolean;
 }
 
-/** Exact selection authority used for this local readiness observation. */
 export type KnowledgeChatModelReadinessSelectionInput =
   | Readonly<{
       mode: "default";
@@ -33,13 +29,11 @@ export type KnowledgeChatModelReadinessSelectionInput =
       projectModelKey: string | null | undefined;
     }>;
 
-/** Plain, least-data input for projecting Chat model readiness without settings access. */
 export interface KnowledgeChatModelReadinessInput {
   readonly selection: KnowledgeChatModelReadinessSelectionInput;
   readonly activeModels: readonly KnowledgeChatModelReadinessCandidateInput[];
 }
 
-/** Frozen, secret-free readiness observation safe to retain in UI state. */
 export interface KnowledgeChatModelReadiness {
   readonly reason: KnowledgeChatModelReadinessReason;
 }
@@ -56,17 +50,6 @@ const READINESS_BY_REASON: Readonly<
   configured: Object.freeze({ reason: "configured" }),
 });
 
-/**
- * Projects one local Chat model selection into a closed readiness reason.
- *
- * This projector performs no fallback, settings reads, credential reads, model
- * construction, or network work. Project mode uses only its exact Project
- * selection, so a model that is absent or not Project-enabled cannot inherit a
- * green result from the default Chat selection.
- *
- * @param input - Exact selection plus caller-sanitized, secret-free model metadata
- * @returns One frozen singleton that never retains any supplied model identity
- */
 export function projectKnowledgeChatModelReadiness(
   input: KnowledgeChatModelReadinessInput
 ): KnowledgeChatModelReadiness {

@@ -16,10 +16,8 @@ import {
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 
-/** Current content-free identity version for an explicit sticky-recovery command. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_RECOVERY_EXPECTATION_VERSION = 1 as const;
 
-/** Exact durable journal identity that one explicit recovery command is allowed to resolve. */
 export interface KnowledgeForwardRevisionApplyRecoveryExpectationV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_RECOVERY_EXPECTATION_VERSION;
   readonly kind: "forward_revision_apply_recovery_expectation";
@@ -36,7 +34,6 @@ const EXPECTATION_KEYS = [
   "recoveryJournalDigest",
 ] as const;
 
-/** Creates the canonical accepted identity carried by one validated Apply journal. */
 function createAcceptedIdentityForJournal(
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
 ): Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1> {
@@ -58,7 +55,6 @@ function createAcceptedIdentityForJournal(
   });
 }
 
-/** Strictly snapshots one content-free sticky-recovery command identity. */
 export function snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1> {
@@ -88,7 +84,6 @@ export function snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(
   }
 }
 
-/** Creates one exact command expectation from a sticky durable Apply journal. */
 export function createKnowledgeForwardRevisionApplyRecoveryExpectation(
   journalValue: unknown
 ): Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1> {
@@ -105,7 +100,6 @@ export function createKnowledgeForwardRevisionApplyRecoveryExpectation(
   });
 }
 
-/** Reports whether one exact command expectation still names the supplied active journal. */
 export function knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal(
   expectationValue: unknown,
   journalValue: unknown

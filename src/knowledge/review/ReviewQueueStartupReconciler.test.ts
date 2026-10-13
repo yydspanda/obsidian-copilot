@@ -45,22 +45,18 @@ const OTHER_SOURCE_HASH = "c".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 const MANIFEST_HASH = "d".repeat(64);
 
-/** Creates a detached JSON clone for in-memory adapter isolation. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Atomic in-memory Review Store used by startup integration tests. */
 class MemoryReviewStorage implements ReviewStorage {
   private readonly values = new Map<string, ChangeSetReviewSnapshot>();
 
-  /** Reads one detached review snapshot. */
   async read(bundleId: string): Promise<unknown> {
     const value = this.values.get(bundleId);
     return value ? cloneJson(value) : null;
   }
 
-  /** Atomically compares and replaces one review snapshot. */
   async write(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -74,11 +70,9 @@ class MemoryReviewStorage implements ReviewStorage {
   }
 }
 
-/** Atomic in-memory Queue Store shared by reconstructed runtime instances. */
 class MemoryQueueStorage implements QueueStorage {
   private readonly values = new Map<string, IngestQueueSnapshot>();
 
-  /** Seeds a strict queue snapshot before constructing a runtime. */
   seed(snapshot: IngestQueueSnapshot): void {
     const parsed = parseIngestQueueSnapshot(snapshot);
     if (!parsed.ok) {
@@ -87,13 +81,11 @@ class MemoryQueueStorage implements QueueStorage {
     this.values.set(snapshot.bundleId, cloneJson(parsed.value));
   }
 
-  /** Reads one detached queue snapshot. */
   async read(bundleId: string): Promise<unknown> {
     const value = this.values.get(bundleId);
     return value ? cloneJson(value) : null;
   }
 
-  /** Atomically compares and replaces one strict queue snapshot. */
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -111,23 +103,19 @@ class MemoryQueueStorage implements QueueStorage {
   }
 }
 
-/** Executor that proves startup reconciliation never runs model/compiler work. */
 class ForbiddenExecutor implements IngestExecutor {
   calls = 0;
 
-  /** Always fails if the startup coordinator invokes execution. */
   async execute(): Promise<never> {
     this.calls += 1;
     throw new Error("Startup review reconciliation must not execute ingest work");
   }
 }
 
-/** Queue facade that simulates an adapter reporting failure after durable success. */
 class CommitThenThrowQueuePort implements ReviewQueueStartupQueuePort {
   private pendingFailureRemaining: boolean;
   private rejectionFailureRemaining: boolean;
 
-  /** Creates failpoints around an otherwise real queue core. */
   constructor(
     private readonly delegate: ReviewQueueStartupQueuePort,
     options: { pending?: boolean; rejection?: boolean }
@@ -136,12 +124,10 @@ class CommitThenThrowQueuePort implements ReviewQueueStartupQueuePort {
     this.rejectionFailureRemaining = options.rejection ?? false;
   }
 
-  /** Loads the delegate's exact durable queue snapshot. */
   load(bundleId: string): Promise<IngestQueueSnapshot> {
     return this.delegate.load(bundleId);
   }
 
-  /** Commits the pending hand-off once and then reports an ambiguous failure. */
   async reconcilePendingReview(
     bundleId: string,
     receipt: IngestPendingReviewDecisionReceipt
@@ -154,7 +140,6 @@ class CommitThenThrowQueuePort implements ReviewQueueStartupQueuePort {
     return job;
   }
 
-  /** Commits the rejection once and then reports an ambiguous failure. */
   async rejectReview(
     bundleId: string,
     receipt: IngestRejectedReviewDecisionReceipt
@@ -168,11 +153,9 @@ class CommitThenThrowQueuePort implements ReviewQueueStartupQueuePort {
   }
 }
 
-/** Queue port that records stable ordering without mutating durable state. */
 class RecordingQueuePort implements ReviewQueueStartupQueuePort {
   readonly pendingChangeSetIds: string[] = [];
 
-  /** Returns an empty queue when a test does not exercise rejection recovery. */
   async load(bundleId: string): Promise<IngestQueueSnapshot> {
     return {
       version: INGEST_QUEUE_VERSION,
@@ -188,7 +171,6 @@ class RecordingQueuePort implements ReviewQueueStartupQueuePort {
     };
   }
 
-  /** Records one pending receipt and returns a detached matching job. */
   async reconcilePendingReview(
     bundleId: string,
     receipt: IngestPendingReviewDecisionReceipt
@@ -211,28 +193,22 @@ class RecordingQueuePort implements ReviewQueueStartupQueuePort {
     };
   }
 
-  /** Reject is outside the recording port's pending-only test scope. */
   async rejectReview(): Promise<never> {
     throw new Error("RecordingQueuePort does not accept rejected records");
   }
 }
 
-/** Queue port that rejects a stale pending hand-off after another runtime advanced it. */
 class StalePendingQueuePort extends RecordingQueuePort {
-  /** Reports that the pending state no longer exists in this runtime observation. */
   async reconcilePendingReview(): Promise<never> {
     throw new Error("simulated concurrent terminal review transition");
   }
 }
 
-/** Review port that returns a caller-defined sequence of durable revisions. */
 class SequencedReviewPort implements ReviewQueueStartupReviewPort {
   private index = 0;
 
-  /** Creates a deterministic load sequence whose final state repeats forever. */
   constructor(private readonly snapshots: ChangeSetReviewSnapshot[]) {}
 
-  /** Returns the next detached snapshot, repeating the final revision. */
   async load(): Promise<ChangeSetReviewSnapshot> {
     const snapshot = this.snapshots[Math.min(this.index, this.snapshots.length - 1)];
     this.index += 1;
@@ -240,7 +216,6 @@ class SequencedReviewPort implements ReviewQueueStartupReviewPort {
   }
 }
 
-/** Creates a valid proposed ChangeSet for one durable review record. */
 function createProposal(changeSetId = "changeset-1"): KnowledgeChangeSet {
   const afterContent = "# Durable review\n";
   return {
@@ -267,7 +242,6 @@ function createProposal(changeSetId = "changeset-1"): KnowledgeChangeSet {
   };
 }
 
-/** Creates the exact Review Store claim matching the seeded queue attempt. */
 function createReviewJobClaim(sourceContentHash = SOURCE_HASH) {
   return {
     jobId: JOB_ID,
@@ -279,7 +253,6 @@ function createReviewJobClaim(sourceContentHash = SOURCE_HASH) {
   };
 }
 
-/** Creates a strict Manifest plan for one startup review proposal. */
 function createManifestCommitPlan(
   proposal: KnowledgeChangeSet,
   jobClaim = createReviewJobClaim()
@@ -307,7 +280,6 @@ function createManifestCommitPlan(
   };
 }
 
-/** Creates one typed pending record for ordering and Review revision tests. */
 function createPendingRecord(
   changeSetId: string,
   jobId: string,
@@ -329,7 +301,6 @@ function createPendingRecord(
   };
 }
 
-/** Converts one pending record into an exact accepted terminal record. */
 function createAcceptedRecord(
   pending: PendingChangeSetReviewRecord
 ): AcceptedChangeSetReviewRecord {
@@ -350,7 +321,6 @@ function createAcceptedRecord(
   };
 }
 
-/** Creates an interrupted non-applying queue attempt eligible for review recovery. */
 function createInterruptedQueueSnapshot(): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -397,7 +367,6 @@ interface StartupHarness {
   createQueue(): IngestQueue;
 }
 
-/** Creates durable Review and Queue stores with deterministic clocks. */
 function createHarness(): StartupHarness {
   const queueStorage = new MemoryQueueStorage();
   queueStorage.seed(createInterruptedQueueSnapshot());
@@ -412,7 +381,6 @@ function createHarness(): StartupHarness {
   };
 }
 
-/** Saves one exact pending review record through the real repository. */
 async function savePendingReview(
   reviews: ChangeSetReviewRepository,
   options: { sourceContentHash?: string } = {}

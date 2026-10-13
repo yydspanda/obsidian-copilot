@@ -5,7 +5,8 @@ import React, { useMemo, useRef, useState } from "react";
 import { SplitDiffBlock } from "@/components/composer/DiffPreview";
 import { KnowledgeReviewEvidencePanel } from "@/components/knowledge/KnowledgeReviewEvidencePanel";
 import { Button, type ButtonProps } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/CardTitle";
 import {
   isValidKnowledgeReviewManualEditText,
   KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS,
@@ -22,13 +23,12 @@ import type {
 } from "@/knowledge/ui/KnowledgeReviewDraftStore";
 import { cn } from "@/lib/utils";
 
-/** Props for the capability-separated multi-file knowledge review surface. */
 export interface KnowledgeReviewPanelProps {
   plan: Readonly<KnowledgeReviewPlan>;
   busy: boolean;
-  /** Keeps choices editable while the Bundle disallows write-bearing submission. */
+
   applyPaused?: boolean;
-  /** Retains inspection and rejection when current source/configuration authority has changed. */
+
   applyOutdated?: boolean;
   acceptCommandsEnabled: boolean;
   rejectCommandsEnabled: boolean;
@@ -37,13 +37,13 @@ export interface KnowledgeReviewPanelProps {
   onOpenEvidence?: (evidenceRef: string) => void | Promise<void>;
   openingEvidenceRef?: string;
   evidenceError?: string;
-  /** Optional controller-owned decisions retained across React remounts. */
+
   draft?: KnowledgeReviewDraftState;
-  /** Replaces the controller-owned decision snapshot after one explicit choice. */
+
   onDraftChange?: (draft: KnowledgeReviewDraftState) => boolean;
-  /** Optional controller-owned active textarea retained across UI remounts. */
+
   activeEdit?: Readonly<KnowledgeReviewActiveEdit>;
-  /** Saves or closes one bounded active editor; false means fail-closed. */
+
   onActiveEditChange?: (activeEdit: Readonly<KnowledgeReviewActiveEdit> | undefined) => boolean;
 }
 
@@ -84,12 +84,10 @@ const ReviewChoiceButton = React.forwardRef<HTMLButtonElement, ReviewChoiceButto
   }
 );
 
-/** Applies the native textarea's deterministic LF line-ending contract. */
 function normalizeReviewEditorLineEndings(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
-/** Counts newline-delimited diff tokens only up to a fail-closed cap. */
 function hasAtMostPreviewLines(value: string): boolean {
   let lines = 1;
   for (let index = 0; index < value.length; index += 1) {
@@ -101,12 +99,6 @@ function hasAtMostPreviewLines(value: string): boolean {
   return true;
 }
 
-/**
- * Converts one review diff part into the reusable renderer's exact chunk shape.
- *
- * @param part - Immutable review diff part
- * @returns Detached diff chunk with explicit flags
- */
 function toDiffChange(part: KnowledgeReviewDiffPart): Change {
   const lineCount = part.value.split("\n").length - Number(part.value.endsWith("\n"));
   return {
@@ -117,17 +109,10 @@ function toDiffChange(part: KnowledgeReviewDiffPart): Change {
   };
 }
 
-/**
- * Converts one opaque review block into renderer-only diff chunks.
- *
- * @param block - Immutable review block
- * @returns Exact chunks suitable for visual rendering
- */
 function toDiffBlock(block: KnowledgeReviewBlock): Change[] {
   return block.parts.map(toDiffChange);
 }
 
-/** Keeps immutable proposal diff conversion outside the active-editor render hot path. */
 const ProposalDiffBlock = React.memo(function ProposalDiffBlock({
   block,
 }: {
@@ -137,7 +122,6 @@ const ProposalDiffBlock = React.memo(function ProposalDiffBlock({
   return <SplitDiffBlock block={changes} />;
 });
 
-/** Renders bounded full texts without invoking the word-level diff algorithm. */
 const SavedManualEditPreview = React.memo(function SavedManualEditPreview({
   beforeContent,
   afterContent,
@@ -190,23 +174,10 @@ const SavedManualEditPreview = React.memo(function SavedManualEditPreview({
   );
 });
 
-/**
- * Returns changed blocks in their immutable review-plan order.
- *
- * @param file - Review file projection
- * @returns Changed blocks that require a partial-review decision
- */
 function getChangedBlocks(file: KnowledgeReviewFile): KnowledgeReviewBlock[] {
   return file.blocks.filter((block) => block.kind === "change");
 }
 
-/**
- * Resolves the visible decision for one changed block.
- *
- * @param fileDecision - Current file-level or partial decision
- * @param blockId - Opaque changed-block id
- * @returns Current explicit decision, if any
- */
 function getVisibleBlockDecision(
   fileDecision: LocalFileDecision | undefined,
   blockId: string
@@ -216,7 +187,6 @@ function getVisibleBlockDecision(
   return fileDecision?.kind === "accept_blocks" ? fileDecision.blocks[blockId] : undefined;
 }
 
-/** Returns the number of selected manual-edit characters across one draft. */
 function getSelectedEditedCharacterCount(
   decisions: LocalDecisionState,
   replacedChangeId?: string,
@@ -231,7 +201,6 @@ function getSelectedEditedCharacterCount(
   return total;
 }
 
-/** Returns an advisory UI limit message for one complete-file edit. */
 function getManualEditLimitError(
   decisions: LocalDecisionState,
   file: KnowledgeReviewFile,
@@ -249,13 +218,6 @@ function getManualEditLimitError(
   return undefined;
 }
 
-/**
- * Checks whether every file and every partial changed block has an explicit decision.
- *
- * @param plan - Current immutable review snapshot
- * @param decisions - Local UI-only decisions
- * @returns True when an opaque command can be created safely
- */
 function isReviewComplete(plan: KnowledgeReviewPlan, decisions: LocalDecisionState): boolean {
   if (plan.files.length === 0) return false;
 
@@ -286,13 +248,6 @@ function isFileReviewComplete(
   return getChangedBlocks(file).every((block) => decision.blocks[block.blockId] !== undefined);
 }
 
-/**
- * Builds the command boundary using opaque ids from the current plan only.
- *
- * @param plan - Current immutable review snapshot
- * @param decisions - Complete UI-only decisions
- * @returns Opaque review command without paths, content, or hashes
- */
 function buildReviewCommand(
   plan: KnowledgeReviewPlan,
   decisions: LocalDecisionState
@@ -324,13 +279,6 @@ function buildReviewCommand(
   };
 }
 
-/**
- * Converts a file decision into a complete starting point for block-level edits.
- *
- * @param file - File whose changed blocks are being edited
- * @param decision - Existing file-level or partial decision
- * @returns Mutable detached block-decision map
- */
 function createBlockDecisionBase(
   file: KnowledgeReviewFile,
   decision: LocalFileDecision | undefined
@@ -345,7 +293,6 @@ function createBlockDecisionBase(
   return {};
 }
 
-/** Returns the consequence-oriented accept label for one file operation. */
 function getAcceptFileLabel(file: KnowledgeReviewFile): string {
   switch (file.operation) {
     case "create":
@@ -357,12 +304,10 @@ function getAcceptFileLabel(file: KnowledgeReviewFile): string {
   }
 }
 
-/** Returns the consequence-oriented reject label for one file operation. */
 function getRejectFileLabel(file: KnowledgeReviewFile): string {
   return file.operation === "create" ? "Skip proposed file" : "Keep current file";
 }
 
-/** Returns the final action label for the current complete or incomplete decision set. */
 function getSubmissionLabel({
   acceptCommandsEnabled,
   rejectCommandsEnabled,
@@ -400,13 +345,6 @@ function getSubmissionLabel({
   return wholeProposalRejected ? "Reject proposal" : "Validate and apply selection";
 }
 
-/**
- * Renders a review plan without exposing any file-write capability to React.
- *
- * Decisions emitted by this component contain only content-addressed snapshot
- * identity plus opaque change and block ids. The review core reconstructs and
- * validates exact content after this boundary.
- */
 function KnowledgeReviewSnapshotPanel({
   plan,
   busy,
@@ -486,7 +424,6 @@ function KnowledgeReviewSnapshotPanel({
         wholeProposalRejected,
       });
 
-  /** Replaces controlled or component-local decisions after one user action. */
   const replaceDecisions = (
     update: (current: LocalDecisionState) => LocalDecisionState
   ): boolean => {
@@ -499,14 +436,12 @@ function KnowledgeReviewSnapshotPanel({
     return onDraftChange?.(next) === true;
   };
 
-  /** Replaces the controlled or component-local active editor within hard limits. */
   const replaceActiveEdit = (next: KnowledgeReviewActiveEdit | undefined): boolean => {
     if (onActiveEditChange) return onActiveEditChange(next);
     setLocalActiveEdit(next);
     return true;
   };
 
-  /** Discards the active buffer while preserving its previously committed decision. */
   const closeEditor = (): void => {
     const changeId = editingChangeId;
     replaceActiveEdit(undefined);
@@ -517,12 +452,10 @@ function KnowledgeReviewSnapshotPanel({
     }
   };
 
-  /** Applies one exact file-level decision. */
   const decideFile = (changeId: string, decision: LocalFileDecision): void => {
     replaceDecisions((current) => ({ ...current, [changeId]: decision }));
   };
 
-  /** Applies one explicit changed-block decision without carrying file data. */
   const decideBlock = (
     file: KnowledgeReviewFile,
     blockId: string,
@@ -538,7 +471,6 @@ function KnowledgeReviewSnapshotPanel({
     });
   };
 
-  /** Accepts every file exactly only when the whole proposal is eligible. */
   const acceptAll = (): void => {
     if (hasRejectOnlyFile) return;
     const next: Record<string, LocalFileDecision> = {};
@@ -548,7 +480,6 @@ function KnowledgeReviewSnapshotPanel({
     if (replaceDecisions(() => next)) closeEditor();
   };
 
-  /** Rejects every file without creating any write-bearing payload. */
   const rejectAll = (): void => {
     const next: Record<string, LocalFileDecision> = {};
     plan.files.forEach((file) => {
@@ -557,7 +488,6 @@ function KnowledgeReviewSnapshotPanel({
     if (replaceDecisions(() => next)) closeEditor();
   };
 
-  /** Opens a transient whole-file editor from the saved edit or original proposal. */
   const editFile = (file: KnowledgeReviewFile): void => {
     if (
       actionBusy ||
@@ -585,7 +515,6 @@ function KnowledgeReviewSnapshotPanel({
     setEditErrorChangeId(undefined);
   };
 
-  /** Commits one bounded textarea value as a session-local whole-file decision. */
   const commitEditedFile = (file: KnowledgeReviewFile): void => {
     const normalizedEdit = normalizeReviewEditorLineEndings(editBuffer);
     if (getManualEditLimitError(decisions, file, normalizedEdit) !== undefined) return;
@@ -608,7 +537,6 @@ function KnowledgeReviewSnapshotPanel({
     closeEditor();
   };
 
-  /** Saves one keystroke only when it stays inside both session memory limits. */
   const updateEditBuffer = (file: KnowledgeReviewFile, afterContent: string): void => {
     const limitError = getManualEditLimitError(decisions, file, afterContent);
     if (limitError) {
@@ -625,7 +553,6 @@ function KnowledgeReviewSnapshotPanel({
     setEditErrorChangeId(undefined);
   };
 
-  /** Emits one complete opaque command while suppressing duplicate submissions. */
   const submitReview = (): void => {
     if (actionBusy || !complete || !commandEnabled) return;
     const command = buildReviewCommand(plan, decisions);
@@ -990,12 +917,6 @@ function KnowledgeReviewSnapshotPanel({
   );
 }
 
-/**
- * Remounts snapshot-local decisions whenever the content-addressed plan changes.
- *
- * @param props - Read-only plan and callback boundary
- * @returns Snapshot-isolated knowledge review surface
- */
 export function KnowledgeReviewPanel(props: KnowledgeReviewPanelProps): JSX.Element {
   const identity = `${props.plan.changeSetId}:${props.plan.proposalDigest}:${props.plan.snapshotToken}`;
   return <KnowledgeReviewSnapshotPanel key={identity} {...props} />;

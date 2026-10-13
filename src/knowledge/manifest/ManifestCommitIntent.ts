@@ -35,20 +35,16 @@ import {
 } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of the durable Manifest commit plan. */
 export const MANIFEST_COMMIT_PLAN_VERSION = 1 as const;
 
-/** Current strict version of the final Manifest commit intent. */
 export const MANIFEST_COMMIT_INTENT_VERSION = 1 as const;
 
-/** One complete, content-addressed page in a source's Manifest projection. */
 export interface ManifestCommitPage {
   path: string;
   ownership: GeneratedPageOwnership;
   contentHash: string;
 }
 
-/** Runtime-resolved Manifest effect owned by one proposal change. */
 export interface ManifestCommitMutation {
   changeId: string;
   path: string;
@@ -56,11 +52,10 @@ export interface ManifestCommitMutation {
   access: "authorized" | "create_only";
   ownership: GeneratedPageOwnership;
   wasTrackedByPrimarySource: boolean;
-  /** Effective CAS head when it differs from the source-applied base page. */
+
   expectedContentHash?: string;
 }
 
-/** Fields shared by every source-backed proposal-time Manifest plan. */
 interface ManifestCommitPlanBase {
   version: typeof MANIFEST_COMMIT_PLAN_VERSION;
   bundleId: string;
@@ -75,21 +70,17 @@ interface ManifestCommitPlanBase {
   mutations: ManifestCommitMutation[];
 }
 
-/** Legacy-compatible ordinary ingest plan with unchanged serialized identity. */
 export interface SourceCompileManifestCommitPlan extends ManifestCommitPlanBase {
   kind: "source_compile";
 }
 
-/** Managed query-capture plan bound to its exact strict origin extension. */
 export interface QueryWritebackManifestCommitPlan extends ManifestCommitPlanBase {
   kind: "query_writeback_source_compile";
   sourceOriginDigest: string;
 }
 
-/** Durable proposal-time material needed to derive a reviewed final intent. */
 export type ManifestCommitPlan = SourceCompileManifestCommitPlan | QueryWritebackManifestCommitPlan;
 
-/** Fields shared by every complete post-commit Manifest intent. */
 interface ManifestCommitIntentBase {
   version: typeof MANIFEST_COMMIT_INTENT_VERSION;
   bundleId: string;
@@ -104,23 +95,19 @@ interface ManifestCommitIntentBase {
   generatedPages: ManifestCommitPage[];
 }
 
-/** Legacy-compatible final intent for an ordinary ingest source compile. */
 export interface SourceCompileManifestCommitIntent extends ManifestCommitIntentBase {
   kind: "source_compile";
 }
 
-/** Final intent for a managed query capture with immutable origin binding. */
 export interface QueryWritebackManifestCommitIntent extends ManifestCommitIntentBase {
   kind: "query_writeback_source_compile";
   sourceOriginDigest: string;
 }
 
-/** Complete post-commit Manifest state for one accepted source compile. */
 export type ManifestCommitIntent =
   | SourceCompileManifestCommitIntent
   | QueryWritebackManifestCommitIntent;
 
-/** Input used to construct one proposal-time Manifest commit plan. */
 export interface CreateManifestCommitPlanInput {
   bundle: KnowledgeBundleConfig;
   manifest: SourceManifest;
@@ -174,7 +161,6 @@ const manifestCommitPlanBaseShape = {
   mutations: z.array(manifestCommitMutationSchema).min(1),
 } as const;
 
-/** Strict composable Zod schema for a persisted Manifest commit plan. */
 export const manifestCommitPlanSchema: z.ZodType<ManifestCommitPlan> = z.union([
   z
     .object({
@@ -205,7 +191,6 @@ const manifestCommitIntentBaseShape = {
   generatedPages: z.array(manifestCommitPageSchema).min(1),
 } as const;
 
-/** Strict composable Zod schema for a persisted final Manifest commit intent. */
 export const manifestCommitIntentSchema: z.ZodType<ManifestCommitIntent> = z.union([
   z
     .object({
@@ -222,41 +207,25 @@ export const manifestCommitIntentSchema: z.ZodType<ManifestCommitIntent> = z.uni
     .strict(),
 ]);
 
-/** Derives the authorized compiler operation from one exact plan variant. */
 export function getManifestCommitPlanOperation(
   plan: ManifestCommitPlan
 ): KnowledgeSourceCompileOperation {
   return plan.kind === "query_writeback_source_compile" ? "query_writeback" : "ingest";
 }
 
-/** Derives the authorized compiler operation from one exact intent variant. */
 export function getManifestCommitIntentOperation(
   intent: ManifestCommitIntent
 ): KnowledgeSourceCompileOperation {
   return intent.kind === "query_writeback_source_compile" ? "query_writeback" : "ingest";
 }
 
-/** Reports a contract value that cannot be safely projected or committed. */
 export class ManifestCommitValidationError extends Error {
-  /**
-   * Creates a sanitized Manifest commit validation failure.
-   *
-   * @param diagnostics - Stable structural or semantic diagnostics
-   */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("Manifest commit material does not satisfy the strict domain contract");
     this.name = "ManifestCommitValidationError";
   }
 }
 
-/**
- * Appends one deterministic error diagnostic.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable error code
- * @param field - Field associated with the error
- * @param message - Safe human-readable description
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -266,12 +235,6 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Creates one aggregate validation result.
- *
- * @param diagnostics - Collected deterministic diagnostics
- * @returns Result whose valid flag rejects every error
- */
 function toValidationResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValidationResult {
   return {
     valid: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
@@ -279,13 +242,6 @@ function toValidationResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValida
   };
 }
 
-/**
- * Adds a field prefix to nested diagnostics.
- *
- * @param diagnostics - Nested diagnostics to copy
- * @param prefix - Parent field path
- * @returns Detached prefixed diagnostics
- */
 function prefixDiagnostics(
   diagnostics: readonly KnowledgeDiagnostic[],
   prefix: string
@@ -296,22 +252,10 @@ function prefixDiagnostics(
   }));
 }
 
-/**
- * Converts one Zod path to stable dotted notation.
- *
- * @param path - Structural issue path
- * @returns Dotted field path
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.map(String).join(".");
 }
 
-/**
- * Maps bounded Zod issues to the public knowledge diagnostic contract.
- *
- * @param error - Strict schema failure
- * @returns Safe structural diagnostics
- */
 function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.slice(0, MAX_SCHEMA_DIAGNOSTICS).map((issue) => ({
     code: `schema_${issue.code}`,
@@ -324,47 +268,21 @@ function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/**
- * Compares text without locale-dependent collation.
- *
- * @param left - First text value
- * @param right - Second text value
- * @returns Standard comparator result
- */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/**
- * Compares Vault paths by Windows identity and exact spelling.
- *
- * @param left - First Vault-relative path
- * @param right - Second Vault-relative path
- * @returns Standard comparator result
- */
 function compareVaultPaths(left: string, right: string): number {
   const keyComparison = compareText(toWindowsPathKey(left), toWindowsPathKey(right));
   return keyComparison === 0 ? compareText(left, right) : keyComparison;
 }
 
-/**
- * Sorts and detaches complete page references.
- *
- * @param pages - Pages whose semantic order is path-based
- * @returns Canonically sorted detached pages
- */
 function normalizePages(pages: readonly ManifestCommitPage[]): ManifestCommitPage[] {
   return pages
     .map((page) => ({ ...page }))
     .sort((left, right) => compareVaultPaths(left.path, right.path));
 }
 
-/**
- * Sorts and detaches proposal mutation authority.
- *
- * @param mutations - Resolved mutations to normalize
- * @returns Canonically sorted detached mutations
- */
 function normalizeMutations(
   mutations: readonly ManifestCommitMutation[]
 ): ManifestCommitMutation[] {
@@ -382,18 +300,11 @@ function normalizeMutations(
     });
 }
 
-/** One Manifest page together with the source entry that tracks it. */
 interface TrackedManifestPage {
   sourceId: string;
   page: GeneratedPageReference;
 }
 
-/**
- * Indexes every generated-page reference by its Windows filesystem identity.
- *
- * @param manifest - Exact complete Source Manifest read-set
- * @returns Page-key index retaining every source owner
- */
 function collectTrackedManifestPages(manifest: SourceManifest): Map<string, TrackedManifestPage[]> {
   const byKey = new Map<string, TrackedManifestPage[]>();
   manifest.entries.forEach((entry) => {
@@ -407,15 +318,6 @@ function collectTrackedManifestPages(manifest: SourceManifest): Map<string, Trac
   return byKey;
 }
 
-/**
- * Projects effective pages owned by one source into a Windows-keyed authority map.
- *
- * @param manifest - Exact current Manifest including any active forward overlay
- * @param sourceId - Primary source whose mutations are being authorized
- * @param diagnostics - Mutable deterministic diagnostics
- * @param field - Sanitized diagnostic field for projection failures
- * @returns Effective pages owned by the source, or an empty map on failure
- */
 function collectEffectiveSourcePages(
   manifest: SourceManifest,
   sourceId: string,
@@ -439,16 +341,6 @@ function collectEffectiveSourcePages(
   }
 }
 
-/**
- * Returns the exact existing-file hash authorized by one planned mutation.
- *
- * An absent per-mutation override preserves the legacy source-applied CAS
- * meaning, so existing v1 plans keep their byte identity and semantics.
- *
- * @param mutation - Strict planned mutation
- * @param baseByKey - Source-applied base pages keyed by Windows identity
- * @returns Effective override or source-applied base hash
- */
 function getMutationExpectedContentHash(
   mutation: ManifestCommitMutation,
   baseByKey: ReadonlyMap<string, ManifestCommitPage>
@@ -458,14 +350,6 @@ function getMutationExpectedContentHash(
   );
 }
 
-/**
- * Requires every source tracking one shared target to agree on its authority.
- *
- * @param tracked - Every Manifest reference with the same Windows path key
- * @param primaryPage - Primary source page used as the canonical authority
- * @param field - Diagnostic field for the target mutation
- * @param diagnostics - Mutable deterministic diagnostics
- */
 function validateCoOwnedPageAuthority(
   tracked: readonly TrackedManifestPage[],
   primaryPage: ManifestCommitPage,
@@ -496,17 +380,6 @@ function validateCoOwnedPageAuthority(
   });
 }
 
-/**
- * Requires file-change provenance to retain every Manifest source tracking its target.
- *
- * Additional cited sources remain allowed because sourceRefs also carries evidence
- * provenance, not only page ownership.
- *
- * @param sourceRefs - Runtime-owned ChangeSet source provenance
- * @param tracked - Every Manifest reference for the target path
- * @param field - Diagnostic field for source provenance
- * @param diagnostics - Mutable deterministic diagnostics
- */
 function validateTrackedSourceCoverage(
   sourceRefs: readonly string[],
   tracked: readonly TrackedManifestPage[],
@@ -527,35 +400,14 @@ function validateTrackedSourceCoverage(
   }
 }
 
-/**
- * Checks whether two valid Vault paths are equal or ancestor/descendant.
- *
- * @param left - First path
- * @param right - Second path
- * @returns Whether either path contains the other
- */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/**
- * Checks whether a Vault path targets a Markdown file.
- *
- * @param path - Canonical Vault-relative path
- * @returns Whether the final extension is Markdown under case-insensitive comparison
- */
 function isMarkdownPath(path: string): boolean {
   return path.toLocaleLowerCase("en-US").endsWith(".md");
 }
 
-/**
- * Validates one page or mutation path, optionally against a Bundle boundary.
- *
- * @param path - Candidate Vault-relative path
- * @param field - Diagnostic field
- * @param bundle - Optional exact Bundle boundary
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateCommitPath(
   path: string,
   field: string,
@@ -608,15 +460,6 @@ function validateCommitPath(
   }
 }
 
-/**
- * Validates a complete page projection, including canonical Windows ordering.
- *
- * @param pages - Complete page projection
- * @param field - Parent diagnostic field
- * @param bundle - Optional Bundle boundary
- * @param allowEmpty - Whether an empty pre-compile projection is allowed
- * @returns Deterministic semantic diagnostics
- */
 function validatePageProjection(
   pages: readonly ManifestCommitPage[],
   field: string,
@@ -682,13 +525,6 @@ function validatePageProjection(
   return diagnostics;
 }
 
-/**
- * Validates mutation identities and their relationship to the primary base projection.
- *
- * @param plan - Strict parsed commit plan
- * @param bundle - Optional Bundle boundary
- * @returns Deterministic semantic diagnostics
- */
 function validatePlanMutations(
   plan: ManifestCommitPlan,
   bundle?: KnowledgeBundleConfig
@@ -824,13 +660,6 @@ function validatePlanMutations(
   return diagnostics;
 }
 
-/**
- * Parses one ChangeSet and appends safe structural and semantic diagnostics.
- *
- * @param value - Runtime ChangeSet value
- * @param bundle - Optional Bundle boundary
- * @returns Parsed ChangeSet plus diagnostics when available
- */
 function inspectChangeSet(
   value: unknown,
   bundle?: KnowledgeBundleConfig
@@ -848,13 +677,6 @@ function inspectChangeSet(
   };
 }
 
-/**
- * Compares complete page projections field by field.
- *
- * @param left - First canonical projection
- * @param right - Second canonical projection
- * @returns Whether both projections are exactly equal
- */
 function samePages(
   left: readonly ManifestCommitPage[],
   right: readonly ManifestCommitPage[]
@@ -873,23 +695,12 @@ function samePages(
   );
 }
 
-/**
- * Throws one typed failure when deterministic validation found an error.
- *
- * @param result - Validation result to require
- */
 function requireValid(result: KnowledgeValidationResult): void {
   if (!result.valid) {
     throw new ManifestCommitValidationError(result.diagnostics);
   }
 }
 
-/**
- * Strictly parses unknown persisted Manifest commit plan JSON.
- *
- * @param value - Runtime value expected to contain a complete plan
- * @returns Parsed detached plan or bounded structural diagnostics
- */
 export function parseManifestCommitPlan(value: unknown): KnowledgeParseResult<ManifestCommitPlan> {
   const parsed = manifestCommitPlanSchema.safeParse(value);
   return parsed.success
@@ -897,12 +708,6 @@ export function parseManifestCommitPlan(value: unknown): KnowledgeParseResult<Ma
     : { ok: false, issues: mapSchemaIssues(parsed.error) };
 }
 
-/**
- * Strictly parses unknown persisted final Manifest commit intent JSON.
- *
- * @param value - Runtime value expected to contain a complete intent
- * @returns Parsed detached intent or bounded structural diagnostics
- */
 export function parseManifestCommitIntent(
   value: unknown
 ): KnowledgeParseResult<ManifestCommitIntent> {
@@ -912,17 +717,6 @@ export function parseManifestCommitIntent(
     : { ok: false, issues: mapSchemaIssues(parsed.error) };
 }
 
-/**
- * Validates a Manifest commit plan independently of any provider or persistence adapter.
- *
- * Passing a Bundle adds exact write-boundary validation. Omitting it remains
- * suitable for Review Store validation because every intrinsic path, collision,
- * canonical ordering, tracking, and ownership invariant is still enforced.
- *
- * @param value - Runtime plan value
- * @param bundle - Optional exact Bundle boundary
- * @returns Deterministic structural and semantic validation result
- */
 export function validateManifestCommitPlan(
   value: unknown,
   bundle?: KnowledgeBundleConfig
@@ -960,13 +754,6 @@ export function validateManifestCommitPlan(
   return toValidationResult(diagnostics);
 }
 
-/**
- * Validates a complete final Manifest commit intent.
- *
- * @param value - Runtime intent value
- * @param bundle - Optional exact Bundle boundary
- * @returns Deterministic structural and semantic validation result
- */
 export function validateManifestCommitIntent(
   value: unknown,
   bundle?: KnowledgeBundleConfig
@@ -1006,15 +793,6 @@ export function validateManifestCommitIntent(
   return toValidationResult(diagnostics);
 }
 
-/**
- * Computes the canonical digest of one exact validated Source Manifest.
- *
- * Array order remains part of the persisted Manifest identity. Callers must use
- * this shared helper both when constructing and when committing an intent.
- *
- * @param value - Exact persisted Source Manifest
- * @returns Domain-separated lowercase SHA-256 digest
- */
 export function createSourceManifestDigest(value: SourceManifest): string {
   const parsed = parseSourceManifest(value);
   if (!parsed.ok) {
@@ -1027,12 +805,6 @@ export function createSourceManifestDigest(value: SourceManifest): string {
   );
 }
 
-/**
- * Computes the canonical identity of one strict Manifest commit plan.
- *
- * @param value - Complete proposal-time plan
- * @returns Domain-separated lowercase SHA-256 digest
- */
 export function createManifestCommitPlanDigest(value: ManifestCommitPlan): string {
   const parsed = parseManifestCommitPlan(value);
   if (!parsed.ok) {
@@ -1044,12 +816,6 @@ export function createManifestCommitPlanDigest(value: ManifestCommitPlan): strin
   );
 }
 
-/**
- * Computes the canonical identity of one strict final Manifest commit intent.
- *
- * @param value - Complete final intent
- * @returns Domain-separated lowercase SHA-256 digest
- */
 export function createManifestCommitIntentDigest(value: ManifestCommitIntent): string {
   const parsed = parseManifestCommitIntent(value);
   if (!parsed.ok) {
@@ -1061,15 +827,6 @@ export function createManifestCommitIntentDigest(value: ManifestCommitIntent): s
   );
 }
 
-/**
- * Validates exact or accepted-subset ChangeSet coverage by one commit plan.
- *
- * @param plan - Strict parsed plan
- * @param changeSet - Strict parsed proposal or accepted payload
- * @param bundle - Optional exact Bundle boundary
- * @param requireExactCoverage - Whether every plan mutation must appear in the ChangeSet
- * @returns Deterministic semantic diagnostics
- */
 function validatePlanChangeSetCoverage(
   plan: ManifestCommitPlan,
   changeSet: KnowledgeChangeSet,
@@ -1185,14 +942,6 @@ function validatePlanChangeSetCoverage(
   return toValidationResult(diagnostics);
 }
 
-/**
- * Validates that a plan exactly covers one proposal ChangeSet.
- *
- * @param plan - Proposal-time Manifest commit plan
- * @param changeSet - Exact proposal ChangeSet
- * @param bundle - Optional exact Bundle boundary
- * @returns Deterministic validation result
- */
 export function validateManifestCommitPlanForChangeSet(
   plan: ManifestCommitPlan,
   changeSet: KnowledgeChangeSet,
@@ -1201,16 +950,6 @@ export function validateManifestCommitPlanForChangeSet(
   return validatePlanChangeSetCoverage(plan, changeSet, bundle, true);
 }
 
-/**
- * Constructs a durable proposal-time plan from an exact Manifest read-set.
- *
- * Existing updates and deletes must already be tracked by the primary source.
- * A create outside the primary projection must be absent from every Manifest
- * source and resolves to generated ownership.
- *
- * @param input - Exact Bundle, Manifest, ChangeSet, source identity, and resolved mutations
- * @returns Detached canonical plan
- */
 export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): ManifestCommitPlan {
   const diagnostics = [
     ...prefixDiagnostics(validateKnowledgeBundleConfig(input.bundle).diagnostics, "bundle"),
@@ -1456,16 +1195,6 @@ export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): 
   return parsedPlan.value;
 }
 
-/**
- * Applies an accepted ChangeSet subset to one immutable proposal-time plan.
- *
- * Rewritten create/update content uses the accepted afterHash. Rejected plan
- * mutations leave the base projection untouched.
- *
- * @param plan - Durable exact proposal-time plan
- * @param acceptedChangeSet - Exact accepted ChangeSet after review
- * @returns Detached canonical final Manifest commit intent
- */
 export function projectManifestCommitIntent(
   plan: ManifestCommitPlan,
   acceptedChangeSet: KnowledgeChangeSet
@@ -1562,20 +1291,6 @@ export function projectManifestCommitIntent(
   return parsed.value;
 }
 
-/**
- * Reconstructs final pages directly from an actual pre-commit Manifest.
- *
- * This journal/ledger helper intentionally does not trust a proposal plan.
- * Existing updates and deletes must be primary-source tracked, new creates must
- * be absent from every source, and ownership is derived exclusively from the
- * actual Manifest or the generated-new rule.
- *
- * @param intent - Final durable intent to verify
- * @param actualManifest - Actual Manifest observed inside the atomic commit transform
- * @param acceptedChangeSet - Exact accepted ChangeSet stored in the journal
- * @param bundle - Exact Bundle boundary stored in the journal
- * @returns Deterministic validation result
- */
 export function validateManifestCommitIntentForCommit(
   intent: ManifestCommitIntent,
   actualManifest: SourceManifest,
@@ -1855,16 +1570,6 @@ export function validateManifestCommitIntentForCommit(
   return toValidationResult(diagnostics);
 }
 
-/**
- * Cross-checks a plan-derived intent against the actual pre-commit Manifest.
- *
- * @param intent - Final intent derived at review acceptance
- * @param plan - Immutable proposal-time plan
- * @param actualManifest - Actual Manifest observed before commit
- * @param acceptedChangeSet - Exact accepted ChangeSet
- * @param bundle - Exact Bundle boundary
- * @returns Deterministic validation result
- */
 export function validateManifestCommitIntentAgainstManifest(
   intent: ManifestCommitIntent,
   plan: ManifestCommitPlan,

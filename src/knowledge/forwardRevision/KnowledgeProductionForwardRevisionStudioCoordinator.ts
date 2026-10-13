@@ -78,9 +78,7 @@ interface HiddenReviewBinding {
   readonly ui: Readonly<KnowledgeForwardRevisionStudioReview>;
 }
 
-/** Narrow Runtime mutation added to the authentic generation-bound Studio facade. */
 export interface KnowledgeForwardRevisionStudioAbandonRuntimePort {
-  /** Atomically terminalizes one exact accepted-ready identity without starting a write. */
   abandonForwardRevisionAcceptedReady(
     acceptedIdentity: unknown,
     expectedRuntimeRevision: number
@@ -116,7 +114,6 @@ interface ProjectedUiState {
 
 const coordinatorStates = new WeakMap<object, Readonly<CoordinatorState>>();
 
-/** Returns one per-Bundle cache, evicting only the oldest opaque UI binding when bounded. */
 function retainBundleCache(state: Readonly<CoordinatorState>, bundleId: string): BundleCache {
   const existing = state.cache.bundles.get(bundleId);
   if (existing) {
@@ -133,15 +130,12 @@ function retainBundleCache(state: Readonly<CoordinatorState>, bundleId: string):
   return created;
 }
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether one caught value represents intentional cancellation. */
 const isAbortError = isKnowledgeAbortError;
 
-/** Re-proves every production dependency captured by this exact generation. */
 function assertCoordinatorCurrent(state: Readonly<CoordinatorState>, signal?: AbortSignal): void {
   try {
     if (signal?.aborted) throw createAbortError();
@@ -174,7 +168,6 @@ function assertCoordinatorCurrent(state: Readonly<CoordinatorState>, signal?: Ab
   }
 }
 
-/** Returns hidden state only for one exact process-local coordinator receiver. */
 function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   try {
     if (
@@ -192,7 +185,6 @@ function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   throw createAbortError();
 }
 
-/** Counts lines only to a fixed UI diff threshold. */
 function hasBoundedInlineDiffLines(value: string): boolean {
   let lines = 1;
   for (let index = 0; index < value.length; index += 1) {
@@ -204,7 +196,6 @@ function hasBoundedInlineDiffLines(value: string): boolean {
   return true;
 }
 
-/** Reports whether two complete texts may enter the line-diff display path. */
 function canCreateInlineDiff(beforeContent: string, afterContent: string): boolean {
   return (
     beforeContent.length + afterContent.length <= MAX_INLINE_DIFF_CHARACTERS &&
@@ -213,7 +204,6 @@ function canCreateInlineDiff(beforeContent: string, afterContent: string): boole
   );
 }
 
-/** Deeply freezes display-only diff blocks returned by the pure Review helper. */
 function freezeReviewBlocks(
   value: readonly KnowledgeReviewBlock[]
 ): readonly KnowledgeReviewBlock[] {
@@ -229,12 +219,10 @@ function freezeReviewBlocks(
   );
 }
 
-/** Produces one UI-only hash that is never accepted as a durable protocol digest. */
 function digestUiIdentity(namespace: string, value: JsonValue): string {
   return sha256(`${namespace}\u0000${canonicalizeJson(value)}`);
 }
 
-/** Compares two already bounded protocol values without retaining caller aliases. */
 function exactProtocolValuesEqual(left: unknown, right: unknown): boolean {
   try {
     return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
@@ -243,7 +231,6 @@ function exactProtocolValuesEqual(left: unknown, right: unknown): boolean {
   }
 }
 
-/** Builds one exact single-file render plan without constructing a legacy ChangeSet. */
 function createPendingRenderPlan(
   record: Readonly<KnowledgeForwardRevisionStudioPendingRecord>,
   observation: Readonly<CurrentObservation>,
@@ -333,7 +320,6 @@ function createPendingRenderPlan(
   });
 }
 
-/** Captures one pending target through the owner-bound bounded Vault visitor. */
 async function observePendingTarget(
   state: Readonly<CoordinatorState>,
   record: Readonly<KnowledgeForwardRevisionStudioPendingRecord>,
@@ -388,7 +374,6 @@ async function observePendingTarget(
   }
 }
 
-/** Creates a product snapshot reference that additionally binds fresh Vault observation. */
 function createProductSnapshotRef(
   record: Readonly<KnowledgeForwardRevisionStudioActiveRecord>,
   observation?: Readonly<CurrentObservation>
@@ -404,7 +389,6 @@ function createProductSnapshotRef(
   })}`;
 }
 
-/** Removes all durable command material while retaining bounded display fields. */
 function projectNonPendingUiRecord(
   record: Exclude<KnowledgeForwardRevisionStudioActiveRecord, { state: "pending" }>,
   snapshotRef: string
@@ -447,7 +431,6 @@ function projectNonPendingUiRecord(
   });
 }
 
-/** Projects one stable Runtime snapshot and its bounded current-page observations. */
 async function projectUiSnapshot(
   state: Readonly<CoordinatorState>,
   bundleId: string,
@@ -540,7 +523,6 @@ async function projectUiSnapshot(
   throw new TypeError("Forward revision Studio snapshot did not stabilize");
 }
 
-/** Builds the scalar Apply request retained only behind the product coordinator. */
 function createApplyRequest(record: Readonly<KnowledgeForwardRevisionStudioAcceptedReadyRecord>) {
   const decision = record.acceptedDecision;
   const proposal = decision.proposal;
@@ -556,7 +538,6 @@ function createApplyRequest(record: Readonly<KnowledgeForwardRevisionStudioAccep
   });
 }
 
-/** Maps one durable journal convergence result to the value-only product result. */
 function projectApplyResult(
   result: Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult>
 ): Readonly<KnowledgeForwardRevisionStudioSubmissionResult> {
@@ -574,7 +555,6 @@ function projectApplyResult(
   }
 }
 
-/** Reads the exact durable state for one opaque Review identity after a race or retry. */
 async function readDurableReviewState(
   state: Readonly<CoordinatorState>,
   bundleId: string,
@@ -596,7 +576,6 @@ async function readDurableReviewState(
   return snapshot.committedReviewRefs.includes(reviewRef) ? "committed" : undefined;
 }
 
-/** Maps one freshly re-read durable Review state without trusting the prior operation result. */
 function projectDurableReviewState(
   current: Readonly<KnowledgeForwardRevisionStudioActiveRecord> | "committed" | undefined
 ): Readonly<KnowledgeForwardRevisionStudioSubmissionResult> {
@@ -609,7 +588,6 @@ function projectDurableReviewState(
   return RECOVERY_REQUIRED_RESULT;
 }
 
-/** Runs one accepted-ready Apply and preserves that row on any pre-journal failure. */
 async function applyAcceptedRecord(
   state: Readonly<CoordinatorState>,
   record: Readonly<KnowledgeForwardRevisionStudioAcceptedReadyRecord>,
@@ -664,7 +642,6 @@ async function applyAcceptedRecord(
   }
 }
 
-/** Rechecks one sticky recovery and projects only freshly re-read durable truth. */
 async function resolveRecoveryRecord(
   state: Readonly<CoordinatorState>,
   record: Readonly<KnowledgeForwardRevisionStudioRecoveryRequiredRecord>,
@@ -705,7 +682,6 @@ async function resolveRecoveryRecord(
   }
 }
 
-/** Atomically abandons one accepted-ready identity and then reloads the exact durable winner. */
 async function abandonAcceptedRecord(
   state: Readonly<CoordinatorState>,
   record: Readonly<KnowledgeForwardRevisionStudioAcceptedReadyRecord>,
@@ -775,7 +751,6 @@ async function abandonAcceptedRecord(
   }
 }
 
-/** Resolves one partial selection only against the exact hidden render plan. */
 function createPendingDecisionCommand(
   binding: Readonly<HiddenReviewBinding>,
   command: Readonly<KnowledgeForwardRevisionStudioCommand>
@@ -831,7 +806,6 @@ function createPendingDecisionCommand(
   );
 }
 
-/** Finds the accepted product state created by one just-completed decision. */
 async function continueAcceptedDecision(
   state: Readonly<CoordinatorState>,
   bundleId: string,
@@ -862,9 +836,7 @@ async function continueAcceptedDecision(
   return STALE_RESULT;
 }
 
-/** Production coordinator for opaque Forward Review display, decision, and Apply. */
 export class KnowledgeProductionForwardRevisionStudioCoordinator implements KnowledgeForwardRevisionStudioPort {
-  /** Captures one exact production owner and its genuine read/decision/Apply boundaries. */
   constructor(
     runtime: KnowledgeRuntimeForwardRevisionStudioPort,
     decisions: KnowledgeProductionForwardRevisionDecisionCoordinator,
@@ -898,7 +870,6 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator implements Know
     }
   }
 
-  /** Requires one live exact process-local production coordinator. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeProductionForwardRevisionStudioCoordinator {
@@ -906,7 +877,6 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator implements Know
     assertCoordinatorCurrent(state);
   }
 
-  /** Requires one live exact coordinator owned by the supplied execution lifecycle. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
@@ -918,7 +888,6 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator implements Know
     }
   }
 
-  /** Loads and privately binds one stable Runtime/Vault Forward Review projection. */
   async loadForwardRevisionStudio(
     bundleId: string,
     signal: AbortSignal
@@ -933,7 +902,6 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator implements Know
     return projected.snapshot;
   }
 
-  /** Submits one current opaque row action through the distinct forward protocol. */
   async submitForwardRevisionStudio(
     bundleId: string,
     commandValue: KnowledgeForwardRevisionStudioCommand,

@@ -18,7 +18,6 @@ const MAX_SNAPSHOT_BYTES = 8_388_608;
 const MAX_DESTINATION_PATH_LENGTH = 240;
 const EMPTY_CHOICES = Object.freeze([]);
 
-/** Exact released-generation delegates; callers must not supply redirecting stable ports. */
 export interface KnowledgeStudioMaterialGeneration {
   readonly bundleId: string;
   readonly sourceRoot: string;
@@ -29,7 +28,6 @@ export interface KnowledgeStudioMaterialGeneration {
   assertCurrent(): void;
 }
 
-/** Read-only original-file access and the current explicit registration authority. */
 export interface KnowledgeStudioMaterialCoordinatorInput {
   vault: Pick<Vault, "getFiles" | "getAbstractFileByPath" | "readBinary"> & {
     adapter: Pick<DataAdapter, "stat">;
@@ -46,10 +44,6 @@ interface CapturedMaterial {
   ctime: number;
 }
 
-/**
- * Authorizes one explicit Studio file choice without changing source roots or originals.
- * Registration and exclusive snapshot publication remain owned by existing capture adapters.
- */
 export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMaterialPort {
   private readonly sessions = new WeakMap<object, KnowledgeStudioMaterialGeneration>();
   private readonly selections = new WeakMap<object, CapturedMaterial>();
@@ -57,10 +51,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
 
   constructor(private readonly input: KnowledgeStudioMaterialCoordinatorInput) {}
 
-  /**
-   * Lists supported file identities without reading their contents or starting ingest.
-   * @param bundleId - Bundle currently displayed by the Studio session
-   */
   prepare(bundleId: string): Readonly<KnowledgeStudioMaterialSession> | null {
     // Inventory is read-only and must belong to the Bundle the user is actually viewing.
     // https://github.com/yydspanda/obsidian-copilot/issues/13
@@ -86,11 +76,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /**
-   * Binds the exact displayed mode and destination before any user confirmation.
-   * @param session - Original chooser capability, not a reconstructed object
-   * @param sourcePath - One path from that chooser's read-only inventory
-   */
   select(
     session: Readonly<KnowledgeStudioMaterialSession>,
     sourcePath: string
@@ -133,11 +118,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     return selection;
   }
 
-  /**
-   * Adds only a previously confirmed selection through its original generation.
-   * @param selection - Opaque selection returned by this coordinator
-   * @param signal - Cancellation owned by the initiating Studio view
-   */
   async add(
     selection: Readonly<KnowledgeStudioMaterialSelection>,
     signal: AbortSignal
@@ -217,7 +197,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /** Reads only the confirmed original, bounded before allocation and re-proved afterward. */
   private async readSnapshot(
     captured: CapturedMaterial,
     signal: AbortSignal
@@ -238,7 +217,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     return bytes;
   }
 
-  /** Fresh adapter metadata closes the delayed-Vault-event gap around bounded reads. */
   private async assertSnapshotStat(captured: CapturedMaterial, signal: AbortSignal): Promise<void> {
     // TFile.stat can lag external edits; reject oversized files using current metadata too.
     // https://github.com/yydspanda/obsidian-copilot/issues/13
@@ -260,7 +238,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /** File replacement or edits invalidate consent to the previously displayed material. */
   private assertUnchanged(captured: CapturedMaterial): void {
     // Recheck both identity and stat around reading so a stale path cannot supply new bytes.
     // https://github.com/yydspanda/obsidian-copilot/issues/13
@@ -276,7 +253,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /** Keeps unexpected Vault lookup errors from exposing private path details. */
   private findFile(path: string): ReturnType<Vault["getAbstractFileByPath"]> {
     // Unknown adapter errors are not safe UI diagnostics.
     // https://github.com/yydspanda/obsidian-copilot/issues/13
@@ -287,7 +263,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /** Rejects stale chooser authority instead of redirecting it to a replacement Bundle. */
   private assertCurrent(generation: KnowledgeStudioMaterialGeneration): void {
     // A picker can remain open while configuration changes; its old selection is not new consent.
     // https://github.com/yydspanda/obsidian-copilot/issues/13
@@ -299,7 +274,6 @@ export class KnowledgeStudioMaterialCoordinator implements KnowledgeStudioMateri
     }
   }
 
-  /** Filters generated/configuration boundaries before a path becomes selectable. */
   private isAllowed(file: TFile, generation: KnowledgeStudioMaterialGeneration): boolean {
     // Generated output and configuration are not raw materials for this explicit chooser.
     // https://github.com/yydspanda/obsidian-copilot/issues/13

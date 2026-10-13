@@ -27,7 +27,6 @@ interface KnowledgeChatDraftDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-/** Converts one sanitized command failure into concise, content-free UI guidance. */
 function getDraftFailureMessage(error: unknown): string {
   if (error instanceof KnowledgeChatCaptureError) {
     switch (error.code) {
@@ -50,12 +49,6 @@ function getDraftFailureMessage(error: unknown): string {
   return "The draft could not be registered. No Wiki page was written.";
 }
 
-/**
- * Lets the user edit and verify one AI response before it becomes a registered Source.
- *
- * The dialog never chooses a Vault path and never writes Wiki content. Its only
- * mutation is the stable generation-owned Chat capture command supplied by main.
- */
 export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> = ({
   open,
   initialBody,
@@ -103,7 +96,6 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
     body.length <= KNOWLEDGE_CHAT_DRAFT_LIMITS.maxBodyCharacters &&
     reviewConfirmed;
 
-  /** Submits the exact current editor values through the revocable durable port. */
   const submit = async (): Promise<void> => {
     if (!canSubmit) return;
     const request: Readonly<KnowledgeChatDraftRequest> = Object.freeze({
@@ -131,7 +123,6 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
     }
   };
 
-  /** Requests cancellation without pretending that an in-flight durable boundary rolled back. */
   const cancel = (): void => {
     if (submitting) {
       abortControllerRef.current?.abort();

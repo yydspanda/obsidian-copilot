@@ -56,7 +56,6 @@ interface NativeWebRuntime {
   AbortController: typeof AbortController;
 }
 
-/** Returns Node's host process rather than Jest's detached process facade. */
 function getNativeNodeProcess(): NativeNodeProcess {
   const testProcess = process as unknown as {
     getBuiltinModule?: (specifier: string) => unknown;
@@ -75,7 +74,6 @@ function getNativeNodeProcess(): NativeNodeProcess {
   return nativeProcess as NativeNodeProcess;
 }
 
-/** Identifies an optional env file that is simply not present. */
 function isMissingEnvFileError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -85,7 +83,6 @@ function isMissingEnvFileError(error: unknown): boolean {
   );
 }
 
-/** Loads only the live-test credential from external env or ignored `.env.test`. */
 function loadDeepSeekApiKey(): string | undefined {
   // Local credentials must not turn ordinary unit tests into paid provider calls.
   // https://github.com/yydspanda/obsidian-copilot/issues/21
@@ -144,7 +141,6 @@ interface ReadOnlyAtlasVaultHarness {
   read: jest.Mock;
 }
 
-/** Creates the single project-owned Bundle exercised by the live compiler. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -157,7 +153,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: PROJECT_ID, config };
 }
 
-/** Creates the project record that selects the exact current DeepSeek model. */
 function createProject(): ProjectKnowledgePipelineProjectInput {
   return {
     id: PROJECT_ID,
@@ -166,7 +161,6 @@ function createProject(): ProjectKnowledgePipelineProjectInput {
   };
 }
 
-/** Creates the hydrated production settings projection without logging its credential. */
 function createSettings(apiKey: string): KnowledgeProductionPreflightSettingsInput {
   return {
     temperature: 0,
@@ -189,7 +183,6 @@ function createSettings(apiKey: string): KnowledgeProductionPreflightSettingsInp
   };
 }
 
-/** Creates the exact pre-compile Manifest before this source has generated a page. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -206,7 +199,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates an empty App/Vault adapter that exposes only stat and read capabilities. */
 function createReadOnlyAtlasVault(): ReadOnlyAtlasVaultHarness {
   const contents = new Map<string, string>();
   const stat = jest.fn(async (path: string) => {
@@ -234,7 +226,6 @@ function createReadOnlyAtlasVault(): ReadOnlyAtlasVaultHarness {
   };
 }
 
-/** Loads Node-native web primitives from outside Jest's jsdom realm. */
 function getNativeWebRuntime(): NativeWebRuntime {
   const nativeVm = getNativeNodeProcess().getBuiltinModule("node:vm") as
     | { runInThisContext?: (source: string) => unknown }
@@ -254,7 +245,6 @@ function getNativeWebRuntime(): NativeWebRuntime {
   };
 }
 
-/** Installs Node's AbortController for Queue-created signals and returns an exact restoration. */
 function installNativeAbortController(nativeAbortController: typeof AbortController): () => void {
   const originalDescriptor = Object.getOwnPropertyDescriptor(window, "AbortController");
   Object.defineProperty(window, "AbortController", {
@@ -271,7 +261,6 @@ function installNativeAbortController(nativeAbortController: typeof AbortControl
   };
 }
 
-/** Creates a native fetch port that retains only credential-free request metadata. */
 function createSafeNativeFetchPort(
   metadata: SafeFetchMetadata[],
   nativeWebRuntime: NativeWebRuntime
@@ -298,31 +287,25 @@ function createSafeNativeFetchPort(
   };
 }
 
-/** Runtime-backed Manifest port used by the production workflow loader. */
 class RuntimeManifestSnapshotPort implements KnowledgeManifestSnapshotPort {
-  /** Captures the exact shared Runtime Manifest facade. */
   constructor(private readonly storage: KnowledgeRuntimeManifestStorage) {}
 
-  /** Loads one detached Manifest from the shared Runtime envelope. */
   load(bundleId: string): Promise<unknown> {
     return this.storage.read(bundleId);
   }
 }
 
-/** Exact in-memory source/schema byte reader with no mutation capability. */
 class ExactArtifactReader implements KnowledgeExactArtifactReaderPort {
   private readonly artifacts = new Map<string, Uint8Array>([
     [SOURCE_PATH, SOURCE_BYTES],
     [SCHEMA_PATH, SCHEMA_BYTES],
   ]);
 
-  /** Reads exact bytes for workflow collection and reproof. */
   async read(sourcePath: string, signal?: AbortSignal): Promise<ExactSourceArtifact> {
     if (signal?.aborted) throw new DOMException("The operation was aborted", "AbortError");
     return this.readCurrent(sourcePath);
   }
 
-  /** Reads exact bytes only when they retain the Queue-owned source hash. */
   async readExpected(
     sourcePath: string,
     expectedContentHash: string,
@@ -336,7 +319,6 @@ class ExactArtifactReader implements KnowledgeExactArtifactReaderPort {
     return artifact;
   }
 
-  /** Returns a detached exact-byte artifact for one known fixture path. */
   private readCurrent(sourcePath: string): ExactSourceArtifact {
     const bytes = this.artifacts.get(sourcePath);
     if (!bytes) throw new Error("The exact artifact fixture is unavailable");

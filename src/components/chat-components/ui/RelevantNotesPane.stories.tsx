@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { createMiyoPageUrl } from "@/lib/miyoLinks";
+import { createProductUrl, PRODUCT_URLS } from "@/lib/productLinks";
 import {
   RelevantNotesPane,
   type RelevantNotesPaneProps,
@@ -33,7 +33,7 @@ const baseArgs: RelevantNotesPaneProps = {
   status: "matches",
   noteRows: NoteRows(),
   actions: {
-    miyoDownloadUrl: createMiyoPageUrl("relevant_notes"),
+    miyoDownloadUrl: createProductUrl(PRODUCT_URLS.MIYO, "relevant_notes"),
     onOpenMiyoSettings: () => undefined,
     onRefresh: () => undefined,
     reviewIndexing: {
@@ -173,7 +173,6 @@ export const VaultNotRegisteredRemote: StoryObj<RelevantNotesPaneProps> = {
   },
 };
 
-/** A manual replay of loading, failure, empty results and recovery; no requests are made. */
 export const StateTransitions: StoryObj<RelevantNotesPaneProps> = {
   render: function StateTransitionsStory() {
     const states = ["loading", "request-error", "no-matches", "matches"] as const;

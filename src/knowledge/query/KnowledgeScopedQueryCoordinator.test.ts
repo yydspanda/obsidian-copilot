@@ -45,7 +45,6 @@ interface Deferred<T> {
   resolve(value: T): void;
 }
 
-/** Creates one manually settled Promise for generation-race tests. */
 function deferred<T>(): Deferred<T> {
   let resolvePromise: ((value: T) => void) | undefined;
   const promise = new Promise<T>((resolve) => {
@@ -59,7 +58,6 @@ function deferred<T>(): Deferred<T> {
   };
 }
 
-/** Creates one exact verified Wiki snapshot with optional page content and citations. */
 function createSnapshot(
   content = "# Durable knowledge\n\nThe personal knowledge engine is grounded.\n",
   citations: readonly Readonly<ClaimCitation>[] = [CITATION, CITATION],
@@ -101,25 +99,21 @@ function createSnapshot(
   };
 }
 
-/** Creates a typed reader mock returning one exact snapshot. */
 function createReader(
   snapshot: KnowledgeVerifiedWikiSnapshot = createSnapshot()
 ): KnowledgeAppliedWikiSnapshotReadPort & { read: jest.Mock } {
   return { read: jest.fn(async () => snapshot) };
 }
 
-/** Creates a typed navigation mock. */
 function createNavigation(): KnowledgeCitationNavigationPort & { open: jest.Mock } {
   return { verify: jest.fn(async () => true), open: jest.fn(async () => undefined) };
 }
 
-/** Creates deterministic opaque token material for coordinator tests. */
 function createIdFactory(): jest.Mock<string, ["query" | "citation"]> {
   let sequence = 0;
   return jest.fn((kind: "query" | "citation") => `${kind}${++sequence}`);
 }
 
-/** Creates a coordinator with the real pure lexical retriever. */
 function createCoordinator(
   reader: KnowledgeAppliedWikiSnapshotReadPort = createReader(),
   navigation: KnowledgeCitationNavigationPort = createNavigation(),
@@ -138,7 +132,6 @@ function createCoordinator(
   });
 }
 
-/** Creates one valid strict model response bound to the captured request digest. */
 function createAnswerWireOutput(
   request: Readonly<KnowledgeGroundedAnswerRequest>,
   evidenceId = "evidence-1",
@@ -160,7 +153,6 @@ function createAnswerWireOutput(
   });
 }
 
-/** Creates a structurally valid complete quote without storing private source material. */
 function createExcerptCitation(excerpt: string, ordinal = 1): ClaimCitation {
   return {
     ...CITATION,

@@ -13,12 +13,10 @@ import { deriveKnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
 
 const BUNDLE_ID = "personal";
 
-/** Creates one opaque recovery reference for a caller-selected id. */
 function createReference(recoveryId: string) {
   return { bundleId: BUNDLE_ID, recoveryId };
 }
 
-/** Creates one complete empty Queue snapshot with a caller-selected control gate. */
 function createQueueSnapshot(control: IngestQueueControl): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -34,7 +32,6 @@ function createQueueSnapshot(control: IngestQueueControl): IngestQueueSnapshot {
   };
 }
 
-/** Creates one atomic recovery observation around selected durable classifications. */
 function createRecoverySnapshot(
   classifications: readonly NoJournalApplyRecoveryClassification[] = [],
   control: IngestQueueControl = { status: "running" },

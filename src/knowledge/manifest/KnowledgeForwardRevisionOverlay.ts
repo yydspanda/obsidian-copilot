@@ -23,14 +23,11 @@ import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { validateSourceManifest } from "@/knowledge/model/validation";
 import { sha256 } from "@/utils/hash";
 
-/** Reserved Bundle Manifest extension holding active forward-revision overlays. */
 export const KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY =
   "obsidianCopilotKnowledgeForwardRevisionOverlays" as const;
 
-/** Current strict forward-revision overlay format. */
 export const KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION = 2 as const;
 
-/** Legacy one-head overlay accepted only as migration input. */
 export interface KnowledgeForwardRevisionOverlayEntryV1 {
   readonly version: 1;
   readonly kind: "forward_revision_overlay_entry";
@@ -47,7 +44,6 @@ export interface KnowledgeForwardRevisionOverlayEntryV1 {
   readonly appliedAt: number;
 }
 
-/** One active content overlay for a previously generated Wiki page. */
 export interface KnowledgeForwardRevisionOverlayEntryV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION;
   readonly kind: "forward_revision_overlay_entry";
@@ -56,9 +52,9 @@ export interface KnowledgeForwardRevisionOverlayEntryV2 {
   readonly windowsPathKey: string;
   readonly sourceId: string;
   readonly sourceBaseDigest: string;
-  /** Immutable content hash last produced by the source compiler. */
+
   readonly sourceAppliedContentHash: string;
-  /** Exact effective head consumed by this forward revision's Vault CAS. */
+
   readonly previousEffectiveContentHash: string;
   readonly effectiveContentHash: string;
   readonly forwardTransactionId: string;
@@ -67,27 +63,22 @@ export interface KnowledgeForwardRevisionOverlayEntryV2 {
   readonly appliedAt: number;
 }
 
-/** Canonical active overlay returned by every strict reader. */
 export type KnowledgeForwardRevisionOverlayEntry = KnowledgeForwardRevisionOverlayEntryV2;
 
-/** Legacy overlay extension accepted only as migration input. */
 export interface KnowledgeForwardRevisionOverlayExtensionV1 {
   readonly version: 1;
   readonly kind: "forward_revision_overlay_extension";
   readonly entries: readonly Readonly<KnowledgeForwardRevisionOverlayEntryV1>[];
 }
 
-/** Strict reserved extension containing canonical Windows-unique overlay entries. */
 export interface KnowledgeForwardRevisionOverlayExtensionV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION;
   readonly kind: "forward_revision_overlay_extension";
   readonly entries: readonly Readonly<KnowledgeForwardRevisionOverlayEntryV2>[];
 }
 
-/** Canonical extension returned by every strict reader. */
 export type KnowledgeForwardRevisionOverlayExtension = KnowledgeForwardRevisionOverlayExtensionV2;
 
-/** Input for one exact ledger-bound overlay entry. */
 export type CreateKnowledgeForwardRevisionOverlayEntryInput = Omit<
   KnowledgeForwardRevisionOverlayEntryV2,
   "version" | "kind" | "windowsPathKey"
@@ -139,9 +130,7 @@ const CREATE_ENTRY_KEYS = [
 ] as const;
 const EXTENSION_KEYS = ["version", "kind", "entries"] as const;
 
-/** Fixed value-free error for invalid forward overlay material. */
 export class KnowledgeForwardRevisionOverlayValidationError extends TypeError {
-  /** Creates one sanitized error; only this module can mark it authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision overlay does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionOverlayValidationError";
@@ -152,14 +141,12 @@ export class KnowledgeForwardRevisionOverlayValidationError extends TypeError {
 const ERROR_TOKEN = Symbol("KnowledgeForwardRevisionOverlayValidationError");
 const authenticErrors = new WeakSet<KnowledgeForwardRevisionOverlayValidationError>();
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionOverlayValidationError(ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local failure. */
 function isAuthenticError(value: unknown): value is KnowledgeForwardRevisionOverlayValidationError {
   return (
     (typeof value === "object" || typeof value === "function") &&
@@ -168,7 +155,6 @@ function isAuthenticError(value: unknown): value is KnowledgeForwardRevisionOver
   );
 }
 
-/** Captures one canonical Vault path without repairing its spelling. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 1_024) return undefined;
   try {
@@ -179,12 +165,10 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Compares strings without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Reads one own enumerable scalar discriminant without invoking candidate code. */
 function readDataField(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -195,7 +179,6 @@ function readDataField(value: unknown, key: string): unknown {
   }
 }
 
-/** Captures a dense bounded array without invoking candidate accessors. */
 function snapshotEntryArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
@@ -218,7 +201,6 @@ function snapshotEntryArray(value: unknown): readonly unknown[] | undefined {
   }
 }
 
-/** Strictly snapshots one active overlay entry. */
 export function snapshotKnowledgeForwardRevisionOverlayEntry(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionOverlayEntryV2> {
@@ -272,7 +254,6 @@ export function snapshotKnowledgeForwardRevisionOverlayEntry(
   }
 }
 
-/** Creates one strict overlay entry from exact finalized ledger fields. */
 export function createKnowledgeForwardRevisionOverlayEntry(
   value: CreateKnowledgeForwardRevisionOverlayEntryInput
 ): Readonly<KnowledgeForwardRevisionOverlayEntryV2> {
@@ -293,7 +274,6 @@ export function createKnowledgeForwardRevisionOverlayEntry(
   }
 }
 
-/** Strictly snapshots the complete canonical reserved overlay extension. */
 export function snapshotKnowledgeForwardRevisionOverlayExtension(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionOverlayExtensionV2> {
@@ -341,7 +321,6 @@ export function snapshotKnowledgeForwardRevisionOverlayExtension(
   }
 }
 
-/** Computes the canonical digest of a strict overlay extension. */
 export function createKnowledgeForwardRevisionOverlayExtensionDigest(value: unknown): string {
   const extension = snapshotKnowledgeForwardRevisionOverlayExtension(value);
   return sha256(
@@ -351,7 +330,6 @@ export function createKnowledgeForwardRevisionOverlayExtensionDigest(value: unkn
   );
 }
 
-/** Parses an untrusted overlay extension into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionOverlayExtension(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionOverlayExtensionV2>> {
@@ -372,7 +350,6 @@ export function parseKnowledgeForwardRevisionOverlayExtension(
   }
 }
 
-/** Validates an untrusted overlay extension without retaining rejected data. */
 export function validateKnowledgeForwardRevisionOverlayExtension(
   value: unknown
 ): KnowledgeValidationResult {
@@ -382,12 +359,10 @@ export function validateKnowledgeForwardRevisionOverlayExtension(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed parser diagnostic. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }
 
-/** Finds one active overlay by canonical Windows page identity. */
 export function findKnowledgeForwardRevisionOverlay(
   extensionValue: unknown,
   pagePath: string
@@ -399,12 +374,6 @@ export function findKnowledgeForwardRevisionOverlay(
   return extension.entries.find((entry) => entry.windowsPathKey === key);
 }
 
-/**
- * Adds or strictly advances one overlay head while preserving source history.
- *
- * A replacement is admitted only when it consumes the exact previous effective
- * head for the same Bundle, source, page, and immutable source-applied base.
- */
 export function projectKnowledgeForwardRevisionOverlayAddition(
   manifestValue: unknown,
   entryValue: unknown,
@@ -508,14 +477,6 @@ export function projectKnowledgeForwardRevisionOverlayAddition(
   }
 }
 
-/**
- * Removes one exact active overlay from an already advanced source-commit Manifest.
- *
- * The source transaction owns the Manifest revision increment, so this leaf never
- * changes `revision`. The supplied overlay must rejoin one and only one current
- * entry by its complete canonical identity. Other overlays and extensions remain
- * byte-semantically intact; an empty reserved extension is removed altogether.
- */
 export function projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
   manifestValue: unknown,
   entryValue: unknown
@@ -560,7 +521,6 @@ export function projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
   }
 }
 
-/** Verifies exact file bytes against one overlay's effective content identity. */
 export function matchesKnowledgeForwardRevisionOverlayContent(
   entryValue: unknown,
   content: string

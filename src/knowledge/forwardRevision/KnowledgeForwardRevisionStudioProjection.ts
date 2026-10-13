@@ -42,10 +42,8 @@ import type { JsonValue } from "@/knowledge/model/types";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current internal Studio projection version for dedicated forward Review work. */
 export const KNOWLEDGE_FORWARD_REVISION_STUDIO_SNAPSHOT_VERSION = 1 as const;
 
-/** Fixed product-read limits below the enclosing durable protocol bounds. */
 export const KNOWLEDGE_FORWARD_REVISION_STUDIO_LIMITS = Object.freeze({
   maxActiveRecords: 256,
   maxCommittedRecords: 10_000,
@@ -54,7 +52,6 @@ export const KNOWLEDGE_FORWARD_REVISION_STUDIO_LIMITS = Object.freeze({
   maxTotalContentCharacters: 16_000_000,
 });
 
-/** One pending proposal retained intact for a later command-time exact rejoin. */
 export interface KnowledgeForwardRevisionStudioPendingRecord {
   readonly state: "pending";
   readonly reviewRef: string;
@@ -67,7 +64,6 @@ export interface KnowledgeForwardRevisionStudioPendingRecord {
   readonly proposalDigest: string;
 }
 
-/** One accepted decision that remains visible until an Apply journal is begun. */
 export interface KnowledgeForwardRevisionStudioAcceptedReadyRecord {
   readonly state: "accepted_ready";
   readonly reviewRef: string;
@@ -80,7 +76,6 @@ export interface KnowledgeForwardRevisionStudioAcceptedReadyRecord {
   readonly decisionDigest: string;
 }
 
-/** One accepted decision durably terminalized before any Apply journal or Wiki mutation. */
 export interface KnowledgeForwardRevisionStudioAbandonedRecord {
   readonly state: "abandoned";
   readonly reviewRef: string;
@@ -96,7 +91,6 @@ export interface KnowledgeForwardRevisionStudioAbandonedRecord {
   readonly abandonmentDigest: string;
 }
 
-/** One sticky recovery durably ended while retaining the freshly observed external Wiki value. */
 export interface KnowledgeForwardRevisionStudioKeptCurrentRecord {
   readonly state: "kept_current";
   readonly reviewRef: string;
@@ -111,7 +105,6 @@ export interface KnowledgeForwardRevisionStudioKeptCurrentRecord {
   readonly decisionDigest: string;
 }
 
-/** One accepted decision currently owned by a durable non-conflict Apply journal. */
 export interface KnowledgeForwardRevisionStudioApplyingRecord {
   readonly state: "applying";
   readonly reviewRef: string;
@@ -125,7 +118,6 @@ export interface KnowledgeForwardRevisionStudioApplyingRecord {
   readonly decisionDigest: string;
 }
 
-/** One accepted decision retained behind a sticky durable Apply conflict. */
 export interface KnowledgeForwardRevisionStudioRecoveryRequiredRecord {
   readonly state: "recovery_required";
   readonly reviewRef: string;
@@ -142,7 +134,6 @@ export interface KnowledgeForwardRevisionStudioRecoveryRequiredRecord {
   readonly recoveryExpectation: Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1>;
 }
 
-/** Visible forward work retained behind an internal production coordinator boundary. */
 export type KnowledgeForwardRevisionStudioActiveRecord =
   | KnowledgeForwardRevisionStudioPendingRecord
   | KnowledgeForwardRevisionStudioAcceptedReadyRecord
@@ -151,7 +142,6 @@ export type KnowledgeForwardRevisionStudioActiveRecord =
   | KnowledgeForwardRevisionStudioApplyingRecord
   | KnowledgeForwardRevisionStudioRecoveryRequiredRecord;
 
-/** Detached product read assembled from exactly one Runtime envelope. */
 export interface KnowledgeForwardRevisionStudioSnapshot {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_STUDIO_SNAPSHOT_VERSION;
   readonly kind: "forward_revision_studio_snapshot";
@@ -164,7 +154,6 @@ export interface KnowledgeForwardRevisionStudioSnapshot {
   readonly committedCount: number;
 }
 
-/** Strict inputs already selected from one validated Runtime envelope. */
 export interface KnowledgeForwardRevisionStudioProjectionInput {
   readonly runtimeId: string;
   readonly runtimeRevision: number;
@@ -176,7 +165,6 @@ export interface KnowledgeForwardRevisionStudioProjectionInput {
   readonly recoveryTerminals: readonly unknown[];
 }
 
-/** Stable bounded resource exhausted by a product projection. */
 export type KnowledgeForwardRevisionStudioProjectionLimit =
   | "active_records"
   | "committed_records"
@@ -186,9 +174,7 @@ const PROJECTION_LIMIT_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionStudioProje
 const authenticProjectionLimitErrors =
   new WeakSet<KnowledgeForwardRevisionStudioProjectionLimitError>();
 
-/** Reports a valid durable graph that exceeds the bounded product contract. */
 export class KnowledgeForwardRevisionStudioProjectionLimitError extends Error {
-  /** Creates one value-free resource failure. */
   constructor(
     public readonly limit: KnowledgeForwardRevisionStudioProjectionLimit,
     authenticityToken?: symbol
@@ -201,9 +187,7 @@ export class KnowledgeForwardRevisionStudioProjectionLimitError extends Error {
   }
 }
 
-/** Reports malformed or ambiguously joined projection material without retaining it. */
 export class KnowledgeForwardRevisionStudioProjectionError extends Error {
-  /** Creates one fixed sanitized projection failure. */
   constructor() {
     super("Forward revision Studio work does not satisfy the product read contract");
     this.name = "KnowledgeForwardRevisionStudioProjectionError";
@@ -332,14 +316,12 @@ const REVIEW_REF_PATTERN = /^forward-studio-review-[a-f0-9]{64}$/;
 const SNAPSHOT_REF_PATTERN = /^forward-studio-snapshot-[a-f0-9]{64}$/;
 const REVISION_TOKEN_PATTERN = /^forward-studio-revision-[a-f0-9]{64}$/;
 
-/** Throws one sanitized malformed-input failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionStudioProjectionError();
   Object.freeze(error);
   throw error;
 }
 
-/** Throws one authentic frozen bounded-resource failure. */
 function resourceLimit(limit: KnowledgeForwardRevisionStudioProjectionLimit): never {
   const error = new KnowledgeForwardRevisionStudioProjectionLimitError(
     limit,
@@ -349,7 +331,6 @@ function resourceLimit(limit: KnowledgeForwardRevisionStudioProjectionLimit): ne
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local resource failure. */
 function isAuthenticProjectionLimitError(
   value: unknown
 ): value is KnowledgeForwardRevisionStudioProjectionLimitError {
@@ -360,7 +341,6 @@ function isAuthenticProjectionLimitError(
   );
 }
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   requiredKeys: readonly string[],
@@ -397,7 +377,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense array without invoking indexed accessors. */
 function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -423,7 +402,6 @@ function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | 
   }
 }
 
-/** Reports whether a scalar is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -448,12 +426,10 @@ function isIdentifier(value: unknown): value is string {
   return true;
 }
 
-/** Reports whether a scalar is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Captures one exact canonical Vault path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -470,7 +446,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Compares detached JSON values without retaining either candidate. */
 function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
   try {
     return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
@@ -479,12 +454,10 @@ function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
   }
 }
 
-/** Produces one namespaced opaque reference from strict detached identity data. */
 function createOpaqueRef(prefix: string, namespace: string, value: JsonValue): string {
   return `${prefix}-${sha256(`${namespace}\n${canonicalizeJson(value)}`)}`;
 }
 
-/** Builds the private exact accepted-decision join key used for journal and ledger matching. */
 function createAcceptedIdentityKey(
   runtimeId: string,
   bundleId: string,
@@ -508,7 +481,6 @@ function createAcceptedIdentityKey(
   ]);
 }
 
-/** Creates the stable opaque product reference for one exact durable proposal identity. */
 export function createKnowledgeForwardRevisionStudioReviewRef(
   runtimeId: string,
   bundleId: string,
@@ -529,7 +501,6 @@ export function createKnowledgeForwardRevisionStudioReviewRef(
   });
 }
 
-/** Creates a Runtime-revision-bound opaque record token without disclosing command authority. */
 function createSnapshotRef(
   input: Readonly<CapturedProjectionInput>,
   reviewRef: string,
@@ -547,7 +518,6 @@ function createSnapshotRef(
   });
 }
 
-/** Captures and validates every projection input before classification. */
 function captureProjectionInput(value: unknown): Readonly<CapturedProjectionInput> {
   const record = snapshotRecord(value, INPUT_REQUIRED_KEYS, INPUT_OPTIONAL_KEYS);
   if (
@@ -636,7 +606,6 @@ function captureProjectionInput(value: unknown): Readonly<CapturedProjectionInpu
   });
 }
 
-/** Creates the canonical lifecycle identity carried by one exact accepted decision. */
 export function createKnowledgeForwardRevisionStudioAcceptedIdentity(
   decisionValue: unknown
 ): Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1> {
@@ -663,7 +632,6 @@ export function createKnowledgeForwardRevisionStudioAcceptedIdentity(
   }
 }
 
-/** Projects one accepted entry into its private exact durable join identity. */
 function projectAcceptedEntry(
   runtimeId: string,
   bundleId: string,
@@ -695,7 +663,6 @@ function projectAcceptedEntry(
   });
 }
 
-/** Returns the private exact identity key carried by one active journal. */
 function createJournalIdentityKey(
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
 ): string {
@@ -711,7 +678,6 @@ function createJournalIdentityKey(
   );
 }
 
-/** Returns the private exact identity key carried by one finalized ledger. */
 function createLedgerIdentityKey(
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
 ): string {
@@ -727,7 +693,6 @@ function createLedgerIdentityKey(
   );
 }
 
-/** Reports whether one rev3 terminal is the exact no-overlay head of a committed ledger. */
 function recoveryTerminalMatchesCommittedLedger(
   terminal: Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>,
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
@@ -750,7 +715,6 @@ function recoveryTerminalMatchesCommittedLedger(
   );
 }
 
-/** Requires each immutable source-base epoch to be a chain with an exact earlier handoff. */
 function assertCommittedSuccessorChains(
   ledgers: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]
 ): void {
@@ -818,7 +782,6 @@ function assertCommittedSuccessorChains(
   }
 }
 
-/** Projects one accepted entry into its current product state. */
 function projectAcceptedActiveRecord(
   input: Readonly<CapturedProjectionInput>,
   accepted: Readonly<AcceptedProjection>,
@@ -929,7 +892,6 @@ function projectAcceptedActiveRecord(
   });
 }
 
-/** Projects one pending entry with its exact durable proposal for later private rejoin. */
 function projectPendingActiveRecord(
   input: Readonly<CapturedProjectionInput>,
   entry: Extract<KnowledgeForwardRevisionReviewSnapshotV2["records"][number], { state: "pending" }>
@@ -960,7 +922,6 @@ function projectPendingActiveRecord(
   });
 }
 
-/** Orders active work by latest durable event and then opaque stable identity. */
 function compareActiveRecords(
   left: Readonly<KnowledgeForwardRevisionStudioActiveRecord>,
   right: Readonly<KnowledgeForwardRevisionStudioActiveRecord>
@@ -970,7 +931,6 @@ function compareActiveRecords(
   return left.reviewRef < right.reviewRef ? -1 : left.reviewRef > right.reviewRef ? 1 : 0;
 }
 
-/** Strictly captures one projected active product row. */
 function snapshotActiveRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionStudioActiveRecord> {
@@ -1203,7 +1163,6 @@ function snapshotActiveRecord(
   });
 }
 
-/** Strictly detaches one product snapshot returned through an adapter boundary. */
 export function snapshotKnowledgeForwardRevisionStudioSnapshot(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionStudioSnapshot> {
@@ -1299,18 +1258,6 @@ export function snapshotKnowledgeForwardRevisionStudioSnapshot(
   }
 }
 
-/**
- * Classifies one Bundle's forward Review, journal, and ledger graph from one envelope.
- *
- * Every active row retains the exact durable proposal or accepted decision needed
- * by a private production coordinator to rejoin a later command. That structural
- * material is not mutation authority: Decision and Apply still require their fresh
- * Runtime CAS and genuine process capabilities. React-facing adapters must project
- * these rows again to opaque references and safe display fields.
- *
- * @param value - Strict one-envelope Runtime projection input
- * @returns Frozen bounded active work plus an exact committed count
- */
 export function projectKnowledgeForwardRevisionStudioSnapshot(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionStudioSnapshot> {

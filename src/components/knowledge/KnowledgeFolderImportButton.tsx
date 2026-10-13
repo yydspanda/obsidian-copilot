@@ -9,7 +9,6 @@ import {
   type KnowledgeFolderImportReceipt,
 } from "@/knowledge/capture/KnowledgeFolderImportPort";
 
-/** Props for the popout-safe Knowledge folder import control. */
 export interface KnowledgeFolderImportButtonProps {
   port: KnowledgeFolderImportPort;
 }
@@ -29,12 +28,6 @@ const ERROR_MESSAGES: Readonly<Record<KnowledgeFolderImportErrorCode, string>> =
   import_failed: "Folder import could not be completed.",
 };
 
-/**
- * Converts an aggregate import receipt into path-free user feedback.
- *
- * @param receipt - Aggregate import outcome containing counts only
- * @returns Sanitized status feedback that exposes no selected file identity
- */
 function createReceiptFeedback(
   receipt: Readonly<KnowledgeFolderImportReceipt>
 ): KnowledgeFolderImportFeedback {
@@ -48,28 +41,12 @@ function createReceiptFeedback(
   };
 }
 
-/**
- * Converts any rejected import into a fixed, path-free error message.
- *
- * @param error - Unknown rejection supplied by the import boundary
- * @returns Sanitized error feedback without echoing the rejection message
- */
 function createErrorFeedback(error: unknown): KnowledgeFolderImportFeedback {
   const code =
     error instanceof KnowledgeFolderImportError ? error.code : ("import_failed" as const);
   return { kind: "error", message: ERROR_MESSAGES[code] };
 }
 
-/**
- * Renders a folder-only picker backed by the stable Knowledge import port.
- *
- * The picker is created from the button's owning document so selections work
- * in Obsidian popout windows. Selected files are passed as opaque browser File
- * capabilities; no file name or external path is rendered or persisted here.
- *
- * @param props - Stable import capability for the current plugin lifecycle
- * @returns Folder import button and path-free aggregate feedback
- */
 export function KnowledgeFolderImportButton({
   port,
 }: KnowledgeFolderImportButtonProps): React.ReactElement {
@@ -81,7 +58,6 @@ export function KnowledgeFolderImportButton({
   const [importing, setImporting] = React.useState(false);
   const [feedback, setFeedback] = React.useState<KnowledgeFolderImportFeedback>();
 
-  /** Removes the current detached picker and its event listeners. */
   const releasePicker = React.useCallback(() => {
     const cleanup = pickerCleanupRef.current;
     pickerCleanupRef.current = null;
@@ -104,7 +80,6 @@ export function KnowledgeFolderImportButton({
     };
   }, [releasePicker]);
 
-  /** Imports the exact non-empty browser selection through a revocable operation. */
   const importSelection = React.useCallback(
     async (files: readonly File[]): Promise<void> => {
       if (files.length === 0 || !mountedRef.current) return;
@@ -131,7 +106,6 @@ export function KnowledgeFolderImportButton({
     [port]
   );
 
-  /** Opens one folder-only browser picker in the button's current owner document. */
   const openPicker = React.useCallback(() => {
     const button = buttonRef.current;
     if (!button || importing) return;
@@ -144,7 +118,6 @@ export function KnowledgeFolderImportButton({
     input.setAttribute("webkitdirectory", "");
     input.setAttribute("directory", "");
 
-    /** Removes this exact picker without consulting the current document. */
     function cleanupPicker(): void {
       input.removeEventListener("change", finishSelection);
       input.removeEventListener("cancel", cancelSelection);
@@ -153,14 +126,12 @@ export function KnowledgeFolderImportButton({
       if (pickerCleanupRef.current === cleanupPicker) pickerCleanupRef.current = null;
     }
 
-    /** Snapshots the selected File capabilities before releasing the picker. */
     function finishSelection(): void {
       const files = Array.from(input.files ?? []);
       releasePicker();
       if (files.length > 0) void importSelection(files);
     }
 
-    /** Releases a picker explicitly cancelled by the browser. */
     function cancelSelection(): void {
       releasePicker();
     }

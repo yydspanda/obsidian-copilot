@@ -6,13 +6,11 @@ import {
 import { createKnowledgeForwardRevisionStudioReviewRef } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
 import type { KnowledgeKnownAppliedWikiOutputsSession } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
-/** Closed UI-safe reasons why one known output cannot become a proposal. */
 export type KnowledgeForwardRevisionProposalActionIneligibilityReason =
   | "current_not_applied"
   | "selected_is_current"
   | "forward_origin_not_supported";
 
-/** Value-only proposal result that deliberately withholds publication identifiers. */
 export type KnowledgeForwardRevisionProposalActionResult =
   | Readonly<{ kind: "published"; reviewRef: string }>
   | Readonly<{
@@ -21,16 +19,7 @@ export type KnowledgeForwardRevisionProposalActionResult =
     }>
   | Readonly<{ kind: "stale" | "too_large" | "unavailable" }>;
 
-/** Opaque UI action surface for proposing one output disclosed by an authentic session. */
 export interface KnowledgeForwardRevisionProposalActionPort {
-  /**
-   * Proposes one exact opaque output without accepting page text or caller-chosen identifiers.
-   *
-   * @param session - Original authentic Known applied outputs session
-   * @param outputRef - Opaque output reference disclosed by that session
-   * @param signal - Caller cancellation signal
-   * @returns Closed value-only proposal result
-   */
   proposeKnownOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -67,20 +56,16 @@ const FORWARD_ORIGIN_NOT_SUPPORTED_RESULT = Object.freeze({
   reason: "forward_origin_not_supported" as const,
 });
 
-/** Reports whether one value is a bounded opaque forward Studio Review reference. */
 export function isKnowledgeForwardRevisionProposalReviewRef(value: unknown): value is string {
   return typeof value === "string" && REVIEW_REF_PATTERN.test(value);
 }
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether one caught value is platform-standard cancellation. */
 const isAbortError = isKnowledgeAbortError;
 
-/** Returns hidden state only for one exact module-authentic production adapter. */
 function requireAdapterState(value: unknown): Readonly<AdapterState> {
   try {
     if (
@@ -99,7 +84,6 @@ function requireAdapterState(value: unknown): Readonly<AdapterState> {
   throw createAbortError();
 }
 
-/** Removes the publication receipt and snapshots one coordinator result to a closed UI value. */
 function projectActionResult(
   result: Readonly<KnowledgeForwardRevisionProposalResult>
 ): Readonly<KnowledgeForwardRevisionProposalActionResult> {
@@ -133,14 +117,7 @@ function projectActionResult(
   }
 }
 
-/** Genuine adapter from the production coordinator to the receipt-free UI action surface. */
 export class KnowledgeProductionForwardRevisionProposalActionAdapter implements KnowledgeForwardRevisionProposalActionPort {
-  /**
-   * Captures one exact production coordinator and its required cross-generation drain owner.
-   *
-   * @param coordinator - Exact generation-owned production proposal coordinator
-   * @param retainDrain - Vault-lifecycle retention for every dispatched proposal operation
-   */
   constructor(
     coordinator: KnowledgeProductionForwardRevisionProposalCoordinator,
     retainDrain: (drain: Promise<void>) => void
@@ -161,20 +138,12 @@ export class KnowledgeProductionForwardRevisionProposalActionAdapter implements 
     Object.freeze(this);
   }
 
-  /** Requires one exact process-local production adapter. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeProductionForwardRevisionProposalActionAdapter {
     requireAdapterState(value);
   }
 
-  /**
-   * Delegates an authentic opaque selection and withholds every durable identifier.
-   *
-   * A pre-dispatch abort wins. After dispatch, the coordinator owns the durable
-   * boundary: a confirmed publication is returned even if cancellation arrives
-   * after its atomic publish call.
-   */
   async proposeKnownOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,

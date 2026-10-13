@@ -33,7 +33,6 @@ const MAX_TOTAL_AUTHORITY_EVIDENCE = 8_192;
 const MAX_AUTHORITY_STRING_CHARACTERS = 2_000_000;
 const MAX_TOTAL_AUTHORITY_CHARACTERS = 8_000_000;
 
-/** Stable Runtime authority already obtained through a Runtime/Vault/Runtime reproof. */
 export interface KnowledgeAppliedWikiPageProjectionAuthority {
   readonly bundleId: string;
   readonly runtimeRevision: number;
@@ -41,7 +40,6 @@ export interface KnowledgeAppliedWikiPageProjectionAuthority {
   readonly page: Readonly<KnowledgeRuntimeAppliedPageProvenance>;
 }
 
-/** Private exact authority recovered only from an authentic projected session. */
 export interface KnowledgeAppliedWikiEvidenceAuthority {
   readonly bundleId: string;
   readonly runtimeRevision: number;
@@ -67,12 +65,10 @@ interface ProjectedSessionBinding {
 
 const projectorStates = new WeakMap<object, WeakMap<object, Readonly<ProjectedSessionBinding>>>();
 
-/** Creates one sanitized projector failure. */
 function createProjectionError(): KnowledgeAppliedWikiPageInspectorError {
   return new KnowledgeAppliedWikiPageInspectorError("unavailable");
 }
 
-/** Reports whether one identifier is canonical and bounded. */
 function isIdentifier(value: unknown, maxLength = 1_024): value is string {
   return (
     typeof value === "string" &&
@@ -82,12 +78,10 @@ function isIdentifier(value: unknown, maxLength = 1_024): value is string {
   );
 }
 
-/** Reports whether one integer is a safe non-negative revision or time. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** Reads an exact plain data record without invoking any property accessors. */
 function readExactRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -116,7 +110,6 @@ function readExactRecord(
   }
 }
 
-/** Snapshots one dense bounded array without reading indexed getters. */
 function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -155,7 +148,6 @@ function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown
   }
 }
 
-/** Snapshots one exact locator variant before semantic validation. */
 function snapshotLocator(value: unknown): Readonly<ClaimCitation["locator"]> | undefined {
   const kindDescriptor =
     typeof value === "object" && value !== null
@@ -235,7 +227,6 @@ function snapshotLocator(value: unknown): Readonly<ClaimCitation["locator"]> | u
   return Object.freeze({ ...record }) as Readonly<ClaimCitation["locator"]>;
 }
 
-/** Snapshots and semantically validates one citation against its exact Source artifact. */
 function snapshotCitation(
   value: unknown,
   sourceId: string,
@@ -275,7 +266,6 @@ function snapshotCitation(
   return Object.freeze({ citation, characters });
 }
 
-/** Counts every citation string behind the UI projection within a fixed total budget. */
 function countCitationCharacters(citation: Readonly<ClaimCitation>): number {
   const locator = citation.locator;
   let total =
@@ -295,7 +285,6 @@ function countCitationCharacters(citation: Readonly<ClaimCitation>): number {
   return total;
 }
 
-/** Rejects any single hidden citation string that could bypass aggregate resource bounds. */
 function citationStringsAreBounded(citation: Readonly<ClaimCitation>): boolean {
   const locator = citation.locator;
   const values = [
@@ -315,7 +304,6 @@ function citationStringsAreBounded(citation: Readonly<ClaimCitation>): boolean {
   return values.every((value) => value.length <= MAX_AUTHORITY_STRING_CHARACTERS);
 }
 
-/** Snapshots every field of one contributing Source authority. */
 function snapshotSource(
   value: unknown,
   remainingEvidence: number,
@@ -407,7 +395,6 @@ function snapshotSource(
   });
 }
 
-/** Creates a descriptor-safe detached authority snapshot for all Sources and citations. */
 export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
   value: unknown
 ): Readonly<KnowledgeAppliedWikiPageProjectionAuthority> {
@@ -512,7 +499,6 @@ export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
   });
 }
 
-/** Creates a page-version-bound opaque reference without disclosing its inputs. */
 function createPageRef(authority: KnowledgeAppliedWikiPageProjectionAuthority): string {
   return sha256(
     [
@@ -526,7 +512,6 @@ function createPageRef(authority: KnowledgeAppliedWikiPageProjectionAuthority): 
   );
 }
 
-/** Creates one page-bound opaque contributing-Source reference. */
 function createSourceRef(
   pageRef: string,
   source: Readonly<KnowledgeRuntimeAppliedSourceProvenance>
@@ -543,12 +528,10 @@ function createSourceRef(
   );
 }
 
-/** Rebinds a Review evidence ref to one exact page and contributing Source. */
 function createEvidenceRef(pageRef: string, sourceRef: string, reviewEvidenceRef: string): string {
   return sha256([EVIDENCE_REF_NAMESPACE, pageRef, sourceRef, reviewEvidenceRef].join("\n"));
 }
 
-/** Creates one detached private evidence authority. */
 function createEvidenceAuthority(
   authority: KnowledgeAppliedWikiPageProjectionAuthority,
   source: Readonly<KnowledgeRuntimeAppliedSourceProvenance>,
@@ -574,7 +557,6 @@ function createEvidenceAuthority(
   });
 }
 
-/** Returns hidden projector state only for an authentic instance. */
 function requireSessionBindings(
   projector: unknown
 ): WeakMap<object, Readonly<ProjectedSessionBinding>> {
@@ -590,20 +572,12 @@ function requireSessionBindings(
   return bindings;
 }
 
-/**
- * Projects stable current-page provenance while retaining actionable evidence in WeakMap state.
- *
- * The class is intentionally not a general-purpose DTO verifier. Only sessions
- * created by this exact projector instance can recover private evidence authority.
- */
 export class KnowledgeAppliedWikiPageInspectionProjector {
-  /** Creates one empty projector-owned capability namespace. */
   constructor() {
     projectorStates.set(this, new WeakMap());
     Object.freeze(this);
   }
 
-  /** Creates a bounded frozen UI session from one already re-proved page authority. */
   project(
     authorityValue: KnowledgeAppliedWikiPageProjectionAuthority
   ): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
@@ -675,7 +649,6 @@ export class KnowledgeAppliedWikiPageInspectionProjector {
     }
   }
 
-  /** Resolves private authority only from this projector's exact authentic session. */
   resolveEvidence(
     session: Readonly<KnowledgeAppliedWikiPageInspectionSession>,
     evidenceRef: string

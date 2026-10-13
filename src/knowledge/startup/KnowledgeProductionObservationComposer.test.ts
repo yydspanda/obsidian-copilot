@@ -2,12 +2,10 @@ jest.mock("obsidian", () => {
   class FileSystemAdapter {}
 
   class TFile {
-    /** Creates one mutable fake Vault file. */
     constructor(public path: string) {}
   }
 
   class TFolder {
-    /** Creates one mutable fake Vault folder. */
     constructor(public path: string) {}
   }
 
@@ -99,7 +97,6 @@ interface Deferred<T> {
   resolve(value: T): void;
 }
 
-/** Creates one externally settled Promise for lifecycle race assertions. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -108,13 +105,11 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Flushes coalesced value-free Studio hints without advancing timers. */
 async function flushStudioHints(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/** Waits bounded Promise turns for one asynchronous Studio state transition. */
 async function waitForStudioState(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return;
@@ -123,7 +118,6 @@ async function waitForStudioState(predicate: () => boolean): Promise<void> {
   throw new Error("Timed out waiting for Knowledge Studio state");
 }
 
-/** Creates a timer port whose callbacks remain inert unless a retry is actually scheduled. */
 function createWorkerScheduler(): KnowledgeProductionWorkerScheduler {
   return {
     now: () => Date.now(),
@@ -132,11 +126,6 @@ function createWorkerScheduler(): KnowledgeProductionWorkerScheduler {
   };
 }
 
-/**
- * Creates one strict Bundle used by the real production loader.
- *
- * @param patch - Optional Bundle fields replaced for one test
- */
 function createBundle(patch: Partial<KnowledgeBundleConfig> = {}): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -149,7 +138,6 @@ function createBundle(patch: Partial<KnowledgeBundleConfig> = {}): KnowledgeBund
   };
 }
 
-/** Creates already-hydrated settings with test-only placeholder credentials. */
 function createSettings(): KnowledgeProductionPreflightSettingsInput {
   return {
     temperature: 0,
@@ -171,7 +159,6 @@ function createSettings(): KnowledgeProductionPreflightSettingsInput {
   };
 }
 
-/** Creates a native-fetch-shaped spy that fails if observation invokes a model route. */
 function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   return jest.fn<ReturnType<KnowledgeDeepSeekFetchPort>, Parameters<KnowledgeDeepSeekFetchPort>>(
     async () => {
@@ -180,7 +167,6 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
-/** Creates a supported draft or an existing-page no-change response for the exact request. */
 function createGenerationResponse(
   init: RequestInit,
   outcome: "write" | "unchanged" = "write"
@@ -210,7 +196,6 @@ function createGenerationResponse(
   );
 }
 
-/** Creates one strict DeepSeek response with test-controlled model content. */
 function createModelResponse(content: string): KnowledgeDeepSeekHttpResponse {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
@@ -253,18 +238,15 @@ function createModelResponse(content: string): KnowledgeDeepSeekHttpResponse {
   };
 }
 
-/** Creates a mutable fake TFile despite Obsidian's opaque public constructor. */
 function createFile(path: string): TFile {
   const FileConstructor = TFile as unknown as new (path: string) => TFile;
   return new FileConstructor(path);
 }
 
-/** Encodes exact UTF-8 text into a detached ArrayBuffer. */
 function encodeText(text: string): ArrayBuffer {
   return new Uint8Array(new TextEncoder().encode(text)).buffer;
 }
 
-/** Minimal exact App/Vault lifecycle harness used by the real production adapters. */
 class ProductionVaultHarness {
   readonly files = new Map<string, ArrayBuffer>();
   readonly loadedFiles = new Map<string, TFile>();
@@ -307,12 +289,10 @@ class ProductionVaultHarness {
     }),
   } as unknown as jest.Mocked<Vault>;
 
-  /** Returns one App identity permanently bound to this Vault. */
   createApp(): App {
     return { vault: this.vault } as unknown as App;
   }
 
-  /** Adds one loaded file with exact adapter bytes. */
   addFile(path: string, bytes: ArrayBuffer): TFile {
     const file = createFile(path);
     this.loadedFiles.set(path, file);
@@ -320,7 +300,6 @@ class ProductionVaultHarness {
     return file;
   }
 
-  /** Replaces the exact adapter bytes for one already loaded file. */
   updateFile(file: TFile, bytes: ArrayBuffer): void {
     if (this.loadedFiles.get(file.path) !== file) {
       throw new Error("Expected one loaded fake file");
@@ -328,29 +307,24 @@ class ProductionVaultHarness {
     this.files.set(file.path, bytes.slice(0));
   }
 
-  /** Emits one Vault event through every currently installed listener. */
   trigger(name: VaultEventName, file: TAbstractFile, oldPath?: string): void {
     for (const handler of [...(this.handlers.get(name)?.values() ?? [])]) {
       handler(file, oldPath);
     }
   }
 
-  /** Counts listener references still owned by the current observation session. */
   activeListenerCount(): number {
     return [...this.handlers.values()].reduce((total, handlers) => total + handlers.size, 0);
   }
 }
 
-/** Memory Runtime file that loses one acknowledgement after a durable no-change commit. */
 class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
   private armed = false;
 
-  /** Arms one post-commit transport failure without changing the committed bytes. */
   arm(): void {
     this.armed = true;
   }
 
-  /** Commits through the base atomic file and then drops the matching acknowledgement once. */
   override async process(transform: (currentContent: string) => string): Promise<string> {
     const committed = await super.process(transform);
     if (this.armed && committed.includes(KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY)) {
@@ -361,13 +335,6 @@ class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
   }
 }
 
-/**
- * Mints one authentic same-snapshot workflow lease through production preflight.
- *
- * @param fetchPort - Test model transport that observation must not call
- * @param bundleInput - Bundle or Bundles projected into the production preflight snapshot
- * @param createResources - Exact parser/profile registry captured by preflight
- */
 async function createAdmission(
   fetchPort: KnowledgeDeepSeekFetchPort,
   bundleInput: KnowledgeBundleConfig | readonly KnowledgeBundleConfig[] = createBundle(),
@@ -403,7 +370,6 @@ async function createAdmission(
   return { lifecycle, admission: result.admission, runtimeClaim };
 }
 
-/** Creates an initialized Runtime whose Manifest registers the exact source. */
 async function createRuntime(
   runtimeClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim,
   file: KnowledgeExecutionMemoryRuntimeFile = new KnowledgeExecutionMemoryRuntimeFile()
@@ -421,7 +387,6 @@ async function createRuntime(
   return runtime;
 }
 
-/** Seeds a complete historical Apply snapshot instead of bypassing protected Manifest writes. */
 async function seedOwnedPage(
   file: KnowledgeExecutionMemoryRuntimeFile,
   runtime: KnowledgeRuntimeStore,
@@ -489,7 +454,6 @@ async function seedOwnedPage(
   vault.addFile(WIKI_PATH, encodeText(WIKI_CONTENT));
 }
 
-/** Loads a legacy zero-target success with its exact Queue and consumed-observation proof. */
 async function seedLegacyZeroPageHistory(
   file: KnowledgeExecutionMemoryRuntimeFile,
   runtime: KnowledgeRuntimeStore
@@ -560,7 +524,6 @@ async function seedLegacyZeroPageHistory(
   file.replaceContent(JSON.stringify(parseKnowledgeRuntimeStoreSnapshot(state)));
 }
 
-/** Waits for a durable worker result, with a bounded failure instead of a dangling refresh wait. */
 async function waitForReview(runtime: KnowledgeRuntimeStore): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const queue = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
@@ -831,13 +794,12 @@ describe("KnowledgeProductionObservationComposer", () => {
     if (!baseParser) throw new Error("Expected one production parser");
     const profileProbe = { calls: 0, fail: false };
     const controlledParser: KnowledgeByteParser = Object.freeze({
-      /** Reports the original profile until the test arms the broken registry. */
       getProfile: () => {
         profileProbe.calls += 1;
         if (profileProbe.fail) throw new Error("test-only parser profile failure");
         return baseParser.getProfile();
       },
-      /** Delegates parsing to the exact production parser. */
+
       parse: (...args: Parameters<KnowledgeByteParser["parse"]>) => baseParser.parse(...args),
     });
     const controlledResources: KnowledgeProductionPipelineResources = Object.freeze({

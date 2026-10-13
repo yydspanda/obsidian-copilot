@@ -24,7 +24,6 @@ import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 
-/** Creates a valid Windows-only knowledge Bundle. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -36,7 +35,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates a valid durable Manifest owned by the default test Bundle. */
 function createManifest(
   sourcePath = "Sources/研究.md",
   generatedPagePath = "Wiki/研究.md"
@@ -63,7 +61,6 @@ function createManifest(
   };
 }
 
-/** Creates a valid quote locator whose excerpt hash is internally consistent. */
 function createLocator(excerpt = "支持这一结论的证据"): SourceLocator {
   return {
     kind: "quote",
@@ -75,7 +72,6 @@ function createLocator(excerpt = "支持这一结论的证据"): SourceLocator {
   };
 }
 
-/** Creates a valid citation for ChangeSet and OKF validation. */
 function createCitation(excerpt?: string): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -85,7 +81,6 @@ function createCitation(excerpt?: string): ClaimCitation {
   };
 }
 
-/** Creates a valid proposed create operation. */
 function createFileChange(path = "Wiki/主题.md"): KnowledgeFileChange {
   const afterContent = "# 主题\n\n正文\n";
   return {
@@ -100,7 +95,6 @@ function createFileChange(path = "Wiki/主题.md"): KnowledgeFileChange {
   };
 }
 
-/** Creates a valid user-reviewable ChangeSet. */
 function createChangeSet(path?: string): KnowledgeChangeSet {
   return {
     id: "changeset-1",
@@ -115,7 +109,6 @@ function createChangeSet(path?: string): KnowledgeChangeSet {
   };
 }
 
-/** Extracts stable diagnostic codes for focused semantic assertions. */
 function diagnosticCodes(result: { diagnostics: { code: string }[] }): string[] {
   return result.diagnostics.map((diagnostic) => diagnostic.code);
 }

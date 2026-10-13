@@ -1,5 +1,135 @@
 # Release Notes
 
+# v4.0.13 - Codex Safe mode and custom command default model
+
+[![Demo video: Obsidian Copilot 4.0.13: Codex asks before it edits](https://github.com/user-attachments/assets/adeab3df-bd00-4425-8dc2-bc39146669b8)](https://youtube.com/shorts/VNH0E_hcrMQ?feature=share)
+
+Codex now asks before it changes your vault in Safe mode. Approve or reject each edit from Agent Chat, the same way you do with Claude and OpenCode.
+
+Commands also get their own default model, and you can run a command again straight from its result window. This release installs OpenCode 2.0.22 and Codex 2.0.1.
+
+## ✨ Enhancements
+
+- Codex in Safe mode now asks before each edit to your vault. Approve the edit to apply it, or reject it to keep your notes unchanged. ([#3447](https://github.com/logancyang/obsidian-copilot/pull/3447), @zeroliu)
+- Codex chats can use GPT-6.1 Sol. Pick it from the model picker once Copilot installs Codex 2.0.1. ([#3447](https://github.com/logancyang/obsidian-copilot/pull/3447), @zeroliu)
+- Choose a default model for commands in **Settings → Copilot → Command**. Saved commands, Quick Command, and Quick Ask use it unless a command names its own model. ([#3443](https://github.com/logancyang/obsidian-copilot/pull/3443), @zeroliu)
+- Click **Run again** in a command's result window to rerun the same command, for example after switching to another model. ([#3443](https://github.com/logancyang/obsidian-copilot/pull/3443), @zeroliu)
+- Copy Chat Link also works on a chat you have not saved. Copilot saves the chat as a note, then copies a link that reopens it. ([#3392](https://github.com/logancyang/obsidian-copilot/pull/3392), @zeroliu)
+- Agents use their own web search, page fetch, and PDF reading by default. Turn the Copilot web search, web fetch, and read PDF skills on in **Settings → Agents → Skills → Built-in Skills**. ([#3500](https://github.com/logancyang/obsidian-copilot/pull/3500), @zeroliu)
+
+## 🛠️ Bug Fixes
+
+- OpenCode chats start on your default model and offer only the models you enabled for OpenCode. ([#3498](https://github.com/logancyang/obsidian-copilot/pull/3498), @zeroliu)
+- The model picker shows **Loading models…** while any agent chat starts. ([#3503](https://github.com/logancyang/obsidian-copilot/pull/3503), @zeroliu)
+- Open chats keep their model and effort when the agent restarts. ([#3323](https://github.com/logancyang/obsidian-copilot/pull/3323), @zeroliu)
+- The OpenCode model picker shows the provider and model names you set for a custom OpenAI-compatible endpoint. ([#3497](https://github.com/logancyang/obsidian-copilot/pull/3497), @zeroliu)
+- On Windows, web search, web fetch, YouTube transcript, and the other relay skills return non-English text correctly. ([#3488](https://github.com/logancyang/obsidian-copilot/pull/3488), @logancyang)
+- Quick Ask shows a single divider above its bottom row. ([#3489](https://github.com/logancyang/obsidian-copilot/pull/3489), @zeroliu)
+
+## ⚠️ Compatibility Notes
+
+- Copilot now installs OpenCode 2.0.22 and Codex (codex-acp) 2.0.1. Copilot-managed installs download the new versions the next time Copilot loads. Custom binaries need OpenCode 2.0.21 or newer and codex-acp 2.0.0 or newer; open the agent's **Configure** dialog to switch to the Copilot-managed version. ([#3498](https://github.com/logancyang/obsidian-copilot/pull/3498), [#3447](https://github.com/logancyang/obsidian-copilot/pull/3447), @zeroliu)
+- The Copilot web search, web fetch, and read PDF skills are off on existing installs too. In Self-Host Mode with OpenCode, turn on `copilot-web-search` to keep web search. ([#3500](https://github.com/logancyang/obsidian-copilot/pull/3500), @zeroliu)
+- Commands that inherited the chat model now use the command default model. If you have not set one, the command asks you to choose one in **Settings → Copilot → Command**. ([#3443](https://github.com/logancyang/obsidian-copilot/pull/3443), @zeroliu)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.12 - OpenCode 2 in your vault
+
+[![Demo video: OpenCode 2 in Your Vault: Obsidian Copilot 4.0.12](https://github.com/user-attachments/assets/76f592d9-74ce-43cc-85f9-a8312fe16fc9)](https://www.youtube.com/shorts/IjjXVFNFO0k)
+
+OpenCode, the agent runtime behind Copilot Plus and your own model providers, is getting a major update. It will allow Copilot to better control model context, permissions, and tool executions. More improvements to OpenCode will come soon.
+
+## ✨ Enhancements
+
+- Link back to a saved Quick Chat or Agent conversation from your notes. Click **Copy Chat Link** beside New Chat, then paste the link into a note to reopen the conversation. ([#3369](https://github.com/logancyang/obsidian-copilot/pull/3369), @zeroliu)
+
+  ![Copy Chat Link beside New Chat in the chat composer](https://github.com/user-attachments/assets/d8f285a5-6ee0-4338-8ff3-a458d5030d53)
+
+- Copilot agent is fine-tuned to work better with your frontier AI agent with our up-to-date system prompts. ([#3366](https://github.com/logancyang/obsidian-copilot/pull/3366), @zeroliu)
+- Copilot is now fully compatible with OpenCode 2. ([#3365](https://github.com/logancyang/obsidian-copilot/pull/3365), @zeroliu)
+- Use the new Copilot button in the note header to quickly access Agent Chat with the note attached. ([#3363](https://github.com/logancyang/obsidian-copilot/pull/3363), @zeroliu)
+
+  ![Copilot icon in the top-right corner of the note header](https://github.com/user-attachments/assets/6adba14e-c049-452b-9080-3b5486b5ad14)
+
+- Agent responses now auto-scroll. You can still scroll up to read at your own pace. ([#3358](https://github.com/logancyang/obsidian-copilot/pull/3358), @zeroliu)
+
+  ![Agent Chat automatically follows a streaming reply](https://github.com/user-attachments/assets/7d4f5626-71a7-452d-963f-ae1ff3dec6e4)
+
+- See what Codex installation is doing, with elapsed connection time, downloaded bytes, and named setup stages. ([#3361](https://github.com/logancyang/obsidian-copilot/pull/3361), @zeroliu)
+
+## 🛠️ Bug Fixes
+
+- Selected note text now reliably shows up as chat context. ([#3368](https://github.com/logancyang/obsidian-copilot/pull/3368), @zeroliu)
+
+## ⚠️ Compatibility Notes
+
+OpenCode users need version 2.0.3 or newer. OpenCode 1 and earlier 2.0.x versions no longer run; open OpenCode **Configure** and choose the Copilot-managed 2.0.3 version. Newer custom versions remain selectable, but affected releases can omit configured models when a chat starts. ([#3365](https://github.com/logancyang/obsidian-copilot/pull/3365), @zeroliu)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.11 - Plan together with Codex
+
+Work through an approach with Codex before it changes your notes. Plan mode now brings the plan back for your review, and Codex questions appear directly in Agent Chat so you can guide the next step.
+
+## ✨ Enhancements
+
+- Streaming replies do less rendering work in long Agent Chats. A 30-message streaming benchmark on macOS measured 47.1% less renderer scripting time. ([#3349](https://github.com/logancyang/obsidian-copilot/pull/3349), @zeroliu)
+- Use gpt-6-sol and gpt-6-luna with Codex. Copilot now manages codex-acp 1.13.0. ([#3337](https://github.com/logancyang/obsidian-copilot/pull/3337), @zeroliu)
+- Review Codex's plan before it starts making changes. Choose Plan to collaborate on the approach, then approve the inline plan card to continue in Auto. ([#3345](https://github.com/logancyang/obsidian-copilot/pull/3345), @zeroliu)
+- Answer Codex questions inside Agent Chat. Choose an option or write your own answer when Codex needs your input, in Safe, Plan, or Auto mode. ([#3340](https://github.com/logancyang/obsidian-copilot/pull/3340), @zeroliu)
+- See which chats still have an open agent session in Recent Chats and Chat History. Use Close session to release one while keeping the saved conversation. ([#3213](https://github.com/logancyang/obsidian-copilot/pull/3213), @zeroliu)
+- Custom Codex and OpenCode binary setup now explains compatibility risks and recommends the version managed by Copilot. ([#3341](https://github.com/logancyang/obsidian-copilot/pull/3341), @zeroliu)
+- Updated how Copilot starts OpenCode in preparation for OpenCode 2. ([#3342](https://github.com/logancyang/obsidian-copilot/pull/3342), @zeroliu)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.10 - Recover from an outdated agent
+
+A Copilot update can move the version your coding agent needs, and an agent that fell behind used to leave Agent Chat stuck: saved models greyed out, a single button that only ran a managed download, and no way back to the conversation you were in. An agent that needs updating now stays usable. Its saved models stay selectable, and picking one is held until the update lands, so your conversation and unsent text survive the trip. Agent settings and the chat status card both name the version Copilot needs and offer **Configure**, which opens the dialog where a managed download and your own binary are both available. ([#3281](https://github.com/logancyang/obsidian-copilot/pull/3281), [#3283](https://github.com/logancyang/obsidian-copilot/pull/3283), [#3284](https://github.com/logancyang/obsidian-copilot/pull/3284), [#3285](https://github.com/logancyang/obsidian-copilot/pull/3285), @zeroliu)
+
+![Copilot agent settings showing opencode marked Incompatible version with its required version and a Configure action](https://github.com/user-attachments/assets/be6ea58e-1c2e-4507-afef-e57432024298)
+
+## ✨ Enhancements
+
+- An agent that needs updating keeps its saved models in the picker. Choosing one is held until you finish the update, and the chat you were in stays open behind it with its unsent text. ([#3285](https://github.com/logancyang/obsidian-copilot/pull/3285), [#3283](https://github.com/logancyang/obsidian-copilot/pull/3283), @zeroliu)
+- **Configure** replaces **Upgrade** on the agent status card and in settings, and opens the configuration dialog instead of starting a download. Both **Managed by Copilot** and **My own binary** are available there. ([#3284](https://github.com/logancyang/obsidian-copilot/pull/3284), @zeroliu)
+- Managed downloads now fetch opencode 1.18.31 and codex-acp 1.12.0, which bundles Codex CLI 0.154.0. ([#3286](https://github.com/logancyang/obsidian-copilot/pull/3286), @zeroliu)
+- Agent installs no longer race each other. Install work for one agent runs in order, and opening a chat waits for it, so a new session starts on the installation you just applied. ([#3282](https://github.com/logancyang/obsidian-copilot/pull/3282), @zeroliu)
+- Mention one agent other than the chat's main agent and only that agent answers, with no extra summary of its single reply. ([#3263](https://github.com/logancyang/obsidian-copilot/pull/3263), @logancyang)
+- OpenArtifacts pages show the note's title in the page itself, so readers keep the note's identity when a browser tab truncates it. ([#3264](https://github.com/logancyang/obsidian-copilot/pull/3264), @logancyang)
+
+## 🛠️ Bug Fixes
+
+- Stopping a turn returns queued follow-ups to the message box instead of deleting them, along with the notes and images attached to them. ([#3266](https://github.com/logancyang/obsidian-copilot/pull/3266), @zeroliu)
+- Diagnostic logs containing a very long email address or Basic credential are redacted correctly and are included in issue reports again. ([#3261](https://github.com/logancyang/obsidian-copilot/pull/3261), @logancyang)
+
+## ⚠️ Compatibility Notes
+
+- Managed and custom agent installs now share one support floor: the managed release version. A custom opencode below 1.18.31, or a custom Codex adapter below 1.12.0, reports as unsupported and will not run, and Copilot names the version it needs. An outdated but genuine Codex adapter is reported as needing an update and keeps its recorded path, instead of being offered a first-time install. ([#3287](https://github.com/logancyang/obsidian-copilot/pull/3287), [#3281](https://github.com/logancyang/obsidian-copilot/pull/3281), @zeroliu)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
 # v4.0.9 - Use remote Miyo in Copilot
 
 ![Latest Miyo settings showing the connected Local server, Remote server setup, and Semantic search for agents](https://raw.githubusercontent.com/logancyang/obsidian-copilot/5a7041a3268eef309d4763147ac7d472efeb0e82/release-media/4.0.9/miyo-dark-atom.png)

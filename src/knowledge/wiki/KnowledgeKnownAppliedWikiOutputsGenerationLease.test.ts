@@ -3,7 +3,6 @@ import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/Know
 
 const delegate = Object.freeze({}) as KnowledgeKnownAppliedWikiOutputsPort;
 
-/** Requires one operation to throw a platform AbortError. */
 function expectAbortError(operation: () => void): void {
   let caught: unknown;
   try {

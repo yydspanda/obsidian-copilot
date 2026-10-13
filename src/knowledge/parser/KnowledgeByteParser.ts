@@ -12,13 +12,10 @@ import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-/** Shared raw-byte ceiling for production source reads and byte parsers. */
 export const MAX_KNOWLEDGE_SOURCE_BYTES = 8_388_608;
 
-/** Hard parser-output ceiling aligned with the production evidence-item budget. */
 export const MAX_KNOWLEDGE_PARSED_PDF_PAGES = 2_048;
 
-/** Exact, already-observed bytes transferred to a path-incapable parser. */
 export interface KnowledgeByteParserRequest {
   sourceId: string;
   sourcePath: string;
@@ -26,62 +23,42 @@ export interface KnowledgeByteParserRequest {
   bytes: Uint8Array;
 }
 
-/** Production parser projection: one deterministic, locator-addressable artifact. */
 export interface KnowledgeParsedSource {
   artifact: TextArtifactObservation | PdfArtifactObservation;
 }
 
-/**
- * Parser capability whose API deliberately contains no App, Vault, TFile,
- * cache, settings, URL, or path-reader service.
- */
 export interface KnowledgeByteParser {
-  /** Returns the complete behavior profile used by pipeline fingerprinting. */
   getProfile(): KnowledgeSourceParserProfile;
 
-  /** Parses only the exact bytes supplied by the execution boundary. */
   parse(request: Readonly<KnowledgeByteParserRequest>, signal: AbortSignal): Promise<unknown>;
 }
 
-/** Sanitized parser input failure that retains no source text or path. */
 export class KnowledgeByteParserInputError extends TypeError {
-  /** Creates one stable parser-input failure. */
   constructor() {
     super("The knowledge byte parser input is invalid");
     this.name = "KnowledgeByteParserInputError";
   }
 }
 
-/** Sanitized parser success-payload failure. */
 export class KnowledgeByteParserOutputError extends TypeError {
-  /** Creates one stable parser-output failure. */
   constructor() {
     super("The knowledge byte parser returned an invalid artifact");
     this.name = "KnowledgeByteParserOutputError";
   }
 }
 
-/** Creates a platform-compatible cancellation without retaining a signal reason. */
 export function createKnowledgeParserAbortError(): Error {
   const error = new Error("The knowledge byte parser operation was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/** Stops work at a parser boundary when its owning execution generation was cancelled. */
 export function throwIfKnowledgeParserAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw createKnowledgeParserAbortError();
   }
 }
 
-/**
- * Reads an exact plain record entirely through enumerable own data descriptors.
- *
- * @param value - Unknown runtime value
- * @param keys - Complete required field set
- * @returns Detached one-read snapshot, or undefined for any exotic shape
- */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -117,13 +94,6 @@ function snapshotExactRecord(
   }
 }
 
-/**
- * Reads one dense plain array without invoking accessors or inherited behavior.
- *
- * @param value - Unknown runtime array
- * @param maxItems - Largest accepted dense length
- * @returns Detached one-read item snapshot, or undefined for any exotic shape
- */
 function snapshotExactArray(value: unknown, maxItems: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
@@ -162,17 +132,10 @@ function snapshotExactArray(value: unknown, maxItems: number): readonly unknown[
   }
 }
 
-/** Checks one identifier without trimming or otherwise changing its identity. */
 function isCanonicalText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/**
- * Revalidates the exact byte request while preserving the reader-owned byte reference.
- *
- * @param value - Unknown execution-boundary request
- * @returns Frozen request whose bytes are the original exact Uint8Array
- */
 export function verifyKnowledgeByteParserRequest(
   value: unknown
 ): Readonly<KnowledgeByteParserRequest> {
@@ -203,14 +166,6 @@ export function verifyKnowledgeByteParserRequest(
   });
 }
 
-/**
- * Recomputes and freezes a parser's data-only success payload.
- *
- * @param value - Unknown parser success
- * @param request - Exact request the parser received
- * @param maxCharacters - Execution-owned decoded-text limit
- * @returns Detached immutable artifact
- */
 export function verifyKnowledgeParsedSource(
   value: unknown,
   request: Readonly<KnowledgeByteParserRequest>,

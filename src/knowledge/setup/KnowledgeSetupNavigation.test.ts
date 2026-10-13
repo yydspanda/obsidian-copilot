@@ -9,7 +9,6 @@ const VALID_BUNDLE = Object.freeze({
   reviewMode: "always",
 });
 
-/** Creates an inert navigation dependency harness with inspectable effects. */
 function createHarness() {
   const records: Array<{
     project: { id: string; knowledgeBundle?: unknown };

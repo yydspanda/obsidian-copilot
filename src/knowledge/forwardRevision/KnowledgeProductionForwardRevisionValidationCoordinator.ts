@@ -62,7 +62,6 @@ const VALIDATOR_IMPLEMENTATION_DIGEST = sha256(
     "runtime-sandwich+workflow-plan+bounded-vault-read+review-validator"
 );
 
-/** Stable value-free failures exposed by the read-only validation coordinator. */
 export type KnowledgeForwardRevisionValidationCoordinatorErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -74,14 +73,12 @@ export type KnowledgeForwardRevisionValidationCoordinatorErrorCode =
   | "resource_limit"
   | "aborted";
 
-/** Exact request whose proposal and command are rejoined to current Runtime authority. */
 export interface KnowledgeForwardRevisionValidationRequest {
   readonly proposal: unknown;
   readonly proposalDigest: string;
   readonly command: unknown;
 }
 
-/** Detached material cryptographically and process-locally bound by a genuine capability. */
 export interface KnowledgeForwardRevisionValidationCapabilityProjectionV1 {
   readonly version: 1;
   readonly kind: "forward_revision_validation_capability_projection";
@@ -100,7 +97,6 @@ export interface KnowledgeForwardRevisionValidationCapabilityProjectionV1 {
   readonly validationReadSet: readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[];
 }
 
-/** Exact forward-only candidate validated without entering the legacy Review protocol. */
 export interface KnowledgeForwardRevisionValidatedCandidateV1 {
   readonly version: 1;
   readonly kind: "forward_revision_validated_candidate";
@@ -116,7 +112,6 @@ export interface KnowledgeForwardRevisionValidatedCandidateV1 {
   }>;
 }
 
-/** Closed read-only result; a byte-identical edited body deliberately mints no capability. */
 export type KnowledgeForwardRevisionValidationCoordinatorResult =
   | Readonly<{
       kind: "validated";
@@ -134,9 +129,7 @@ const coordinatorErrorCodes = new WeakMap<
   KnowledgeForwardRevisionValidationCoordinatorErrorCode
 >();
 
-/** Sanitized coordinator failure that never retains caller material or dependency causes. */
 export class KnowledgeForwardRevisionValidationCoordinatorError extends Error {
-  /** Creates an authentic error only for this module's private failure path. */
   private constructor(token: symbol, code: KnowledgeForwardRevisionValidationCoordinatorErrorCode) {
     super("Forward revision validation could not be completed");
     if (token !== CAPABILITY_TOKEN) throw new TypeError("Invalid validation error");
@@ -146,7 +139,6 @@ export class KnowledgeForwardRevisionValidationCoordinatorError extends Error {
     Object.freeze(this);
   }
 
-  /** Returns the stable category only for a module-minted sanitized failure. */
   static inspect(
     value: unknown
   ): KnowledgeForwardRevisionValidationCoordinatorErrorCode | undefined {
@@ -155,14 +147,12 @@ export class KnowledgeForwardRevisionValidationCoordinatorError extends Error {
       : undefined;
   }
 
-  /** Returns this authentic error's stable value-free category. */
   get code(): KnowledgeForwardRevisionValidationCoordinatorErrorCode {
     const code = KnowledgeForwardRevisionValidationCoordinatorError.inspect(this);
     if (!code) throw new TypeError("Invalid validation error");
     return code;
   }
 
-  /** Mints one frozen sanitized failure for an internal coordinator boundary. */
   static create(
     token: symbol,
     code: KnowledgeForwardRevisionValidationCoordinatorErrorCode
@@ -195,17 +185,14 @@ let mintValidationCapability:
   | ((state: Readonly<ValidationCapabilityState>) => KnowledgeForwardRevisionValidationCapability)
   | undefined;
 
-/** Throws one authentic fixed coordinator failure. */
 function fail(code: KnowledgeForwardRevisionValidationCoordinatorErrorCode): never {
   throw KnowledgeForwardRevisionValidationCoordinatorError.create(CAPABILITY_TOKEN, code);
 }
 
-/** Stops work without retaining an arbitrary AbortSignal reason. */
 function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) fail("aborted");
 }
 
-/** Re-proves one exact Runtime/workflow/Vault owner and its generation lease. */
 function assertCoordinatorCurrent(state: Readonly<CoordinatorState>): void {
   try {
     state.assertCurrent();
@@ -228,12 +215,10 @@ function assertCoordinatorCurrent(state: Readonly<CoordinatorState>): void {
   }
 }
 
-/** Hashes one internal JSON projection under an explicit protocol namespace. */
 function digestValue(namespace: string, value: JsonValue): string {
   return sha256(`${namespace}\n${canonicalizeJson(value)}`);
 }
 
-/** Snapshots the three-field validation request without invoking caller accessors. */
 function snapshotValidationRequest(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationRequest> {
@@ -275,7 +260,6 @@ function snapshotValidationRequest(
   }
 }
 
-/** Detaches already-validated historical citations for the forward candidate. */
 function cloneCitations(values: readonly Readonly<ClaimCitation>[]): ClaimCitation[] {
   return values.map((citation) => ({
     citationId: citation.citationId,
@@ -285,7 +269,6 @@ function cloneCitations(values: readonly Readonly<ClaimCitation>[]): ClaimCitati
   }));
 }
 
-/** Derives the single deterministic update owned by the forward protocol. */
 function createForwardChange(
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
   proposalDigest: string,
@@ -314,7 +297,6 @@ function createForwardChange(
   });
 }
 
-/** Freezes one successfully validated forward-only candidate and its full body. */
 function createValidatedCandidate(
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
   change: Readonly<Extract<KnowledgeFileChange, { operation: "update" }>>,
@@ -343,7 +325,6 @@ function createValidatedCandidate(
   });
 }
 
-/** Computes the canonical identity of one complete forward-only candidate. */
 function createForwardCandidateDigest(
   value: Readonly<KnowledgeForwardRevisionValidatedCandidateV1>
 ): string {
@@ -353,7 +334,6 @@ function createForwardCandidateDigest(
   );
 }
 
-/** Removes only enclosing Runtime-envelope volatility from an authority comparison. */
 function projectAuthoritySemantics(
   value: Readonly<KnowledgeForwardRevisionValidationAuthorityV1>
 ): JsonValue {
@@ -393,7 +373,6 @@ function projectAuthoritySemantics(
   };
 }
 
-/** Requires one later Runtime proof to retain identical proposal/source semantics. */
 function assertAuthoritySandwich(
   before: Readonly<KnowledgeForwardRevisionValidationAuthorityV1>,
   after: Readonly<KnowledgeForwardRevisionValidationAuthorityV1>
@@ -410,7 +389,6 @@ function assertAuthoritySandwich(
   }
 }
 
-/** Projects parser observations into the strict identity-only durable read-set. */
 export function createKnowledgeForwardRevisionValidationReadSet(
   preparation: Readonly<KnowledgeSourceParsePreparation>
 ): readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[] {
@@ -428,7 +406,6 @@ export function createKnowledgeForwardRevisionValidationReadSet(
   );
 }
 
-/** Captures one exact fresh Wiki page through the genuine bounded visitor. */
 async function readCurrentPage(
   state: Readonly<CoordinatorState>,
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
@@ -474,7 +451,6 @@ async function readCurrentPage(
   return content;
 }
 
-/** Requires the authentic preparation to equal the current Runtime source/Manifest tuple. */
 function assertPreparationAuthority(
   preparation: Readonly<KnowledgeSourceParsePreparation>,
   authority: Readonly<KnowledgeForwardRevisionValidationAuthorityV1>
@@ -511,7 +487,6 @@ function assertPreparationAuthority(
   }
 }
 
-/** Creates the exact public validator/profile identity used by one receipt. */
 export function createKnowledgeForwardRevisionValidationProfile(
   preparation: Readonly<KnowledgeSourceParsePreparation>,
   pipelineProfile: JsonValue,
@@ -540,7 +515,6 @@ export function createKnowledgeForwardRevisionValidationProfile(
   });
 }
 
-/** Requires the genuine deterministic validator's exact successful result shape. */
 export function requireSuccessfulKnowledgeForwardRevisionValidation(value: unknown): {
   readonly validation: Readonly<{ okfValid: true; citationsValid: true; linksValid: true }>;
   readonly warningSummary: Readonly<{
@@ -607,7 +581,6 @@ export function requireSuccessfulKnowledgeForwardRevisionValidation(value: unkno
   });
 }
 
-/** Returns hidden dependencies only for one exact coordinator instance. */
 function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   let prototype: object | null;
   try {
@@ -627,9 +600,7 @@ function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   return state;
 }
 
-/** Opaque process-local proof minted only after every genuine read and validator succeeds. */
 export class KnowledgeForwardRevisionValidationCapability {
-  /** Installs only module-private fully validated capability state. */
   private constructor(token: symbol, state: Readonly<ValidationCapabilityState>) {
     if (token !== CAPABILITY_TOKEN) fail("dependency_invalid");
     capabilityStates.set(this, state);
@@ -641,7 +612,6 @@ export class KnowledgeForwardRevisionValidationCapability {
       new KnowledgeForwardRevisionValidationCapability(CAPABILITY_TOKEN, state);
   }
 
-  /** Requires an exact-prototype capability minted by this module in this process. */
   static assert(value: unknown): asserts value is KnowledgeForwardRevisionValidationCapability {
     let prototype: object | null;
     try {
@@ -664,7 +634,6 @@ export class KnowledgeForwardRevisionValidationCapability {
     }
   }
 
-  /** Requires this live capability to belong to one exact opaque execution lifecycle. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     KnowledgeForwardRevisionValidationCapability.assert(value);
     try {
@@ -678,7 +647,6 @@ export class KnowledgeForwardRevisionValidationCapability {
     }
   }
 
-  /** Projects immutable receipt, command, candidate body, and sandwich correlations. */
   static project(
     value: unknown
   ): Readonly<KnowledgeForwardRevisionValidationCapabilityProjectionV1> {
@@ -692,9 +660,7 @@ export class KnowledgeForwardRevisionValidationCapability {
 Object.freeze(KnowledgeForwardRevisionValidationCapability.prototype);
 Object.freeze(KnowledgeForwardRevisionValidationCapability);
 
-/** Genuine deterministic coordinator with no model, persistence, or write capability. */
 export class KnowledgeProductionForwardRevisionValidationCoordinator {
-  /** Captures only authentic Runtime, workflow-plan, and bounded Vault read capabilities. */
   constructor(
     runtime: KnowledgeRuntimeForwardRevisionValidationPort,
     plan: KnowledgeSourceExecutionPlan,
@@ -723,7 +689,6 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
     }
   }
 
-  /** Requires one live exact coordinator owned by the supplied execution lifecycle. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
@@ -736,11 +701,6 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
     }
   }
 
-  /**
-   * Revalidates one accepted forward body under a Runtime/parser/Vault/Runtime sandwich.
-   *
-   * The method performs no writes and never invokes a model or network capability.
-   */
   async validate(
     requestValue: unknown,
     signal: AbortSignal

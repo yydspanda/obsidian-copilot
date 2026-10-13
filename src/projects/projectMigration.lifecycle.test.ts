@@ -56,11 +56,6 @@ interface Deferred<T> {
   reject: (reason?: unknown) => void;
 }
 
-/**
- * Creates a controllable Promise for lifecycle interleaving tests.
- *
- * @returns Deferred promise controls
- */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -71,11 +66,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/**
- * Builds the smallest explicit App/Vault surface used by Projects migration.
- *
- * @returns App plus directly inspectable Vault methods
- */
 function createMigrationApp(): {
   app: App;
   adapter: {
@@ -119,7 +109,6 @@ function createMigrationApp(): {
   return { app, adapter, vault, processFrontMatter };
 }
 
-/** Creates a complete legacy project fixture. */
 function createLegacyProject(): ProjectConfig {
   return {
     id: "project-1",

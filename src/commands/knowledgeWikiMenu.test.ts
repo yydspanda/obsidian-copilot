@@ -11,7 +11,6 @@ interface RecordedMenuItem {
   click?: () => void;
 }
 
-/** Creates a minimal chainable Menu test seam. */
 function createMenu(): { menu: Menu; items: RecordedMenuItem[]; separators: number[] } {
   const items: RecordedMenuItem[] = [];
   const separators: number[] = [];
@@ -44,14 +43,12 @@ function createMenu(): { menu: Menu; items: RecordedMenuItem[]; separators: numb
   return { menu, items, separators };
 }
 
-/** Creates a deterministic exact-only path index for one test. */
 function createIndex(
   lookupExact: (path: string) => readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]
 ): Pick<KnowledgeAppliedWikiPathIndex, "lookupExact"> {
   return { lookupExact };
 }
 
-/** Creates a TFile prototype instance with one own data path for strict menu routing. */
 function createFile(path: string): TFile {
   const file: unknown = Object.create(TFile.prototype);
   if (!(file instanceof TFile)) throw new Error("Invalid TFile test seam");
@@ -59,7 +56,6 @@ function createFile(path: string): TFile {
   return file;
 }
 
-/** Creates a TFolder prototype instance with one own data path for negative routing tests. */
 function createFolder(path: string): TFolder {
   const folder: unknown = Object.create(TFolder.prototype);
   if (!(folder instanceof TFolder)) throw new Error("Invalid TFolder test seam");

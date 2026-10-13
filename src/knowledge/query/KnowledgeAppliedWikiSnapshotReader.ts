@@ -21,13 +21,10 @@ const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
 const MAX_APPLIED_WIKI_PAGES = 10_000;
 const MAX_APPLIED_WIKI_CHARACTERS = 32_000_000;
 
-/** Narrow atomic Runtime projection required by the applied Wiki reader. */
 export interface KnowledgeAppliedProvenanceReadPort {
-  /** Reads current applied Wiki provenance from one atomic Runtime envelope. */
   readAppliedProvenance(bundleId: string): Promise<KnowledgeRuntimeAppliedProvenanceSnapshot>;
 }
 
-/** One exact, content-addressed Wiki page admitted to scoped retrieval. */
 export interface KnowledgeVerifiedWikiPage {
   evidenceId: string;
   path: string;
@@ -41,7 +38,6 @@ export interface KnowledgeVerifiedWikiPage {
   sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[];
 }
 
-/** Immutable applied Wiki corpus read from one stable Runtime/Vault observation. */
 export interface KnowledgeVerifiedWikiSnapshot {
   bundleId: string;
   runtimeRevision: number;
@@ -49,7 +45,6 @@ export interface KnowledgeVerifiedWikiSnapshot {
   pages: readonly Readonly<KnowledgeVerifiedWikiPage>[];
 }
 
-/** Dependencies captured by one exact applied Wiki reader generation. */
 export interface KnowledgeAppliedWikiSnapshotReaderInput {
   runtime: KnowledgeAppliedProvenanceReadPort;
   bundle: KnowledgeBundleConfig;
@@ -58,40 +53,32 @@ export interface KnowledgeAppliedWikiSnapshotReaderInput {
   maxConsistencyAttempts?: number;
 }
 
-/** Sanitized failure that never retains Wiki paths, contents, or adapter causes. */
 export class KnowledgeAppliedWikiSnapshotReadError extends Error {
-  /** Creates one value-free applied Wiki read failure. */
   constructor() {
     super("The applied knowledge Wiki could not be read consistently");
     this.name = "KnowledgeAppliedWikiSnapshotReadError";
   }
 }
 
-/** Internal signal requesting another complete Runtime/Vault observation. */
 class KnowledgeAppliedWikiConsistencyRetry extends Error {
-  /** Creates one value-free retry signal. */
   constructor() {
     super("Applied knowledge changed during the Wiki read");
     this.name = "KnowledgeAppliedWikiConsistencyRetry";
   }
 }
 
-/** Throws the platform cancellation category at an asynchronous boundary. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether an unknown rejection represents intentional cancellation. */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-/** Compares identifiers without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates a path-free stable evidence id for one exact Wiki page version. */
 function createWikiEvidenceId(
   bundleId: string,
   windowsPathKey: string,
@@ -100,7 +87,6 @@ function createWikiEvidenceId(
   return `wiki-${sha256(`knowledge-applied-wiki-evidence-v1\u0000${bundleId}\u0000${windowsPathKey}\u0000${contentHash}`)}`;
 }
 
-/** Deep-freezes a detached applied-source provenance value. */
 function freezeSourceProvenance(
   source: KnowledgeRuntimeAppliedSourceProvenance
 ): Readonly<KnowledgeRuntimeAppliedSourceProvenance> {
@@ -116,7 +102,6 @@ function freezeSourceProvenance(
   });
 }
 
-/** Reads one exact own enumerable data record without invoking accessors. */
 function readExactRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -145,7 +130,6 @@ function readExactRecord(
   }
 }
 
-/** Validates and snapshots one Runtime page authority for this Bundle. */
 function snapshotPageAuthority(
   bundle: KnowledgeBundleConfig,
   page: KnowledgeRuntimeAppliedPageProvenance
@@ -207,7 +191,6 @@ function snapshotPageAuthority(
   });
 }
 
-/** Validates one bounded atomic Runtime projection before any Vault read. */
 function snapshotAppliedProjection(
   bundle: KnowledgeBundleConfig,
   value: KnowledgeRuntimeAppliedProvenanceSnapshot
@@ -237,7 +220,6 @@ function snapshotAppliedProjection(
   });
 }
 
-/** Builds exact read-only resolver requests from applied page authorities. */
 function createPageRequests(
   bundleId: string,
   pages: readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[]
@@ -254,7 +236,6 @@ function createPageRequests(
   );
 }
 
-/** Parses one exact resolver batch without retaining unsupported observations. */
 function parsePageObservations(
   value: unknown,
   requests: readonly Readonly<CompilerTargetRequest>[]
@@ -297,7 +278,6 @@ function parsePageObservations(
   );
 }
 
-/** Joins exact page bytes to their Runtime provenance and verifies every hash. */
 function createVerifiedPages(
   projection: KnowledgeRuntimeAppliedProvenanceSnapshot,
   requests: readonly Readonly<CompilerTargetRequest>[],
@@ -332,12 +312,10 @@ function createVerifiedPages(
   );
 }
 
-/** Reads only current effective, applied, content-addressed Wiki pages for one Bundle. */
 export class KnowledgeAppliedWikiSnapshotReader {
   private readonly bundle: KnowledgeBundleConfig;
   private readonly maxConsistencyAttempts: number;
 
-  /** Captures a validated Bundle and generation-owned read dependencies. */
   constructor(private readonly input: KnowledgeAppliedWikiSnapshotReaderInput) {
     if (
       !input ||
@@ -358,12 +336,6 @@ export class KnowledgeAppliedWikiSnapshotReader {
     }
   }
 
-  /**
-   * Reads a stable Runtime → Vault → Runtime sandwich.
-   *
-   * @param signal - Query-generation cancellation signal
-   * @returns Frozen exact Wiki corpus suitable for in-memory scoped retrieval
-   */
   async read(signal: AbortSignal): Promise<KnowledgeVerifiedWikiSnapshot> {
     for (let attempt = 0; attempt < this.maxConsistencyAttempts; attempt += 1) {
       try {

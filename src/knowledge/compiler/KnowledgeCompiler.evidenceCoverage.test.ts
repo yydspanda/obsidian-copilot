@@ -74,7 +74,7 @@ function createInput(): KnowledgeCompileInput {
     },
     10
   );
-  // Isolate the coverage contract from the production partition strategy.
+
   input.evidence = [ORIGINAL, EXTENSION].map((excerpt, index) => ({
     evidenceId: `evidence-${index}`,
     locator: {

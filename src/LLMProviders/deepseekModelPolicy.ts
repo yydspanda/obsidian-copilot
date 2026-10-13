@@ -29,23 +29,19 @@ export const SUPPORTED_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
 
 const CURRENT_DEEPSEEK_MODELS = new Set<string>(CURRENT_DEEPSEEK_MODEL_IDENTITIES);
 
-/** Stable configuration failures raised before a direct DeepSeek request is created. */
 export type DeepSeekModelPolicyErrorCode =
   | "model_unsupported"
   | "reasoning_effort_unsupported"
   | "sampling_unsupported"
   | "frequency_penalty_unsupported";
 
-/** Sanitized DeepSeek policy failure that retains no model configuration. */
 export class DeepSeekModelPolicyError extends TypeError {
-  /** Creates one stable configuration failure. */
   constructor(public readonly code: DeepSeekModelPolicyErrorCode) {
     super("The DeepSeek model configuration is not supported");
     this.name = "DeepSeekModelPolicyError";
   }
 }
 
-/** Narrow behavior projection accepted from one direct DeepSeek model record. */
 export interface DeepSeekModelPolicyInput {
   model: string;
   reasoningEffort?: string;
@@ -54,7 +50,6 @@ export interface DeepSeekModelPolicyInput {
   frequencyPenalty?: number;
 }
 
-/** Explicit wire fields consumed by ChatDeepSeek without provider-default thinking. */
 export interface DeepSeekChatModelPolicy {
   wireModelIdentity: DeepSeekWireModelIdentity;
   thinkingEnabled: boolean;
@@ -66,7 +61,6 @@ export interface DeepSeekChatModelPolicy {
   }>;
 }
 
-/** Returns whether one identity is in the reviewed current DeepSeek catalog. */
 export function isCurrentDeepSeekModelIdentity(value: string): value is DeepSeekWireModelIdentity {
   return CURRENT_DEEPSEEK_MODELS.has(value);
 }
@@ -86,12 +80,10 @@ export function resolveDeepSeekWireModelIdentity(
   return isCurrentDeepSeekModelIdentity(value) ? value : undefined;
 }
 
-/** Returns whether one plugin reasoning setting explicitly enables DeepSeek thinking. */
 export function isDeepSeekThinkingEffort(reasoningEffort: string | undefined): boolean {
   return reasoningEffort === "high" || reasoningEffort === "xhigh";
 }
 
-/** Keeps internal temperature overrides legal for an explicitly thinking DeepSeek model. */
 export function resolveDeepSeekTemperatureOverride(
   reasoningEffort: string | undefined,
   requestedTemperature: number
@@ -99,13 +91,6 @@ export function resolveDeepSeekTemperatureOverride(
   return isDeepSeekThinkingEffort(reasoningEffort) ? 0 : requestedTemperature;
 }
 
-/**
- * Returns whether agent tools must fail closed until DeepSeek reasoning replay is implemented.
- *
- * @param llmType - Runtime LangChain model family
- * @param modelKwargs - Provider wire configuration captured by the model instance
- * @param toolCount - Number of tools that would be bound
- */
 export function shouldBlockDeepSeekThinkingAgentTools(
   llmType: unknown,
   modelKwargs: unknown,
@@ -122,16 +107,6 @@ export function shouldBlockDeepSeekThinkingAgentTools(
   );
 }
 
-/**
- * Resolves explicit direct-chat thinking and sampling behavior before network I/O.
- *
- * `minimal` is the plugin's explicit "thinking disabled" setting. Thinking
- * requests omit temperature/top-p entirely; their zero temperature is an
- * auditable internal placeholder rather than a wire parameter.
- *
- * @param input - Exact selected model behavior and resolved sampling temperature
- * @returns Frozen ChatDeepSeek fields with no fallback or ignored configuration
- */
 export function createDeepSeekChatModelPolicy(
   input: DeepSeekModelPolicyInput
 ): DeepSeekChatModelPolicy {

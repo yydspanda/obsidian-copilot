@@ -5,7 +5,6 @@ import type {
   KnowledgeAppliedWikiPathIndexRow,
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 
-/** Inspector plus the least-authority advisory row projection needed for publication. */
 export type KnowledgeAppliedWikiPageInspectorPublicationDelegate =
   KnowledgeAppliedWikiPageInspectorPort & {
     listAppliedWikiPathIndexRows(
@@ -13,7 +12,6 @@ export type KnowledgeAppliedWikiPageInspectorPublicationDelegate =
     ): Promise<readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]>;
   };
 
-/** Internal main-owned integration capabilities for one optional publication attempt. */
 export interface KnowledgeAppliedWikiPageInspectorPublicationInput {
   readonly signal: AbortSignal;
   readonly createDelegate: () => KnowledgeAppliedWikiPageInspectorPublicationDelegate;
@@ -28,21 +26,19 @@ export interface KnowledgeAppliedWikiPageInspectorPublicationInput {
   readonly closePresentations: () => void;
 }
 
-/** Creates the platform-standard cancellation for an obsolete startup generation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Runs presentation cleanup without allowing optional UI failures to escape. */
 function closePresentationsSafely(closePresentations: () => void): void {
   try {
     closePresentations();
   } catch {
     // Inspector authority is revoked independently from presentation cleanup.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Re-proves the outer production generation or converts staleness to cancellation. */
 function assertPublicationCurrent(input: KnowledgeAppliedWikiPageInspectorPublicationInput): void {
   if (input.signal.aborted) throw createAbortError();
   try {
@@ -53,16 +49,6 @@ function assertPublicationCurrent(input: KnowledgeAppliedWikiPageInspectorPublic
   if (input.signal.aborted) throw createAbortError();
 }
 
-/**
- * Best-effort publishes one optional applied-Wiki inspector generation.
- *
- * Local create, row-list, or lease failures leave the stable surfaces
- * unavailable and return `undefined`, allowing worker and Studio release to
- * continue. An obsolete outer production generation still cancels the caller.
- *
- * @param input - Exact generation and conditional publication capabilities
- * @returns Installed exact-generation lease, or undefined for a local optional failure
- */
 export async function tryPublishKnowledgeAppliedWikiPageInspectorGeneration(
   input: KnowledgeAppliedWikiPageInspectorPublicationInput
 ): Promise<KnowledgeAppliedWikiPageInspectorGenerationLease | undefined> {

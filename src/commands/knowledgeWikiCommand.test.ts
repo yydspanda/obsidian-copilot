@@ -1,6 +1,5 @@
 jest.mock("obsidian", () => {
   class TFile {
-    /** Creates one minimal active-file test seam. */
     constructor(public path: string) {}
   }
   return { TFile };
@@ -10,7 +9,6 @@ import { checkKnowledgeWikiInspectionCommand } from "@/commands/knowledgeWikiCom
 import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 import { TFile } from "obsidian";
 
-/** Creates one authentic TFile-shaped active-file test value. */
 function createFile(path: string): TFile {
   const file: unknown = Object.create(TFile.prototype);
   Object.defineProperty(file, "path", { value: path, enumerable: true });

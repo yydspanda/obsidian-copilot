@@ -19,7 +19,6 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
 
-/** Returns one strict configured Bundle. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -31,7 +30,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates an empty atomic Runtime projection. */
 function createProjection(): KnowledgeRuntimeStudioBundleSnapshot {
   const queue: IngestQueueSnapshot = {
     version: INGEST_QUEUE_VERSION,
@@ -54,21 +52,17 @@ function createProjection(): KnowledgeRuntimeStudioBundleSnapshot {
   return { bundleId: "personal", runtimeRevision: 1, queue, review };
 }
 
-/** Minimal fixed Runtime facade. */
 class FixedRuntime implements KnowledgeStudioRuntimePort {
-  /** Returns the same empty projection for each consistency read. */
   async readStudioBundle(): Promise<KnowledgeRuntimeStudioBundleSnapshot> {
     return createProjection();
   }
 
-  /** Provides an inert hint subscription. */
   subscribeStudioBundle(): () => void {
     return () => undefined;
   }
 }
 
 const resolver: CompilerTargetResolver = {
-  /** No pending Review means target resolution is never invoked. */
   resolve: async () => [],
 };
 const request: Readonly<KnowledgeReviewEvidenceOpenRequest> = Object.freeze({

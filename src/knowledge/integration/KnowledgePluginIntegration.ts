@@ -105,14 +105,12 @@ import { getCachedProjectRecords, subscribeToProjectRecords } from "@/projects/s
 import { getSettings } from "@/settings/model";
 import { App, Menu, Notice, Plugin, TFile, ViewCreator, WorkspaceLeaf } from "obsidian";
 
-/** Throws before an obsolete or unloaded Knowledge startup generation can continue. */
 function throwIfKnowledgeStartupStopped(signal: AbortSignal, lifecycleClosed: boolean): void {
   if (signal.aborted || lifecycleClosed) {
     throw new DOMException("The operation was aborted", "AbortError");
   }
 }
 
-/** Captures one renderer window's native fetch capability with a stable receiver. */
 function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undefined {
   const rendererWindow: Window = activeWindow;
   const rendererFetchValue: unknown = Reflect.get(rendererWindow, "fetch");
@@ -130,7 +128,6 @@ function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undef
   };
 }
 
-/** Captures one exact renderer timer realm for a plugin-owned worker generation. */
 function createKnowledgeWorkerScheduler(win: Window): KnowledgeProductionWorkerScheduler {
   return Object.freeze({
     now: () => Date.now(),
@@ -143,10 +140,10 @@ function createKnowledgeWorkerScheduler(win: Window): KnowledgeProductionWorkerS
   });
 }
 
-/** Host callbacks kept outside the Knowledge runtime ownership boundary. */
 export interface KnowledgePluginIntegrationDependencies {
   plugin: Plugin;
   modelManagement: ModelManagementApi;
+  registerStartedView(type: string, creator: ViewCreator): void;
   ensureProjectsInitialized(): Promise<unknown>;
   getCurrentProjectId(): string | undefined;
   subscribeCurrentProjectChange(listener: () => void): () => void;
@@ -154,12 +151,6 @@ export interface KnowledgePluginIntegrationDependencies {
   openProjects(): void | Promise<void>;
 }
 
-/**
- * Owns the optional Knowledge Studio runtime and every capability published from it.
- *
- * The integration boundary registers Obsidian surfaces and coordinates Knowledge
- * generations; ordinary Projects, Quick Chat, and Agent Chat remain owned by the host.
- */
 export class KnowledgePluginIntegration {
   private readonly app: App;
   private readonly plugin: Plugin;
@@ -269,7 +260,6 @@ export class KnowledgePluginIntegration {
     });
   }
 
-  /** Registers the optional Studio surfaces and begins the fail-closed startup lifecycle. */
   load(): void {
     if (this.loaded || this.knowledgeLifecycleClosed) return;
     this.loaded = true;
@@ -288,7 +278,7 @@ export class KnowledgePluginIntegration {
           }
         );
         void this.initializeKnowledgeStartupPrerequisites();
-        this.safeRegisterView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
+        this.dependencies.registerStartedView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
           const port = this.knowledgeStudioPort;
           const controller = new KnowledgeStudioController(port, port, port, port, port, port);
           return new KnowledgeStudioView(
@@ -348,19 +338,16 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /** Rebuilds the optional Knowledge generation after a persisted settings change. */
   onSettingsChanged(): void {
     if (!this.loaded || this.knowledgeLifecycleClosed) return;
     this.invalidateKnowledgeProductionGeneration();
     this.refreshKnowledgeSetupReadiness();
   }
 
-  /** Returns the stable least-authority Add-to-Knowledge command surface for Chat views. */
   getChatCapturePort(): KnowledgeChatCapturePort {
     return this.knowledgeChatCapturePort;
   }
 
-  /** Permanently revokes every Knowledge capability before the host begins async teardown. */
   close(): void {
     if (this.knowledgeLifecycleClosed) return;
     this.knowledgeLifecycleClosed = true;
@@ -369,6 +356,7 @@ export class KnowledgePluginIntegration {
       this.knowledgeSetupReadinessStore.publish(createKnowledgeSetupUnloadedProjection());
     } catch {
       // Closed presentation state cannot reopen runtime authority.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     this.knowledgeSetupSelectionUnsubscriber?.();
     this.knowledgeSetupSelectionUnsubscriber = undefined;
@@ -394,20 +382,6 @@ export class KnowledgePluginIntegration {
     this.knowledgeRuntime = undefined;
   }
 
-  /** Registers a view without letting stale Obsidian state abort the remaining integration load. */
-  private safeRegisterView(type: string, viewCreator: ViewCreator): void {
-    try {
-      this.plugin.registerView(type, viewCreator);
-    } catch (error) {
-      logWarn(`Copilot: view type "${type}" already registered; skipping re-registration.`, error);
-    }
-  }
-
-  /**
-   * Initializes the singleton Windows durable state foundation while keeping
-   * the user surface fail-closed until parser/compiler/startup coordination is
-   * complete.
-   */
   private async initializeKnowledgeRuntimeFoundation(): Promise<void> {
     const generation = ++this.knowledgeRuntimeStartupGeneration;
     const pluginDirectory = this.plugin.manifest.dir;
@@ -453,12 +427,6 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /**
-   * Initializes optional Runtime I/O without blocking normal plugin or Projects startup.
-   *
-   * Layout readiness and Runtime completion may arrive in either order. The
-   * coordinator starts the fail-closed barrier exactly once after both exist.
-   */
   private async initializeKnowledgeStartupPrerequisites(): Promise<void> {
     await this.initializeKnowledgeRuntimeFoundation();
     if (this.knowledgeLifecycleClosed) {
@@ -468,13 +436,13 @@ export class KnowledgePluginIntegration {
     this.knowledgeLayoutCoordinator.attachBarrier(barrier);
   }
 
-  /** Projects the exact Quick Chat selection into a secret-free local status. */
   private projectKnowledgeChatReadiness(): KnowledgeChatModelReadiness {
     const settings = getSettings();
     const selection = settings.defaultModelKey;
     const selected = findChatBackendEntry(
       this.modelManagement.backendConfigRegistry.resolveEnabled("chat"),
       selection,
+      true,
       {
         configuredModels: settings.configuredModels,
         providers: Object.values(settings.providers),
@@ -492,7 +460,6 @@ export class KnowledgePluginIntegration {
     });
   }
 
-  /** Publishes one typed startup observation and the independent local Chat lane. */
   private publishKnowledgeSetupReadiness(state: KnowledgePluginStartupState): void {
     if (this.knowledgeLifecycleClosed) return;
     this.knowledgeSetupStartupState = state;
@@ -502,13 +469,11 @@ export class KnowledgePluginIntegration {
     });
   }
 
-  /** Reprojects current local state without rebuilding a workflow or contacting a provider. */
   private refreshKnowledgeSetupReadiness(): void {
     if (this.knowledgeLifecycleClosed) return;
     this.publishKnowledgeSetupReadiness(this.knowledgeSetupStartupState);
   }
 
-  /** Opens the existing Copilot settings page without changing a setting. */
   private openCopilotSettingsForKnowledgeSetup(): void {
     if (this.knowledgeLifecycleClosed) return;
     try {
@@ -527,7 +492,6 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /** Opens one currently re-proved Vault file for setup inspection. */
   private async openKnowledgeSetupVaultFile(path: string): Promise<void> {
     if (this.knowledgeLifecycleClosed || typeof path !== "string" || path.trim().length === 0) {
       return;
@@ -546,16 +510,6 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /**
-   * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
-   *
-   * The barrier composes the recovery-only Gate and, after a fresh
-   * observation/release proof, may start the background Compiler→Review worker
-   * and publish its same-generation Activity/Review adapter. Exact Activity
-   * commands, Review decisions, explicit reviewed Apply, and eligible
-   * no-journal recovery decisions are exposed through separate narrow owners.
-   * Query remains unavailable.
-   */
   private initializeKnowledgeStartupBarrier(): KnowledgePluginStartupBarrier {
     const barrier = new KnowledgePluginStartupBarrier({
       runtime: {
@@ -617,12 +571,6 @@ export class KnowledgePluginIntegration {
     return barrier;
   }
 
-  /**
-   * Loads and strictly validates every project-owned Bundle after project initialization.
-   *
-   * @param signal - Current startup generation cancellation
-   * @returns Safe aggregate containing no raw invalid configuration
-   */
   private async loadKnowledgeBundleStartupConfig(
     signal: AbortSignal
   ): Promise<KnowledgePluginBundleConfigLoadResult> {
@@ -670,18 +618,6 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /**
-   * Creates one one-shot recovery port over the exact preflight admission.
-   *
-   * The resulting Gate may only converge already-durable recovery evidence.
-   * Its staged Studio adapter can explicitly continue or abandon an exact
-   * recovery item, but it has no startup Release, watcher, worker, or model.
-   *
-   * @param admission - Current generation's strict Bundle owners
-   * @param startupSignal - Outer startup generation cancellation
-   * @param forwardRevisionApplyRecovery - Genuine pre-Gate commit-wins recovery runner
-   * @returns One-shot recovery capability consumed and closed by the startup barrier
-   */
   private createKnowledgeProductionRecoveryPort(
     admission: KnowledgePluginProductionPreflightAdmission,
     startupSignal: AbortSignal,
@@ -749,7 +685,6 @@ export class KnowledgePluginIntegration {
     });
   }
 
-  /** Opens and lifecycle-tracks one value-only applied-Wiki inspection Modal. */
   private openKnowledgeAppliedWikiInspector(
     request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>
   ): void {
@@ -788,12 +723,12 @@ export class KnowledgePluginIntegration {
           modal.close();
         } catch {
           // A partially opened presentation retains no production authority.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
     }
   }
 
-  /** Synchronously closes every active applied-Wiki inspector presentation. */
   private closeKnowledgeAppliedWikiInspectorModals(): void {
     const modals = [...this.knowledgeAppliedWikiInspectorModals];
     this.knowledgeAppliedWikiInspectorModals.clear();
@@ -802,18 +737,11 @@ export class KnowledgePluginIntegration {
         modal.close();
       } catch {
         // The stable delegate is revoked separately, so presentation cleanup is best-effort.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
   }
 
-  /**
-   * Creates the long-lived observation port bound to the exact preflight generation.
-   *
-   * @param admission - Current generation's strict Bundle owners
-   * @param startupSignal - Outer startup generation cancellation
-   * @param candidate - Already-composed owner of the paired startup recovery runner
-   * @returns Observation startup boundary retained after recovery is clear
-   */
   private createKnowledgeProductionObservationPort(
     admission: KnowledgePluginProductionPreflightAdmission,
     startupSignal: AbortSignal,
@@ -1230,7 +1158,6 @@ export class KnowledgePluginIntegration {
     return port;
   }
 
-  /** Requires a recovery candidate to retain exact plugin and preflight ownership. */
   private assertCurrentKnowledgeRecovery(
     candidate: KnowledgeProductionRecoveryComposer,
     admission: KnowledgePluginProductionPreflightAdmission,
@@ -1246,7 +1173,6 @@ export class KnowledgePluginIntegration {
     this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
   }
 
-  /** Synchronously invalidates and replaces the full production generation. */
   private invalidateKnowledgeProductionGeneration(): void {
     this.closeKnowledgeProductionObservation();
     this.closeKnowledgeProductionRecovery();
@@ -1256,7 +1182,6 @@ export class KnowledgePluginIntegration {
     }
   }
 
-  /** Defers a full workflow rebuild until the current command promise can settle. */
   private deferKnowledgeProductionGenerationInvalidation(assertCurrent: () => void): void {
     const win = this.app.workspace.containerEl.win;
     win.setTimeout(() => {
@@ -1270,7 +1195,6 @@ export class KnowledgePluginIntegration {
     }, 0);
   }
 
-  /** Retains one recovery action until every durable effect and confirmation has settled. */
   private retainKnowledgeProductionRecoveryAction<T>(operation: Promise<T>): Promise<T> {
     retainKnowledgeProductionDrain(
       this.app.vault,
@@ -1279,13 +1203,11 @@ export class KnowledgePluginIntegration {
     return operation;
   }
 
-  /** Synchronously closes the current recovery-only composer, if any. */
   private closeKnowledgeProductionRecovery(): void {
     this.knowledgeProductionRecovery?.close();
     this.knowledgeProductionRecovery = undefined;
   }
 
-  /** Synchronously closes the current observation session, if any. */
   private closeKnowledgeProductionObservation(): void {
     this.knowledgeMaterialGeneration = undefined;
     this.knowledgeProductionObservation?.close();
@@ -1294,13 +1216,6 @@ export class KnowledgePluginIntegration {
     this.knowledgeProductionRelease = undefined;
   }
 
-  /**
-   * Opens the Windows-only personal Knowledge Studio workspace.
-   *
-   * @param initialTab - Optional first Studio tab to select
-   * @param forwardRevisionReviewRef - Optional opaque forward Review row to focus
-   * @param presentationHint - Non-authoritative renderer realm that initiated navigation
-   */
   async activateKnowledgeStudio(
     initialTab?: "review",
     forwardRevisionReviewRef?: string,

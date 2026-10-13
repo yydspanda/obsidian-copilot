@@ -19,7 +19,6 @@ import { createKnowledgeGroundedAnswerModelPort } from "@/knowledge/query/Knowle
 const MODEL = "deepseek-flash";
 const PRO_MODEL = "deepseek-v4-pro";
 
-/** Creates the exact admitted profile shared with the Compiler preflight. */
 function createProfile(model = MODEL): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -61,7 +60,6 @@ function createProfile(model = MODEL): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates one authentic read-only answer request. */
 function createRequest() {
   return createKnowledgeGroundedAnswerRequest(
     "What is durable?",
@@ -86,7 +84,6 @@ function createRequest() {
   );
 }
 
-/** Creates a native-fetch-compatible DeepSeek JSON response. */
 function createResponse(
   content: string,
   options: { status?: number; model?: string; body?: ReadableStream<Uint8Array> | null } = {}

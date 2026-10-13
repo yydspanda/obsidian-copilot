@@ -14,7 +14,6 @@ const REVIEW_REF = `forward-studio-review-${HASH_A}`;
 const SNAPSHOT_REF = `forward-studio-snapshot-${HASH_B}`;
 const BLOCK_REF = `review-block-${HASH_A}`;
 
-/** Creates one frozen single-file display plan accepted by the reusable Review UI boundary. */
 function createPlan(): Readonly<KnowledgeReviewPlan> {
   return Object.freeze({
     changeSetId: REVIEW_REF,
@@ -57,7 +56,6 @@ function createPlan(): Readonly<KnowledgeReviewPlan> {
   });
 }
 
-/** Creates one current pending product row for command-conversion tests. */
 function createPendingReview(): Readonly<KnowledgeForwardRevisionStudioPendingReview> {
   return Object.freeze({
     state: "pending" as const,

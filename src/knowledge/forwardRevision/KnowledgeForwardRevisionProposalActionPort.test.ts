@@ -26,7 +26,6 @@ import type {
 const CURRENT_REF = `known-wiki-output-${"1".repeat(64)}`;
 const EARLIER_REF = `known-wiki-output-${"2".repeat(64)}`;
 
-/** Creates canonical source-Apply provenance for proposal action fixtures. */
 function origins(
   appliedAt: number,
   verifiedApplyCount: number
@@ -41,22 +40,18 @@ function origins(
   ]);
 }
 
-/** Minimal atomic file used only to mint a genuine Runtime facade. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
 
-  /** Initializes the in-memory file exactly once. */
   async initialize(initialContent: string): Promise<void> {
     this.content ??= initialContent;
   }
 
-  /** Reads the initialized in-memory content. */
   async read(): Promise<string> {
     if (this.content === undefined) throw new Error("Runtime file is not initialized");
     return this.content;
   }
 
-  /** Applies one synchronous exact content transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     if (this.content === undefined) throw new Error("Runtime file is not initialized");
     this.content = transform(this.content);
@@ -64,7 +59,6 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   }
 }
 
-/** Creates one valid current-applied session containing an earlier selection. */
 function createSession(): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
   return Object.freeze({
     pageRef: `known-wiki-page-${"3".repeat(64)}`,
@@ -93,7 +87,6 @@ function createSession(): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
   });
 }
 
-/** Creates one genuine adapter and the authentic session bound to its R3b reader. */
 async function createFixture(
   sourceSession: Readonly<KnowledgeKnownAppliedWikiOutputsSession> = createSession()
 ): Promise<{
@@ -322,12 +315,10 @@ describe("KnowledgeProductionForwardRevisionProposalActionAdapter", () => {
       });
 
       class ControlledProposalCoordinator {
-        /** Accepts only the exact controlled coordinator used by this adapter-unit boundary. */
         static assert(value: unknown): asserts value is ControlledProposalCoordinator {
           if (!(value instanceof ControlledProposalCoordinator)) throw new DOMException();
         }
 
-        /** Returns the publication operation controlled by this test. */
         proposeKnownOutput(): Promise<Readonly<KnowledgeForwardRevisionProposalResult>> {
           return operation;
         }

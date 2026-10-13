@@ -10,7 +10,6 @@ import type {
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type { KnowledgeStudioQueryState } from "@/knowledge/ui/KnowledgeStudioController";
 
-/** Props for the read-only applied-Wiki Query and grounded-answer surface. */
 export interface KnowledgeQueryPanelProps {
   state: Readonly<KnowledgeStudioQueryState>;
   writebackAvailable: boolean;
@@ -19,7 +18,6 @@ export interface KnowledgeQueryPanelProps {
   onSaveToWiki(this: void, title: string): void | Promise<void>;
 }
 
-/** Produces a compact human-readable citation location. */
 function formatLocation(location: KnowledgeSourceCitationLocationSummary): string {
   switch (location.kind) {
     case "markdown_lines":
@@ -35,7 +33,6 @@ function formatLocation(location: KnowledgeSourceCitationLocationSummary): strin
   }
 }
 
-/** Renders one source-backed opaque citation control. */
 function CitationButton({
   citation,
   busy,
@@ -62,9 +59,6 @@ function CitationButton({
   );
 }
 
-/**
- * Renders a strictly validated answer, exact evidence, and optional reviewed capture.
- */
 export function KnowledgeQueryPanel({
   state,
   writebackAvailable,
@@ -78,7 +72,6 @@ export function KnowledgeQueryPanel({
   const savingToWiki = state.savingToWiki === true;
   const result = state.result;
 
-  /** Submits one non-empty bounded query through the controller. */
   function submit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const trimmed = query.trim();
@@ -86,7 +79,6 @@ export function KnowledgeQueryPanel({
     void onQuery(trimmed);
   }
 
-  /** Sends one explicit title with the still-current opaque grounded answer. */
   function submitWriteback(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const title = writebackTitle.trim();

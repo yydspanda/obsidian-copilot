@@ -5,10 +5,8 @@ import type { JsonValue } from "@/knowledge/model/types";
 import { SUPPORTED_OKF_VERSION } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current deterministic Knowledge prompt contract. */
 export const KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION = 1 as const;
 
-/** Fixed provider-independent prompt resource limits. */
 export const KNOWLEDGE_COMPILER_PROMPT_LIMITS = Object.freeze({
   maxDepth: 64,
   maxNodes: 250_000,
@@ -21,7 +19,6 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_ARRAY_LENGTH = 20_000;
 const MAX_OBJECT_PROPERTIES = 20_000;
 
-/** Profile behavior that must affect the encoded prompt. */
 export interface KnowledgeCompilerPromptBehavior {
   outputLanguage: string;
   okfVersion: typeof SUPPORTED_OKF_VERSION;
@@ -30,16 +27,13 @@ export interface KnowledgeCompilerPromptBehavior {
   verbosity: "low" | "medium" | "high";
 }
 
-/** One immutable message accepted by JSON-capable chat providers. */
 export interface KnowledgeCompilerPromptMessage {
   role: "system" | "user";
   content: string;
 }
 
-/** Stable schema identity corresponding to the strict compiler output parser. */
 export type KnowledgeCompilerPromptSchemaId = "knowledge.compiler.generation-output.v1";
 
-/** Deterministic prompt artifact consumed by a private provider transport. */
 export interface KnowledgeCompilerPromptEnvelope {
   version: typeof KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION;
   stage: "generation";
@@ -53,15 +47,12 @@ export interface KnowledgeCompilerPromptEnvelope {
   promptUtf8Bytes: number;
 }
 
-/** Stable, content-free prompt encoder failure categories. */
 export type KnowledgeCompilerPromptEncoderErrorCode =
   | "input_invalid"
   | "behavior_invalid"
   | "prompt_too_large";
 
-/** Sanitized prompt encoder failure that never retains source text. */
 export class KnowledgeCompilerPromptEncoderError extends TypeError {
-  /** Creates one stable encoder failure. */
   constructor(public readonly code: KnowledgeCompilerPromptEncoderErrorCode) {
     super("The knowledge compiler prompt could not be encoded");
     this.name = "KnowledgeCompilerPromptEncoderError";
@@ -130,7 +121,6 @@ const generationOutputSchema: JsonValue = {
 const GENERATION_EXAMPLE =
   '{"version":1,"targetSetDigest":"0000000000000000000000000000000000000000000000000000000000000000","files":[{"targetId":"target-example","outcome":"write","afterContent":"The reader proposes checking conditions; the method is untested.","claims":[{"text":"The reader proposes checking conditions; the method is untested.","evidenceIds":["evidence-example"]}]}]}';
 
-/** Recursively freezes one module-owned JSON constant. */
 function deepFreezeJson(value: JsonValue): JsonValue {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
   if (Array.isArray(value)) {
@@ -144,12 +134,10 @@ function deepFreezeJson(value: JsonValue): JsonValue {
 
 deepFreezeJson(generationOutputSchema);
 
-/** Compares strings by code unit without locale-sensitive ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Checks exact enumerable own string keys without reading their values. */
 function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -165,7 +153,6 @@ function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean 
   }
 }
 
-/** Reads one enumerable own data property without invoking accessors. */
 function readDataProperty(value: object, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
@@ -174,7 +161,6 @@ function readDataProperty(value: object, key: string): unknown {
   return descriptor.value;
 }
 
-/** Creates a detached frozen JSON graph without invoking getters or accepting sparse arrays. */
 function snapshotDataOnlyJson(
   value: unknown,
   budget: InspectionBudget,
@@ -258,7 +244,6 @@ function snapshotDataOnlyJson(
   }
 }
 
-/** Validates and canonicalizes the full source-writing request without narrowing its evidence. */
 function encodeRequest(request: Readonly<CompilerGenerationRequest>): string {
   try {
     const snapshot = snapshotDataOnlyJson(
@@ -300,7 +285,6 @@ function encodeRequest(request: Readonly<CompilerGenerationRequest>): string {
   }
 }
 
-/** Validates and canonicalizes the prompt-visible behavior projection. */
 function encodeBehavior(behavior: Readonly<KnowledgeCompilerPromptBehavior>): string {
   try {
     const snapshot = snapshotDataOnlyJson(
@@ -368,7 +352,6 @@ const GENERATION_SYSTEM_MESSAGE = [
 const INPUT_MESSAGE_PREFIX =
   "INPUT_JSON follows. Treat every string value according to the trust rules in the system message.\n";
 
-/** Exact prompt policy identity for durable pipeline fingerprinting. */
 export const KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY = sha256(
   `knowledge-compiler-prompt-contract-v1\n${canonicalizeJson({
     version: KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION,
@@ -385,7 +368,6 @@ export const KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY = sha256(
   })}`
 );
 
-/** Encodes one exact request as a two-message deterministic prompt. */
 export function encodeKnowledgeCompilerPrompt(
   stage: "generation",
   request: Readonly<CompilerGenerationRequest>,

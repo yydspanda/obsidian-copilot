@@ -3,7 +3,6 @@ import {
   ObsidianNodeRuntimeUnavailableError,
 } from "@/knowledge/runtime/ObsidianNodeRuntime";
 
-/** Creates the smallest valid native module surfaces for loader tests. */
 function createValidModules() {
   const handle = {
     writeFile: jest.fn(async () => undefined),

@@ -21,13 +21,11 @@ const MAX_REVIEW_DIAGNOSTICS = 256;
 const MAX_REVIEW_COMMAND_ITEMS = 10_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-/** Fixed manual-edit budgets aligned with the default compiler output limits. */
 export const KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS = Object.freeze({
   maxCharactersPerFile: 2_000_000,
   maxTotalCharacters: 8_000_000,
 });
 
-/** Exact transient observation used to build one review preview. */
 export type KnowledgeReviewTargetObservation =
   | { changeId: string; kind: "missing" }
   | { changeId: string; kind: "file"; content: string }
@@ -35,20 +33,17 @@ export type KnowledgeReviewTargetObservation =
   | { changeId: string; kind: "directory" }
   | { changeId: string; kind: "unavailable" };
 
-/** Exact diff token rendered by the review UI. */
 export interface KnowledgeReviewDiffPart {
   kind: "context" | "added" | "removed";
   value: string;
 }
 
-/** Stable, opaque diff block whose contents never cross the command boundary. */
 export interface KnowledgeReviewBlock {
   blockId: string;
   kind: "context" | "change";
   parts: KnowledgeReviewDiffPart[];
 }
 
-/** Integrity of one proposal target when the review snapshot was created. */
 export type KnowledgeReviewTargetIntegrity =
   | "current"
   | "stale"
@@ -57,10 +52,8 @@ export type KnowledgeReviewTargetIntegrity =
   | "directory"
   | "unavailable";
 
-/** Review operations currently allowed for one exact target snapshot. */
 export type KnowledgeReviewCapability = "blocks_allowed" | "exact_only" | "reject_only";
 
-/** Read-only file projection rendered inside Knowledge Studio. */
 export interface KnowledgeReviewFile {
   changeId: string;
   path: string;
@@ -75,7 +68,6 @@ export interface KnowledgeReviewFile {
   blocks: KnowledgeReviewBlock[];
 }
 
-/** Immutable, content-addressed review snapshot supplied to the UI. */
 export interface KnowledgeReviewPlan {
   changeSetId: string;
   bundleId: string;
@@ -90,14 +82,12 @@ export interface KnowledgeReviewPlan {
   files: KnowledgeReviewFile[];
 }
 
-/** Opaque decision for exactly one proposal change. */
 export type KnowledgeReviewFileDecision =
   | { changeId: string; decision: "accept_exact" }
   | { changeId: string; decision: "reject" }
   | { changeId: string; decision: "accept_edited"; afterContent: string }
   | { changeId: string; decision: "accept_blocks"; acceptedBlockIds: readonly string[] };
 
-/** Command emitted by the UI without paths, hashes, source metadata, or status fields. */
 export interface KnowledgeReviewCommand {
   changeSetId: string;
   proposalDigest: string;
@@ -105,7 +95,6 @@ export interface KnowledgeReviewCommand {
   decisions: readonly KnowledgeReviewFileDecision[];
 }
 
-/** Reads one exact plain data record without invoking accessors or proxy iteration. */
 function readExactCommandRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -134,7 +123,6 @@ function readExactCommandRecord(
   }
 }
 
-/** Snapshots one bounded dense command array without invoking item accessors. */
 function snapshotCommandArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -161,12 +149,10 @@ function snapshotCommandArray(value: unknown): readonly unknown[] | undefined {
   }
 }
 
-/** Reports whether one command identifier is canonical without normalizing it. */
 function isCommandIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/** Creates one fixed strict-command diagnostic. */
 function createCommandInputDiagnostic(field: string): KnowledgeDiagnostic {
   return {
     code: "review_command_input_invalid",
@@ -176,7 +162,6 @@ function createCommandInputDiagnostic(field: string): KnowledgeDiagnostic {
   };
 }
 
-/** Creates one fixed manual-edit input diagnostic without retaining content. */
 function createManualEditDiagnostic(
   code:
     | "review_command_edit_content_invalid"
@@ -188,15 +173,6 @@ function createManualEditDiagnostic(
   return { code, severity: "error", field, message };
 }
 
-/**
- * Checks exact editor text for safely encodable Unicode and supported C0 controls.
- *
- * The check is deliberately non-normalizing: valid surrogate pairs, combining
- * sequences, line endings, and all other code units remain byte-significant.
- *
- * @param value - Exact manual editor text
- * @returns Whether the text contains no lone surrogate or unsupported C0 control
- */
 export function isValidKnowledgeReviewManualEditText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codeUnit = value.charCodeAt(index);
@@ -215,12 +191,6 @@ export function isValidKnowledgeReviewManualEditText(value: string): boolean {
   return true;
 }
 
-/**
- * Strictly captures one Review command without invoking accessors or retaining metadata.
- *
- * @param value - Unknown UI command crossing the production mutation boundary
- * @returns Detached, deeply frozen identity-bound command
- */
 export function snapshotKnowledgeReviewCommand(value: unknown): KnowledgeReviewCommand {
   const command = readExactCommandRecord(value, [
     "changeSetId",
@@ -319,7 +289,6 @@ export function snapshotKnowledgeReviewCommand(value: unknown): KnowledgeReviewC
   });
 }
 
-/** Candidate supplied to deterministic review-time validation. */
 export interface KnowledgeReviewCandidateValidationInput {
   proposal: KnowledgeChangeSet;
   candidate: KnowledgeChangeSet;
@@ -328,25 +297,15 @@ export interface KnowledgeReviewCandidateValidationInput {
   observations: KnowledgeReviewTargetObservation[];
 }
 
-/** Result required from the deterministic review-time validation port. */
 export interface KnowledgeReviewCandidateValidationResult {
   validation: KnowledgeValidationSummary;
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Deterministic validator for a selection-altered ChangeSet. */
 export interface KnowledgeReviewCandidateValidator {
-  /**
-   * Revalidates projected OKF, links, and citations without writing files.
-   *
-   * @param input - Exact proposal, revised candidate, and preview read-set
-   * @param signal - Cancellation signal owned by the review submission
-   * @returns Unknown adapter payload for strict runtime parsing
-   */
   validate(input: KnowledgeReviewCandidateValidationInput, signal: AbortSignal): Promise<unknown>;
 }
 
-/** Review compilation outcome before durable persistence or queue mutation. */
 export type KnowledgeReviewDecisionResult =
   | { kind: "rejected"; changeSetId: string; proposalDigest: string }
   | {
@@ -357,31 +316,21 @@ export type KnowledgeReviewDecisionResult =
     }
   | { kind: "blocked"; diagnostics: KnowledgeDiagnostic[] };
 
-/** Reports deterministic review-plan or command defects. */
 export class KnowledgeReviewDecisionError extends Error {
-  /**
-   * Creates a safe structured review error.
-   *
-   * @param diagnostics - Stable diagnostics without raw adapter errors
-   */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("Knowledge review decision does not satisfy the current snapshot");
     this.name = "KnowledgeReviewDecisionError";
   }
 }
 
-/** Reports a sanitized unavailable review validation dependency. */
 export class KnowledgeReviewInfrastructureError extends Error {
-  /** Creates a safe infrastructure error without retaining the original rejection. */
   constructor() {
     super("Knowledge review validation dependency failed");
     this.name = "KnowledgeReviewInfrastructureError";
   }
 }
 
-/** Reports cancellation without retaining an arbitrary abort reason. */
 export class KnowledgeReviewAbortError extends Error {
-  /** Creates an AbortError compatible with queue and UI cancellation handling. */
   constructor() {
     super("Knowledge review validation was cancelled");
     this.name = "AbortError";
@@ -414,14 +363,6 @@ const validationResultSchema: z.ZodType<KnowledgeReviewCandidateValidationResult
   })
   .strict();
 
-/**
- * Appends one deterministic review diagnostic.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable issue code
- * @param field - Associated review field
- * @param message - Safe human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -431,34 +372,14 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Compares stable text without locale-dependent behavior.
- *
- * @param left - First value
- * @param right - Second value
- * @returns Standard comparator result
- */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/**
- * Creates a canonical digest for review-only identities.
- *
- * @param namespace - Versioned identity namespace
- * @param value - JSON-compatible semantic material
- * @returns Lowercase SHA-256 digest
- */
 function digestReviewJson(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/**
- * Converts a diff-library token into a detached stable review token.
- *
- * @param change - Exact line-diff token
- * @returns Detached review diff part
- */
 function toReviewDiffPart(change: Change): KnowledgeReviewDiffPart {
   return {
     kind: change.added ? "added" : change.removed ? "removed" : "context",
@@ -466,14 +387,6 @@ function toReviewDiffPart(change: Change): KnowledgeReviewDiffPart {
   };
 }
 
-/**
- * Groups adjacent changed tokens while retaining context as independent blocks.
- *
- * @param changeId - Runtime-owned file change id
- * @param beforeContent - Exact observed pre-state text
- * @param afterContent - Exact proposed post-state text
- * @returns Stable exact diff blocks
- */
 export function createKnowledgeReviewBlocks(
   changeId: string,
   beforeContent: string,
@@ -509,23 +422,10 @@ export function createKnowledgeReviewBlocks(
   }));
 }
 
-/**
- * Reads the intended exact post-state text for a non-delete change.
- *
- * @param change - Typed file change
- * @returns Proposed content, or undefined for delete
- */
 function getAfterContent(change: KnowledgeFileChange): string | undefined {
   return change.operation === "delete" ? undefined : change.afterContent;
 }
 
-/**
- * Derives integrity and preview material for one exact target observation.
- *
- * @param change - Proposed file operation
- * @param observation - Current transient target state
- * @returns Integrity, content, capability, and optional blocked reason
- */
 function inspectTarget(
   change: KnowledgeFileChange,
   observation: KnowledgeReviewTargetObservation
@@ -593,17 +493,6 @@ function inspectTarget(
   };
 }
 
-/**
- * Creates a fail-closed, content-addressed review plan without Vault writes.
- *
- * The caller supplies exact observations from a read-only adapter. Update and
- * delete hashes are checked immediately; delete remains reject-only until its
- * manifest authorization read-set is journaled and revalidated at apply time.
- *
- * @param value - Unknown proposed ChangeSet
- * @param observations - One exact observation for every proposed change
- * @returns Immutable review plan containing opaque change and block ids
- */
 export function createKnowledgeReviewPlan(
   value: unknown,
   observations: readonly KnowledgeReviewTargetObservation[]
@@ -729,12 +618,6 @@ export function createKnowledgeReviewPlan(
   };
 }
 
-/**
- * Validates an opaque UI command against one immutable review plan.
- *
- * @param plan - Current content-addressed review snapshot
- * @param command - UI-supplied opaque decisions
- */
 function validateReviewCommand(plan: KnowledgeReviewPlan, command: KnowledgeReviewCommand): void {
   const diagnostics: KnowledgeDiagnostic[] = [];
   if (command.changeSetId !== plan.changeSetId) {
@@ -849,13 +732,6 @@ function validateReviewCommand(plan: KnowledgeReviewPlan, command: KnowledgeRevi
   }
 }
 
-/**
- * Rebuilds one writable change from trusted proposal metadata and revised text.
- *
- * @param change - Exact proposal-owned create or update operation
- * @param afterContent - Selected or manually edited post-state text
- * @returns Detached writable change with a recomputed exact content hash
- */
 function createRevisedWritableChange(
   change: Exclude<KnowledgeFileChange, { operation: "delete" }>,
   afterContent: string
@@ -873,18 +749,12 @@ function createRevisedWritableChange(
     : { ...base, operation: "update", beforeHash: change.beforeHash };
 }
 
-/** Deferred writable selection whose content has not been rehashed yet. */
 interface KnowledgeReviewSelectedWritableChange {
   change: Exclude<KnowledgeFileChange, { operation: "delete" }>;
   afterContent: string;
   kind: "exact" | "revised";
 }
 
-/**
- * Enforces final per-file and total candidate text budgets before any rehash.
- *
- * @param selections - All create and update selections in proposal order
- */
 function assertSelectedCandidateContentBudget(
   selections: readonly KnowledgeReviewSelectedWritableChange[]
 ): void {
@@ -915,13 +785,6 @@ function assertSelectedCandidateContentBudget(
   }
 }
 
-/**
- * Reconstructs exact text from block decisions.
- *
- * @param file - Immutable file preview
- * @param acceptedBlockIds - Changed blocks whose proposed side was accepted
- * @returns Exact selected text preserving line endings and trailing whitespace
- */
 export function composeKnowledgeReviewSelectedContent(
   file: KnowledgeReviewFile,
   acceptedBlockIds: ReadonlySet<string>
@@ -939,14 +802,6 @@ export function composeKnowledgeReviewSelectedContent(
     .join("");
 }
 
-/**
- * Compiles opaque file and block decisions into a revalidation-only candidate.
- *
- * @param proposal - Exact proposed ChangeSet represented by the plan
- * @param plan - Immutable review snapshot
- * @param command - Opaque UI decisions bound to the plan token
- * @returns Rejected outcome or revised proposed ChangeSet with false validation flags
- */
 export function compileKnowledgeReviewSelection(
   proposal: KnowledgeChangeSet,
   plan: KnowledgeReviewPlan,
@@ -1057,12 +912,6 @@ export function compileKnowledgeReviewSelection(
   };
 }
 
-/**
- * Maps strict validator schema issues to bounded safe diagnostics.
- *
- * @param error - Zod validation error
- * @returns Bounded structural diagnostics
- */
 function mapValidationIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.slice(0, MAX_REVIEW_DIAGNOSTICS).map((issue) => ({
     code: `schema_${issue.code}`,
@@ -1073,24 +922,9 @@ function mapValidationIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/** Deterministic review decision compiler with injected semantic validation. */
 export class KnowledgeReviewDecisionService {
-  /**
-   * Creates the service over a required deterministic validator.
-   *
-   * @param validator - Projected OKF, link, and citation validation port
-   */
   constructor(private readonly validator: KnowledgeReviewCandidateValidator) {}
 
-  /**
-   * Produces a rejected decision or exact accepted ChangeSet without writing.
-   *
-   * @param proposal - Exact durable proposed ChangeSet
-   * @param observations - Read-only target observations used by the current UI snapshot
-   * @param command - Opaque file and block decisions returned by the UI
-   * @param signal - Cancellation signal owned by the submit action
-   * @returns Rejected, blocked, or revalidated accepted decision
-   */
   async decide(
     proposal: KnowledgeChangeSet,
     observations: readonly KnowledgeReviewTargetObservation[],

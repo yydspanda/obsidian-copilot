@@ -66,16 +66,17 @@ describe("bundleSizeGuard", () => {
   });
 
   describe("createBundleSizeGuard()", () => {
+    const ISSUE = "https://github.com/Brevilabs/obsidian-copilot-private/issues/94";
+    let workDir;
     let originalOverride;
-    let directory;
     let build;
 
     beforeEach(() => {
+      workDir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-size-guard "));
       originalOverride = process.env.COPILOT_PERSONAL_MAX_BUNDLE_BYTES;
       delete process.env.COPILOT_PERSONAL_MAX_BUNDLE_BYTES;
-      directory = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-size-guard-"));
       build = {
-        initialOptions: { outfile: path.join(directory, "main.js") },
+        initialOptions: { outfile: path.join(workDir, "main.js") },
         onEnd: jest.fn(),
         onLoad: jest.fn(),
       };
@@ -84,21 +85,81 @@ describe("bundleSizeGuard", () => {
     afterEach(() => {
       if (originalOverride === undefined) delete process.env.COPILOT_PERSONAL_MAX_BUNDLE_BYTES;
       else process.env.COPILOT_PERSONAL_MAX_BUNDLE_BYTES = originalOverride;
-      fs.rmSync(directory, { recursive: true, force: true });
+      fs.rmSync(workDir, { force: true, recursive: true });
     });
 
-    it("registers only dependency rewriting in development for https://github.com/Brevilabs/obsidian-copilot-private/issues/94", () => {
-      createBundleSizeGuard({ production: false }).setup(build);
+    function setupGuard(production, outfile) {
+      const hooks = {};
+      createBundleSizeGuard({ production }).setup({
+        initialOptions: { outfile },
+        onEnd: (callback) => {
+          hooks.onEnd = callback;
+        },
+        onLoad: (_options, callback) => {
+          hooks.onLoad = callback;
+        },
+      });
+      return hooks;
+    }
 
-      expect(build.onLoad).toHaveBeenCalledTimes(1);
-      expect(build.onEnd).not.toHaveBeenCalled();
+    it(`rewrites an exact zod import when loading a dependency for ${ISSUE}`, async () => {
+      const dependency = path.join(workDir, "dependency.ts");
+      fs.writeFileSync(dependency, 'import { z } from "zod";\nz.string();\n');
+
+      const result = await setupGuard(false).onLoad({ path: dependency });
+
+      expect(result).toEqual({
+        contents: 'import * as z from "zod";\nz.string();\n',
+        loader: "ts",
+        resolveDir: workDir,
+      });
     });
 
-    it("registers dependency rewriting and artifact enforcement in production for https://github.com/Brevilabs/obsidian-copilot-private/issues/94", () => {
-      createBundleSizeGuard({ production: true }).setup(build);
+    it(`leaves a dependency without exact zod imports to esbuild's default loading for ${ISSUE}`, async () => {
+      const dependency = path.join(workDir, "dependency.js");
+      fs.writeFileSync(dependency, "module.exports = 1;\n");
 
-      expect(build.onLoad).toHaveBeenCalledTimes(1);
-      expect(build.onEnd).toHaveBeenCalledTimes(1);
+      await expect(setupGuard(false).onLoad({ path: dependency })).resolves.toBeUndefined();
+    });
+
+    it(`does not enforce artifact limits in development for ${ISSUE}`, () => {
+      expect(setupGuard(false).onEnd).toBeUndefined();
+    });
+
+    it(`dedupes legal comments in the production outfile for ${ISSUE}`, () => {
+      const outfile = path.join(workDir, "main.js");
+      const notice = "  (*! notice *)";
+      fs.writeFileSync(
+        outfile,
+        legalBundle(legalEntry("a.js", notice), legalEntry("b.js", notice))
+      );
+
+      setupGuard(true, outfile).onEnd({ errors: [] });
+
+      expect(fs.readFileSync(outfile, "utf8")).toBe(
+        legalBundle(legalEntry("a.js (+1 identical notices)", notice))
+      );
+    });
+
+    it(`fails the production build when the outfile reaches the size ceiling for ${ISSUE}`, () => {
+      const outfile = path.join(workDir, "main.js");
+      fs.writeFileSync(
+        outfile,
+        `${"a".repeat(5_000_000)}\n${legalBundle(legalEntry("a.js", "  (*! notice *)"))}`
+      );
+
+      expect(() => setupGuard(true, outfile).onEnd({ errors: [] })).toThrow(
+        "strictly below 5000000 bytes"
+      );
+    });
+
+    it(`leaves the outfile untouched when esbuild already reported errors for ${ISSUE}`, () => {
+      const outfile = path.join(workDir, "main.js");
+      fs.writeFileSync(outfile, "partial output");
+
+      setupGuard(true, outfile).onEnd({ errors: [{ text: "failed" }] });
+
+      expect(fs.readFileSync(outfile, "utf8")).toBe("partial output");
     });
 
     it.each(["10000000", "010000000"])(

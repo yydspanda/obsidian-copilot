@@ -16,7 +16,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates complete valid caller facts without derived intent fields. */
 function createInput(): CreateKnowledgeForwardRevisionIntentInput {
   return {
     bundleId: "personal",
@@ -55,14 +54,12 @@ function createInput(): CreateKnowledgeForwardRevisionIntentInput {
   };
 }
 
-/** Clones one intent as mutable plain JSON for adversarial mutations. */
 function cloneIntent(
   value: Readonly<KnowledgeForwardRevisionIntent>
 ): KnowledgeForwardRevisionIntent {
   return JSON.parse(JSON.stringify(value)) as KnowledgeForwardRevisionIntent;
 }
 
-/** Reorders every top-level creator property without changing semantic material. */
 function reorderInput(
   input: CreateKnowledgeForwardRevisionIntentInput
 ): CreateKnowledgeForwardRevisionIntentInput {

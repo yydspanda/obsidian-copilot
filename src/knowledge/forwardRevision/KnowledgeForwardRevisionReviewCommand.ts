@@ -9,10 +9,8 @@ import type { JsonValue, KnowledgeValidationResult } from "@/knowledge/model/typ
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict user-command version for an independent forward Review. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_VERSION = 1 as const;
 
-/** Defensive limits for untrusted forward Review commands. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: 1_024,
@@ -21,7 +19,6 @@ export const KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_LIMITS = Object.freeze({
   maxAfterContentBytes: KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxSelectedContentBytes,
 });
 
-/** Exact acceptance of the immutable selected historical bytes. */
 export interface KnowledgeForwardRevisionAcceptExactCommandV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_VERSION;
   readonly kind: "forward_revision_review_command";
@@ -39,7 +36,6 @@ export interface KnowledgeForwardRevisionAcceptExactCommandV1 {
   readonly expectedRecordRevision: 0;
 }
 
-/** Acceptance of user-edited bytes; only `afterContent` is editable material. */
 export interface KnowledgeForwardRevisionAcceptEditedCommandV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_VERSION;
   readonly kind: "forward_revision_review_command";
@@ -59,7 +55,6 @@ export interface KnowledgeForwardRevisionAcceptEditedCommandV1 {
   readonly afterContentHash: string;
 }
 
-/** Explicit rejection of one still-pending proposal. */
 export interface KnowledgeForwardRevisionRejectCommandV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REVIEW_COMMAND_VERSION;
   readonly kind: "forward_revision_review_command";
@@ -77,20 +72,17 @@ export interface KnowledgeForwardRevisionRejectCommandV1 {
   readonly expectedRecordRevision: 0;
 }
 
-/** Complete strict command union accepted by the future Runtime decision CAS. */
 export type KnowledgeForwardRevisionReviewCommandV1 =
   | KnowledgeForwardRevisionAcceptExactCommandV1
   | KnowledgeForwardRevisionAcceptEditedCommandV1
   | KnowledgeForwardRevisionRejectCommandV1;
 
-/** Creator input for exact acceptance or rejection. */
 export interface CreateKnowledgeForwardRevisionReviewCommandBaseInput {
   readonly action: "accept_exact" | "reject";
   readonly proposal: unknown;
   readonly proposalDigest: string;
 }
 
-/** Creator input for edited acceptance. */
 export interface CreateKnowledgeForwardRevisionAcceptEditedCommandInput {
   readonly action: "accept_edited";
   readonly proposal: unknown;
@@ -98,7 +90,6 @@ export interface CreateKnowledgeForwardRevisionAcceptEditedCommandInput {
   readonly afterContent: string;
 }
 
-/** Creator input whose action selects the exact strict command shape. */
 export type CreateKnowledgeForwardRevisionReviewCommandInput =
   | CreateKnowledgeForwardRevisionReviewCommandBaseInput
   | CreateKnowledgeForwardRevisionAcceptEditedCommandInput;
@@ -123,9 +114,7 @@ const COMMON_KEYS = [
 ] as const;
 const EDITED_KEYS = [...COMMON_KEYS, "afterContent", "afterContentHash"] as const;
 
-/** Fixed value-free failure for malformed forward Review commands. */
 export class KnowledgeForwardRevisionReviewCommandValidationError extends TypeError {
-  /** Creates one sanitized failure; only module-minted instances are authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Review command does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionReviewCommandValidationError";
@@ -137,7 +126,6 @@ const VALIDATION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionReviewCommandVali
 const authenticValidationErrors =
   new WeakSet<KnowledgeForwardRevisionReviewCommandValidationError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -171,7 +159,6 @@ function snapshotRecord(
   }
 }
 
-/** Reads one data discriminant without invoking a hostile accessor. */
 function readDataDiscriminant(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -184,7 +171,6 @@ function readDataDiscriminant(value: unknown, key: string): unknown {
   }
 }
 
-/** Reports whether text consists only of paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -200,7 +186,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether identifier text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -209,7 +194,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Validates exact edited Review body text without Unicode normalization. */
 function isValidAfterContentText(value: string): boolean {
   if (!isUnicodeScalarText(value)) return false;
   for (let index = 0; index < value.length; index += 1) {
@@ -224,7 +208,6 @@ function isValidAfterContentText(value: string): boolean {
   return true;
 }
 
-/** Reports whether one value is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -236,12 +219,10 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether one value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Captures one canonical bounded Vault-relative path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -260,19 +241,16 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Hashes one strict value with explicit domain separation. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Throws one authentic frozen sanitized command failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionReviewCommandValidationError(VALIDATION_ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught failure was minted inside this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionReviewCommandValidationError {
@@ -283,7 +261,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Derives the command fields that must exactly rejoin one pending proposal. */
 function commandIdentity(
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
   proposalDigest: string
@@ -303,7 +280,6 @@ function commandIdentity(
   });
 }
 
-/** Derives one opaque command id from every material command field. */
 function deriveCommandId(
   value: Omit<KnowledgeForwardRevisionReviewCommandV1, "version" | "kind" | "commandId">
 ): string {
@@ -313,7 +289,6 @@ function deriveCommandId(
   )}`;
 }
 
-/** Creates one strict non-authoritative user command for a pending proposal. */
 export function createKnowledgeForwardRevisionReviewCommand(
   value: CreateKnowledgeForwardRevisionReviewCommandInput
 ): Readonly<KnowledgeForwardRevisionReviewCommandV1> {
@@ -379,7 +354,6 @@ export function createKnowledgeForwardRevisionReviewCommand(
   }
 }
 
-/** Strictly snapshots one untrusted forward Review command. */
 export function snapshotKnowledgeForwardRevisionReviewCommand(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewCommandV1> {
@@ -463,13 +437,6 @@ export function snapshotKnowledgeForwardRevisionReviewCommand(
   }
 }
 
-/**
- * Rejoins a command with its exact pending proposal before any Runtime decision CAS.
- *
- * This leaf check is NON-authoritative. The Runtime boundary must still re-prove
- * pending state, current Manifest/Vault/source freshness, Runtime CAS identity,
- * and absence of recovery or write conflicts before constructing terminal state.
- */
 export function snapshotKnowledgeForwardRevisionReviewCommandForProposal(
   commandValue: unknown,
   proposalValue: unknown,
@@ -495,7 +462,6 @@ export function snapshotKnowledgeForwardRevisionReviewCommandForProposal(
   return command;
 }
 
-/** Computes the canonical digest of one complete strict Review command. */
 export function createKnowledgeForwardRevisionReviewCommandDigest(value: unknown): string {
   return digestValue(
     "knowledge-forward-revision-review-command-v1",
@@ -503,7 +469,6 @@ export function createKnowledgeForwardRevisionReviewCommandDigest(value: unknown
   );
 }
 
-/** Validates command material without retaining rejected values. */
 export function validateKnowledgeForwardRevisionReviewCommand(
   value: unknown
 ): KnowledgeValidationResult {

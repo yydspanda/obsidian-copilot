@@ -52,15 +52,12 @@ const STALE_COMPARISON = Object.freeze({ kind: "stale" as const });
 const UNAVAILABLE_COMPARISON = Object.freeze({ kind: "unavailable" as const });
 const TOO_LARGE_COMPARISON = Object.freeze({ kind: "too_large" as const });
 
-/** Narrow Runtime reads needed for retained applied-output browsing. */
 export interface KnowledgeKnownAppliedWikiOutputsRuntimePort {
-  /** Reads one metadata-only exact output index from a single Runtime envelope. */
   readKnownAppliedWikiOutputIndex(
     bundleId: string,
     pagePath: string
   ): Promise<KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot>;
 
-  /** Rejoins one private metadata identity and returns at most one exact body. */
   readKnownAppliedWikiOutputDetail(
     bundleId: string,
     pagePath: string,
@@ -68,13 +65,11 @@ export interface KnowledgeKnownAppliedWikiOutputsRuntimePort {
   ): Promise<KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot>;
 }
 
-/** One validated Bundle and its bounded read-before-content visitor. */
 export interface KnowledgeProductionKnownAppliedWikiOutputsBundleBinding {
   readonly bundle: KnowledgeBundleConfig;
   readonly targetVisitor: ObsidianKnowledgeCompilerTargetVisitPort;
 }
 
-/** Read-only production dependencies captured by one worker generation. */
 export interface KnowledgeProductionKnownAppliedWikiOutputsCoordinatorInput {
   readonly runtime: KnowledgeKnownAppliedWikiOutputsRuntimePort;
   readonly bundles: readonly Readonly<KnowledgeProductionKnownAppliedWikiOutputsBundleBinding>[];
@@ -120,7 +115,6 @@ interface OutputBinding {
   readonly summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary>;
 }
 
-/** Monotonic subsystem revisions observed from one atomic Runtime envelope. */
 interface RuntimeRevisionVector {
   readonly runtimeRevision: number;
   readonly manifestRevision: number;
@@ -164,12 +158,10 @@ class TooLargeRead extends Error {}
 
 const coordinatorStates = new WeakMap<object, CoordinatorState>();
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reads an own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null) return undefined;
@@ -182,7 +174,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Captures an exact plain data record without retaining caller objects. */
 function snapshotRecord(
   value: unknown,
   requiredKeys: readonly string[],
@@ -214,7 +205,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one dense bounded array through data descriptors only. */
 function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -240,7 +230,6 @@ function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | 
   }
 }
 
-/** Finds a callable data method through a bounded acyclic prototype chain. */
 function captureMethod(value: object, name: string): ((...args: unknown[]) => unknown) | undefined {
   try {
     let owner: object | null = value;
@@ -261,14 +250,12 @@ function captureMethod(value: object, name: string): ((...args: unknown[]) => un
   return undefined;
 }
 
-/** Stops work around every asynchronous authority boundary. */
 function assertInvocation(state: CoordinatorState, signal: AbortSignal): void {
   if (signal.aborted) throw createAbortError();
   state.assertCurrent();
   if (signal.aborted) throw createAbortError();
 }
 
-/** Captures the two exact Runtime read methods with their receiver. */
 function captureRuntime(value: unknown): Readonly<CapturedRuntime> {
   if (typeof value !== "object" || value === null) throw createAbortError();
   const readIndex = captureMethod(value, "readKnownAppliedWikiOutputIndex");
@@ -297,12 +284,10 @@ function captureRuntime(value: unknown): Readonly<CapturedRuntime> {
   });
 }
 
-/** Reports whether two configured paths overlap under Windows semantics. */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/** Captures one strict Bundle while bounding all pre-validation strings. */
 function snapshotBundle(value: unknown): Readonly<KnowledgeBundleConfig> | undefined {
   const record = snapshotRecord(value, [
     "version",
@@ -338,7 +323,6 @@ function snapshotBundle(value: unknown): Readonly<KnowledgeBundleConfig> | undef
   return validateKnowledgeBundleConfig(bundle).valid ? bundle : undefined;
 }
 
-/** Captures one target visitor and projects exactly one bounded current file. */
 function captureCurrentObserver(
   value: unknown
 ): (path: string, signal: AbortSignal) => Promise<CurrentObservation> {
@@ -381,7 +365,6 @@ function captureCurrentObserver(
   };
 }
 
-/** Strictly detaches the single visitor callback payload. */
 function projectCurrentObservation(
   value: unknown,
   fileByteSize: number | undefined,
@@ -425,7 +408,6 @@ function projectCurrentObservation(
   });
 }
 
-/** Captures and cross-validates every Bundle/visitor dependency. */
 function snapshotBundles(value: unknown): readonly Readonly<CapturedBundle>[] {
   const values = snapshotArray(value, MAX_BUNDLES);
   if (!values || values.length === 0) throw createAbortError();
@@ -459,7 +441,6 @@ function snapshotBundles(value: unknown): readonly Readonly<CapturedBundle>[] {
   return Object.freeze(bundles);
 }
 
-/** Captures the constructor surface before evaluating any dependency. */
 function snapshotInput(
   value: unknown
 ): Readonly<KnowledgeProductionKnownAppliedWikiOutputsCoordinatorInput> {
@@ -487,7 +468,6 @@ function snapshotInput(
   });
 }
 
-/** Captures one private Runtime detail authority exactly. */
 function snapshotAuthority(
   value: unknown,
   budget: { characters: number }
@@ -646,7 +626,6 @@ function snapshotAuthority(
   });
 }
 
-/** Captures canonical per-origin proof aggregates from one Runtime index item. */
 function snapshotOrigins(
   value: unknown,
   verifiedApplyCount: number,
@@ -704,7 +683,6 @@ function snapshotOrigins(
   return Object.freeze(origins);
 }
 
-/** Captures a deep-frozen metadata index returned by the Runtime boundary. */
 function snapshotIndex(
   value: unknown,
   expectedBundleId: string,
@@ -910,7 +888,6 @@ function snapshotIndex(
   });
 }
 
-/** Creates a semantic digest that ignores unrelated Runtime revision advances. */
 function createIndexSemanticDigest(
   value: Readonly<KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot>
 ): string {
@@ -926,7 +903,6 @@ function createIndexSemanticDigest(
   );
 }
 
-/** Captures only the monotonic counters from one validated Runtime index. */
 function createRevisionVector(
   value: Readonly<KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot>
 ): Readonly<RuntimeRevisionVector> {
@@ -938,12 +914,10 @@ function createRevisionVector(
   });
 }
 
-/** Reports whether a later optional Review counter did not disappear or decrease. */
 function reviewRevisionDoesNotRegress(before: number | null, after: number | null): boolean {
   return before === null || (after !== null && after >= before);
 }
 
-/** Reports whether all atomic Runtime counters moved monotonically forward. */
 function revisionsDoNotRegress(
   before: Readonly<RuntimeRevisionVector>,
   after: Readonly<RuntimeRevisionVector>
@@ -956,7 +930,6 @@ function revisionsDoNotRegress(
   );
 }
 
-/** Advances one session revision floor or revokes it on a backward read. */
 function advanceSessionRevisions(
   binding: SessionBinding,
   next: Readonly<RuntimeRevisionVector>
@@ -965,7 +938,6 @@ function advanceSessionRevisions(
   binding.latestRevisions = next;
 }
 
-/** Creates one exact current-file snapshot digest. */
 function createObservationDigest(value: Readonly<CurrentObservation>): string {
   return sha256(
     canonicalizeJson(
@@ -976,7 +948,6 @@ function createObservationDigest(value: Readonly<CurrentObservation>): string {
   );
 }
 
-/** Returns the one Bundle whose Wiki root contains the exact requested path. */
 function selectBundle(
   state: CoordinatorState,
   pagePath: string
@@ -987,7 +958,6 @@ function selectBundle(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Reads one Runtime/Vault/Runtime consistency sandwich with bounded retries. */
 async function readStable(
   state: CoordinatorState,
   bundle: Readonly<CapturedBundle>,
@@ -1042,7 +1012,6 @@ async function readStable(
   throw new UnavailableRead();
 }
 
-/** Classifies only a strict Manifest+output+Vault triple as current applied. */
 function classifyCurrent(read: StableRead): {
   state: "applied" | "drifted" | "missing";
   match: "current_applied" | "earlier_known" | "none";
@@ -1065,7 +1034,6 @@ function classifyCurrent(read: StableRead): {
   };
 }
 
-/** Creates one opaque ref bound privately to a semantic session. */
 function createOpaqueRef(
   kind: "page" | "output" | "cursor",
   semanticDigest: string,
@@ -1076,7 +1044,6 @@ function createOpaqueRef(
   )}`;
 }
 
-/** Creates one bounded metadata page from private output bindings. */
 function createPage(
   bindings: readonly Readonly<OutputBinding>[],
   cursorOffsets: Map<string, number>,
@@ -1095,7 +1062,6 @@ function createPage(
   return Object.freeze({ items, nextCursor: cursor });
 }
 
-/** Derives only the narrow row-action capability proven by this browsing session. */
 function createProposalCapability(
   currentState: "applied" | "drifted" | "missing",
   relation: "current_applied" | "latest_known" | "earlier_known",
@@ -1113,7 +1079,6 @@ function createProposalCapability(
   return authorityOrigin === "source_apply" ? "available" : "forward_origin_not_supported";
 }
 
-/** Creates the initial authentic session and its private bindings. */
 function createSessionBinding(read: StableRead): SessionBinding {
   const classification = classifyCurrent(read);
   const ordered = [...read.index.outputs];
@@ -1185,7 +1150,6 @@ function createSessionBinding(read: StableRead): SessionBinding {
   };
 }
 
-/** Re-proves an authentic session without rejecting unrelated Runtime commits. */
 async function reproveSession(
   state: CoordinatorState,
   binding: SessionBinding,
@@ -1208,7 +1172,6 @@ async function reproveSession(
   return read;
 }
 
-/** Captures and verifies one Runtime detail response against its private item. */
 function snapshotDetail(
   value: unknown,
   item: Readonly<KnowledgeKnownAppliedWikiOutputIndexItem>
@@ -1289,7 +1252,6 @@ function snapshotDetail(
   });
 }
 
-/** Reads detail twice around the current file and proves the session stayed exact. */
 async function readDetailSandwich(
   state: CoordinatorState,
   binding: SessionBinding,
@@ -1360,7 +1322,6 @@ async function readDetailSandwich(
   return Object.freeze({ detail: second, observation });
 }
 
-/** Returns hidden coordinator state only for an authentic instance. */
 function requireState(value: unknown): CoordinatorState {
   if (
     typeof value !== "object" ||
@@ -1374,7 +1335,6 @@ function requireState(value: unknown): CoordinatorState {
   return state;
 }
 
-/** Resolves only an authentic module-issued current session. */
 function resolveBinding(
   state: CoordinatorState,
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>
@@ -1382,9 +1342,7 @@ function resolveBinding(
   return typeof session === "object" && session !== null ? state.sessions.get(session) : undefined;
 }
 
-/** Production read-only known-applied-output coordinator. */
 export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements KnowledgeKnownAppliedWikiOutputsPort {
-  /** Captures one exact worker generation and no write/model/network capability. */
   constructor(inputValue: KnowledgeProductionKnownAppliedWikiOutputsCoordinatorInput) {
     const input = snapshotInput(inputValue);
     coordinatorStates.set(this, {
@@ -1397,7 +1355,6 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements Kn
     Object.freeze(this);
   }
 
-  /** Opens a bounded metadata-only session for one exact tracked Wiki path. */
   async inspectKnownOutputs(
     requestValue: Readonly<KnowledgeKnownAppliedWikiOutputsRequest>,
     signal: AbortSignal
@@ -1419,7 +1376,6 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements Kn
     }
   }
 
-  /** Loads one full next page through an authentic single-use cursor. */
   async listMore(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     cursor: string,
@@ -1450,7 +1406,6 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements Kn
     }
   }
 
-  /** Lazily returns one exact accepted output after full fresh reproof. */
   async readOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -1484,7 +1439,6 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements Kn
     }
   }
 
-  /** Returns exact known/current text without word-level diff or mutation. */
   async compareWithCurrent(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,

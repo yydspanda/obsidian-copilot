@@ -14,6 +14,10 @@ jest.mock("obsidian", () => ({
 jest.mock("@/aiParams", () => ({
   useSelectedTextContexts: () => [[{ content: "literal excerpt", notePath: "excerpt.md" }]],
 }));
+let mockActiveWebTab: { url: string; title: string } | null = null;
+jest.mock("@/components/chat-components/hooks/useActiveWebTabState", () => ({
+  useActiveWebTabState: () => ({ activeWebTabForMentions: mockActiveWebTab }),
+}));
 jest.mock("@/hooks/useActiveFile", () => ({ useActiveFile: () => ({ path: "active.md" }) }));
 jest.mock("@/miyo/miyoUtils", () => ({
   getMiyoFolderName: () => "Vault",
@@ -55,11 +59,11 @@ describe("useChatRelevantNotesContext", () => {
         contextNotes: [],
         includeActiveNote: false,
         loading: false,
-        setContextNotes: jest.fn(),
       } as unknown as AgentInputDraftControls;
     });
     afterEach(() => {
       root.remove();
+      mockActiveWebTab = null;
       jest.restoreAllMocks();
     });
 
@@ -388,6 +392,27 @@ describe("useChatRelevantNotesContext", () => {
       ]);
       expect(JSON.stringify(snapshot.request)).not.toContain("private-pixels");
     });
+    it.each([
+      ["no page is open", null, 0],
+      ["a page is open", { url: "https://example.com/report", title: "Report" }, 1],
+    ])(
+      "counts the included active web tab as skipped only when %s (https://github.com/Brevilabs/obsidian-copilot-private/issues/667)",
+      (_case, activeWebTab, expected) => {
+        mockActiveWebTab = activeWebTab;
+        renderHook(() =>
+          useChatRelevantNotesContext(
+            app,
+            root,
+            "one",
+            { ...draft, includeActiveWebTab: true },
+            [],
+            undefined
+          )
+        );
+        void act(() => root.dispatchEvent(new Event("pointerdown")));
+        expect(getChatRelevantNotesStore(app).getSnapshot()!.skippedAttachments).toBe(expected);
+      }
+    );
     it("clears the selected chat when a Markdown editor becomes active even without a Relevant Notes pane (https://github.com/Brevilabs/obsidian-copilot-private/issues/383)", () => {
       renderHook(() => useChatRelevantNotesContext(app, root, "one", draft, [], undefined));
       void act(() => root.dispatchEvent(new Event("pointerdown")));
@@ -418,7 +443,6 @@ describe("useChatRelevantNotesContext", () => {
         id: "other",
         request: { folder_name: "Vault", draft: "other topic" },
         skippedAttachments: 0,
-        addFile: jest.fn(),
       };
       const store = getChatRelevantNotesStore(app);
       store.select(other);
@@ -440,7 +464,6 @@ describe("useChatRelevantNotesContext", () => {
         id: "popout",
         request: { folder_name: "Vault", draft: "popout topic" },
         skippedAttachments: 0,
-        addFile: jest.fn(),
       };
       store.select(popout);
       const { rerender } = renderHook(
@@ -471,30 +494,6 @@ describe("useChatRelevantNotesContext", () => {
       });
     });
 
-    it("adds a recommended file to the new session's attachments after switching sessions (https://github.com/Brevilabs/obsidian-copilot-private/issues/383)", () => {
-      const firstSessionSetter = jest.fn();
-      const secondSessionSetter = jest.fn();
-      const { rerender } = renderHook(
-        ({ id, setContextNotes }) =>
-          useChatRelevantNotesContext(app, root, id, { ...draft, setContextNotes }, [], undefined),
-        { initialProps: { id: "first-chat", setContextNotes: firstSessionSetter } }
-      );
-      act(() => {
-        root.dispatchEvent(new Event("pointerdown"));
-      });
-      rerender({ id: "second-chat", setContextNotes: secondSessionSetter });
-      const existingNote = new (TFile as unknown as new (path: string) => TFile)("Existing.md");
-
-      getChatRelevantNotesStore(app).getSnapshot()!.addFile("Embeddings.md");
-
-      expect(firstSessionSetter).not.toHaveBeenCalled();
-      expect(secondSessionSetter).toHaveBeenCalledTimes(1);
-      const updateAttachments = secondSessionSetter.mock.calls[0][0];
-      expect(updateAttachments([existingNote]).map((note: TFile) => note.path)).toEqual([
-        "Existing.md",
-        "Embeddings.md",
-      ]);
-    });
     it("keeps the editor as the source when clicking the Relevant Notes popout control (https://github.com/Brevilabs/obsidian-copilot-private/issues/383)", () => {
       const { getByRole } = render(
         <RelevantNotesShelfPanel onPopOut={jest.fn()}>

@@ -8,16 +8,12 @@ import type { JsonValue } from "@/knowledge/model/types";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict durable forward-revision request version. */
 export const KNOWLEDGE_FORWARD_REVISION_REQUEST_VERSION = 1 as const;
 
-/** Current strict pending forward-revision proposal-record version. */
 export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_RECORD_VERSION = 1 as const;
 
-/** Current strict atomic proposal-publication receipt version. */
 export const KNOWLEDGE_FORWARD_REVISION_PUBLICATION_RECEIPT_VERSION = 1 as const;
 
-/** Defensive limits for durable forward-revision protocol material. */
 export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: 1_024,
@@ -25,7 +21,6 @@ export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS = Object.freeze({
   maxSelectedContentBytes: 8_000_000,
 });
 
-/** Exact accepted historical change selected by the Runtime projector. */
 export interface KnowledgeForwardRevisionHistoricalTargetChange {
   readonly changeId: string;
   readonly path: string;
@@ -34,14 +29,12 @@ export interface KnowledgeForwardRevisionHistoricalTargetChange {
   readonly sourceRefs: readonly [string];
 }
 
-/** Exact historical Manifest page projected by the accepted commit intent. */
 export interface KnowledgeForwardRevisionHistoricalManifestPage {
   readonly path: string;
   readonly ownership: "generated";
   readonly contentHash: string;
 }
 
-/** Historical accepted-Review proof that must be rejoined at publication. */
 export interface KnowledgeForwardRevisionHistoricalReviewAuthority {
   readonly proposalDigest: string;
   readonly acceptedDigest: string;
@@ -52,7 +45,6 @@ export interface KnowledgeForwardRevisionHistoricalReviewAuthority {
   readonly manifestPage: Readonly<KnowledgeForwardRevisionHistoricalManifestPage>;
 }
 
-/** Runtime-minted self-contained request to publish one forward Review proposal. */
 export interface KnowledgeForwardRevisionRequestV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REQUEST_VERSION;
   readonly kind: "forward_revision_request";
@@ -69,26 +61,11 @@ export interface KnowledgeForwardRevisionRequestV1 {
   readonly requestedAt: number;
 }
 
-/**
- * Runtime-only creator input whose request id is always derived by this module.
- *
- * The future atomic publication boundary must first replay-search its durable
- * proposal store by exact `intentId` plus `intentDigest`. Only when no exact
- * pending proposal exists may it allocate `requestRevision` and `requestedAt`
- * inside the same Runtime compare-and-swap. Prepared caller values are never
- * allocation authority.
- */
 export type CreateKnowledgeForwardRevisionRequestInput = Omit<
   KnowledgeForwardRevisionRequestV1,
   "version" | "kind" | "requestId"
 >;
 
-/**
- * Durable, still-pending dedicated forward Review proposal.
- *
- * It is neither an Apply claim nor compatible with the ingest Queue or legacy
- * ChangeSet Review store. Acceptance must mint a separate b2 claim atomically.
- */
 export interface KnowledgeForwardRevisionPendingProposalRecordV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_PROPOSAL_RECORD_VERSION;
   readonly kind: "forward_revision_proposal_record";
@@ -100,13 +77,11 @@ export interface KnowledgeForwardRevisionPendingProposalRecordV1 {
   readonly recordedAt: number;
 }
 
-/** Creator input for one independently persisted pending proposal record. */
 export interface CreateKnowledgeForwardRevisionPendingProposalRecordInput {
   readonly request: unknown;
   readonly recordedAt: number;
 }
 
-/** Closed durable result of atomically publishing a pending proposal. */
 export interface KnowledgeForwardRevisionPublicationReceiptV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_PUBLICATION_RECEIPT_VERSION;
   readonly kind: "forward_revision_publication_receipt";
@@ -124,7 +99,6 @@ export interface KnowledgeForwardRevisionPublicationReceiptV1 {
   readonly publishedAt: number;
 }
 
-/** Creator input for the receipt returned by the future atomic publication boundary. */
 export interface CreateKnowledgeForwardRevisionPublicationReceiptInput {
   readonly outcome: KnowledgeForwardRevisionPublicationReceiptV1["outcome"];
   readonly proposal: unknown;
@@ -193,9 +167,7 @@ const RECEIPT_KEYS = [
   "publishedAt",
 ] as const;
 
-/** Safe validation failure for malformed durable protocol material. */
 export class KnowledgeForwardRevisionProposalValidationError extends TypeError {
-  /** Creates one value-free fixed protocol failure. */
   constructor() {
     super("Forward revision durable proposal material is invalid");
     this.name = "KnowledgeForwardRevisionProposalValidationError";
@@ -204,7 +176,6 @@ export class KnowledgeForwardRevisionProposalValidationError extends TypeError {
 
 const authenticValidationErrors = new WeakSet<KnowledgeForwardRevisionProposalValidationError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -238,7 +209,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense array through data descriptors only. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -265,7 +235,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -281,7 +250,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported identifier control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -290,7 +258,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is one bounded protocol identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -302,22 +269,18 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether a value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether a value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether a value is a positive safe integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Captures one canonical bounded Vault-relative path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -336,12 +299,10 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Hashes one strict durable value with explicit domain separation. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Throws the module's sanitized strict protocol failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionProposalValidationError();
   authenticValidationErrors.add(error);
@@ -349,7 +310,6 @@ function invalid(): never {
   throw error;
 }
 
-/** Reports whether a thrown failure was minted inside this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionProposalValidationError {
@@ -360,7 +320,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Snapshots exact historical accepted-Review authority against one intent. */
 function snapshotHistoricalAuthority(
   value: unknown,
   intent: Readonly<KnowledgeForwardRevisionIntent>
@@ -422,14 +381,12 @@ function snapshotHistoricalAuthority(
   });
 }
 
-/** Builds the canonical request-id payload. */
 function requestIdPayload(
   value: Omit<KnowledgeForwardRevisionRequestV1, "version" | "kind" | "requestId">
 ): JsonValue {
   return value as unknown as JsonValue;
 }
 
-/** Derives one opaque request id from all semantic request material. */
 function deriveRequestId(
   value: Omit<KnowledgeForwardRevisionRequestV1, "version" | "kind" | "requestId">
 ): string {
@@ -439,7 +396,6 @@ function deriveRequestId(
   )}`;
 }
 
-/** Strictly snapshots one request creator input before its id exists. */
 function snapshotRequestInput(
   value: unknown
 ): Omit<KnowledgeForwardRevisionRequestV1, "version" | "kind" | "requestId"> {
@@ -491,13 +447,6 @@ function snapshotRequestInput(
   });
 }
 
-/**
- * Creates one self-contained NON-authoritative durable request.
- *
- * Only a Runtime CAS boundary may call this after exact replay lookup and after
- * freshly rejoining historical Review/commit evidence with current
- * Manifest/source/Vault authority and busy/recovery state.
- */
 export function createKnowledgeForwardRevisionRequest(
   value: CreateKnowledgeForwardRevisionRequestInput
 ): Readonly<KnowledgeForwardRevisionRequestV1> {
@@ -510,7 +459,6 @@ export function createKnowledgeForwardRevisionRequest(
   });
 }
 
-/** Strictly snapshots one unknown durable forward-revision request. */
 export function snapshotKnowledgeForwardRevisionRequest(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionRequestV1> {
@@ -550,7 +498,6 @@ export function snapshotKnowledgeForwardRevisionRequest(
   }
 }
 
-/** Computes the namespaced digest of one complete strict request. */
 export function createKnowledgeForwardRevisionRequestDigest(value: unknown): string {
   return digestValue(
     "knowledge-forward-revision-request-v1",
@@ -558,7 +505,6 @@ export function createKnowledgeForwardRevisionRequestDigest(value: unknown): str
   );
 }
 
-/** Derives one proposal id from its complete pending-record material except id. */
 function deriveProposalId(
   value: Omit<KnowledgeForwardRevisionPendingProposalRecordV1, "proposalId">
 ): string {
@@ -568,7 +514,6 @@ function deriveProposalId(
   )}`;
 }
 
-/** Creates one independently durable pending Review proposal record. */
 export function createKnowledgeForwardRevisionPendingProposalRecord(
   value: CreateKnowledgeForwardRevisionPendingProposalRecordInput
 ): Readonly<KnowledgeForwardRevisionPendingProposalRecordV1> {
@@ -596,7 +541,6 @@ export function createKnowledgeForwardRevisionPendingProposalRecord(
   });
 }
 
-/** Strictly snapshots one unknown pending forward-revision proposal record. */
 export function snapshotKnowledgeForwardRevisionPendingProposalRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionPendingProposalRecordV1> {
@@ -639,7 +583,6 @@ export function snapshotKnowledgeForwardRevisionPendingProposalRecord(
   }
 }
 
-/** Computes the namespaced digest of one strict pending proposal record. */
 export function createKnowledgeForwardRevisionPendingProposalRecordDigest(value: unknown): string {
   return digestValue(
     "knowledge-forward-revision-proposal-record-v1",
@@ -647,13 +590,6 @@ export function createKnowledgeForwardRevisionPendingProposalRecordDigest(value:
   );
 }
 
-/**
- * Derives a retry-stable publication id while deliberately excluding outcome.
- *
- * Exact replay must supply the originally persisted Runtime and proposal-store
- * revisions from its durable wrapper. A later current revision is not replay
- * identity and deliberately derives a different receipt.
- */
 function derivePublicationId(
   value: Omit<
     KnowledgeForwardRevisionPublicationReceiptV1,
@@ -666,7 +602,6 @@ function derivePublicationId(
   )}`;
 }
 
-/** Creates one closed receipt for an atomic pending-proposal publication. */
 export function createKnowledgeForwardRevisionPublicationReceipt(
   value: CreateKnowledgeForwardRevisionPublicationReceiptInput
 ): Readonly<KnowledgeForwardRevisionPublicationReceiptV1> {
@@ -708,7 +643,6 @@ export function createKnowledgeForwardRevisionPublicationReceipt(
   });
 }
 
-/** Strictly snapshots one unknown closed proposal-publication receipt. */
 export function snapshotKnowledgeForwardRevisionPublicationReceipt(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionPublicationReceiptV1> {
@@ -764,7 +698,6 @@ export function snapshotKnowledgeForwardRevisionPublicationReceipt(
   }
 }
 
-/** Computes the namespaced digest of one complete publication receipt. */
 export function createKnowledgeForwardRevisionPublicationReceiptDigest(value: unknown): string {
   return digestValue(
     "knowledge-forward-revision-publication-receipt-v1",

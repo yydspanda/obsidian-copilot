@@ -22,10 +22,8 @@ import {
 import type { JsonValue } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current private model-route contract accepted by this isolated adapter. */
 const SUPPORTED_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION = 1 as const;
 
-/** Provider-neutral decoded-object contract returned to the compiler core. */
 export const KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT = "decoded-object-core-schema-v1" as const;
 
 const MODEL_ADAPTER_POLICY = "knowledge-projection-only-v1";
@@ -38,24 +36,20 @@ const REFLECT_APPLY = Reflect.apply;
 const MAX_PRIVATE_MODEL_WIRE_CHARACTERS = 16_000_000;
 const MAX_PRIVATE_MODEL_WIRE_BYTES = 32_000_000;
 
-/** Immutable secret-free declaration paired with one private route closure. */
 export interface KnowledgePrivateModelRouteDescriptor {
   provider: string;
   model: string;
   configuration: JsonValue;
 }
 
-/** Model work stages exposed to a private provider route. */
 export type KnowledgePrivateModelStage = "generation";
 
-/** Private transport closure retained only in module-owned route state. */
 export type KnowledgePrivateModelInvoke = (
   stage: KnowledgePrivateModelStage,
   request: Readonly<CompilerGenerationRequest>,
   signal: AbortSignal
 ) => Promise<string>;
 
-/** Sanitized concrete-provider categories retained across the private route boundary. */
 export type KnowledgePrivateModelProviderFailureCode =
   | "request_rejected"
   | "unauthorized"
@@ -68,15 +62,12 @@ export type KnowledgePrivateModelProviderFailureCode =
   | "response_too_large"
   | "response_invalid";
 
-/** Route-owned classifier that translates only its concrete sanitized failures. */
 export type KnowledgePrivateModelFailureClassifier = (
   error: unknown
 ) => KnowledgePrivateModelProviderFailureCode | undefined;
 
-/** Queue-owned monotonic stage reporter captured by one job-bound adapter. */
 export type KnowledgeModelStageReporter = (stage: "generating") => Promise<void>;
 
-/** Independent decoded-object resource limits applied after provider decoding. */
 interface KnowledgeDecodedModelOutputLimits {
   maxDepth: number;
   maxNodes: number;
@@ -85,7 +76,6 @@ interface KnowledgeDecodedModelOutputLimits {
   maxTotalCharacters: number;
 }
 
-/** Safe defaults below the compiler's independent semantic collection limits. */
 const FIXED_KNOWLEDGE_DECODED_MODEL_OUTPUT_LIMITS: Readonly<KnowledgeDecodedModelOutputLimits> =
   Object.freeze({
     maxDepth: 64,
@@ -95,7 +85,6 @@ const FIXED_KNOWLEDGE_DECODED_MODEL_OUTPUT_LIMITS: Readonly<KnowledgeDecodedMode
     maxTotalCharacters: 8_000_000,
   });
 
-/** Stable failure categories that never include provider or credential material. */
 export type KnowledgeCompilerModelAdapterErrorCode =
   | "dependency_invalid"
   | "preparation_invalid"
@@ -149,7 +138,6 @@ const PROVIDER_FAILURE_CODES = new Set<KnowledgePrivateModelProviderFailureCode>
   "response_invalid",
 ]);
 
-/** Returns hidden adapter-error state only for a module-minted instance. */
 function requireKnowledgeCompilerModelAdapterErrorState(
   value: unknown
 ): Readonly<KnowledgeCompilerModelAdapterErrorState> {
@@ -163,7 +151,6 @@ function requireKnowledgeCompilerModelAdapterErrorState(
   return state;
 }
 
-/** Creates one authentic sanitized adapter error with optional provider identity. */
 function createKnowledgeCompilerModelAdapterError(
   code: KnowledgeCompilerModelAdapterErrorCode,
   providerFailure?: KnowledgePrivateModelProviderFailureCode
@@ -171,9 +158,7 @@ function createKnowledgeCompilerModelAdapterError(
   return new KnowledgeCompilerModelAdapterError(ADAPTER_ERROR_TOKEN, code, providerFailure);
 }
 
-/** Sanitized model-boundary error retaining no lower-level cause or response value. */
 export class KnowledgeCompilerModelAdapterError extends Error {
-  /** Creates one error only when called by this module's private helper. */
   constructor(
     token: symbol,
     code: KnowledgeCompilerModelAdapterErrorCode,
@@ -198,13 +183,11 @@ export class KnowledgeCompilerModelAdapterError extends Error {
     Object.freeze(this);
   }
 
-  /** Reads one authentic adapter error without accepting prototype forgery. */
   static inspect(value: unknown): Readonly<KnowledgeCompilerModelAdapterErrorState> | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     return adapterErrorStates.get(value);
   }
 
-  /** Returns the stable adapter code retained in hidden state. */
   get code(): KnowledgeCompilerModelAdapterErrorCode {
     return requireKnowledgeCompilerModelAdapterErrorState(this).code;
   }
@@ -284,19 +267,16 @@ const routeStates = new WeakMap<object, KnowledgePrivateModelRouteState>();
 const adapterStates = new WeakMap<object, KnowledgeCompilerModelAdapterState>();
 const reservedAdapterPreparations = new WeakSet<object>();
 
-/** Compares strings by code unit without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates a sanitized cancellation without retaining an arbitrary abort reason. */
 function createAbortError(): Error {
   const error = new Error("The private knowledge compiler model operation was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/** Requires one non-empty canonical identity string. */
 function requireCanonicalText(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw createKnowledgeCompilerModelAdapterError("route_invalid");
@@ -304,7 +284,6 @@ function requireCanonicalText(value: unknown): string {
   return value;
 }
 
-/** Requires one plaintext-free SHA-256 route identity. */
 function requireRouteIdentity(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
     throw createKnowledgeCompilerModelAdapterError("route_invalid");
@@ -312,7 +291,6 @@ function requireRouteIdentity(value: unknown): string {
   return value;
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readOwnDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new TypeError("Expected an object");
@@ -324,7 +302,6 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Reads one optional own enumerable data property without invoking an accessor. */
 function readOptionalOwnDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new TypeError("Expected an object");
@@ -337,7 +314,6 @@ function readOptionalOwnDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Checks whether the exact own string keys equal an expected set. */
 function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -353,7 +329,6 @@ function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean 
   }
 }
 
-/** Adds decoded keys or strings to one bounded character budget. */
 function addCharacters(budget: SnapshotBudget, count: number, limits: JsonSnapshotLimits): void {
   budget.characters += count;
   if (!Number.isSafeInteger(budget.characters) || budget.characters > limits.maxTotalCharacters) {
@@ -361,7 +336,6 @@ function addCharacters(budget: SnapshotBudget, count: number, limits: JsonSnapsh
   }
 }
 
-/** Recursively snapshots strict JSON without invoking accessors or retaining proxies. */
 function snapshotJsonValue(
   value: unknown,
   limits: JsonSnapshotLimits,
@@ -459,12 +433,10 @@ function snapshotJsonValue(
   }
 }
 
-/** Creates one detached deeply frozen bounded JSON snapshot. */
 function snapshotJson(value: unknown, limits: JsonSnapshotLimits): JsonValue {
   return snapshotJsonValue(value, limits, { nodes: 0, characters: 0 }, new Set<object>(), 0);
 }
 
-/** Decodes bounded provider JSON text before any object-level inspection can trigger callbacks. */
 function decodePrivateModelWireOutput(value: unknown): JsonValue {
   if (typeof value !== "string") {
     throw createKnowledgeCompilerModelAdapterError("output_invalid");
@@ -490,7 +462,6 @@ function decodePrivateModelWireOutput(value: unknown): JsonValue {
   return snapshotJson(parsed, FIXED_KNOWLEDGE_DECODED_MODEL_OUTPUT_LIMITS);
 }
 
-/** Captures an exact secret-free model profile used for request and route binding. */
 function captureProfile(value: unknown): KnowledgeBundlePipelineProfile {
   let snapshot: JsonValue;
   try {
@@ -510,7 +481,6 @@ function captureProfile(value: unknown): KnowledgeBundlePipelineProfile {
   return snapshot as unknown as KnowledgeBundlePipelineProfile;
 }
 
-/** Captures and validates one exact private route declaration. */
 function captureRouteDescriptor(value: unknown): {
   descriptor: Readonly<KnowledgePrivateModelRouteDescriptor>;
   captured: CapturedRouteConfiguration;
@@ -577,7 +547,6 @@ function captureRouteDescriptor(value: unknown): {
   }
 }
 
-/** Returns hidden route state only for a module-created route capability. */
 function requireRouteState(value: unknown): KnowledgePrivateModelRouteState {
   if (typeof value !== "object" || value === null) {
     throw createKnowledgeCompilerModelAdapterError("route_invalid");
@@ -589,7 +558,6 @@ function requireRouteState(value: unknown): KnowledgePrivateModelRouteState {
   return state;
 }
 
-/** Runs only the classifier captured by the exact opaque route and sanitizes classifier failure. */
 function classifyRouteFailure(
   route: KnowledgePrivateModelRouteState,
   error: unknown
@@ -602,7 +570,6 @@ function classifyRouteFailure(
   }
 }
 
-/** Returns hidden adapter state only for a module-created job-bound adapter. */
 function requireAdapterState(value: unknown): KnowledgeCompilerModelAdapterState {
   if (typeof value !== "object" || value === null) {
     throw createKnowledgeCompilerModelAdapterError("adapter_invalid");
@@ -614,12 +581,10 @@ function requireAdapterState(value: unknown): KnowledgeCompilerModelAdapterState
   return state;
 }
 
-/** Returns canonical JSON for an already detached JSON value. */
 function digestJson(domain: string, value: JsonValue): string {
   return sha256(`${domain}\n${canonicalizeJson(value)}`);
 }
 
-/** Captures the authentic preparation's exact model-visible request foundation. */
 function capturePreparation(preparation: KnowledgeAuthorizedSourcePreparation): {
   signal: AbortSignal;
   profile: KnowledgeBundlePipelineProfile;
@@ -691,7 +656,6 @@ function capturePreparation(preparation: KnowledgeAuthorizedSourcePreparation): 
   }
 }
 
-/** Verifies that one route exactly matches the authorized secret-free profile. */
 function assertRouteMatchesProfile(
   route: KnowledgePrivateModelRouteState,
   profile: KnowledgeBundlePipelineProfile
@@ -719,7 +683,6 @@ function assertRouteMatchesProfile(
   }
 }
 
-/** Snapshots one exact compiler request without trusting its prototype or nested references. */
 function snapshotCompilerRequest(value: unknown): Readonly<CompilerGenerationRequest> {
   try {
     const snapshot = snapshotJson(value, {
@@ -760,7 +723,6 @@ function snapshotCompilerRequest(value: unknown): Readonly<CompilerGenerationReq
   }
 }
 
-/** Requires one compiler request to retain the exact authorized source foundation. */
 function assertRequestFoundation(
   request: Readonly<CompilerGenerationRequest>,
   foundation: AuthorizedPreparationSnapshot
@@ -778,7 +740,6 @@ function assertRequestFoundation(
   }
 }
 
-/** Requires the exact compiler-authorized object before inspecting caller-controlled data. */
 function captureAuthorizedRequest(
   value: unknown,
   state: KnowledgeCompilerModelAdapterState
@@ -803,7 +764,6 @@ function captureAuthorizedRequest(
   return request;
 }
 
-/** Projects the runtime-bound authority independently of model-authored claims. */
 function projectTargetSet(targets: readonly CompilerBoundTarget[]): JsonValue {
   return targets.map((target) => ({
     targetId: target.targetId,
@@ -822,7 +782,6 @@ function projectTargetSet(targets: readonly CompilerBoundTarget[]): JsonValue {
   }));
 }
 
-/** Projects only caller-authorized writable targets into the model-visible request. */
 function projectGenerationTargets(targets: readonly CompilerBoundTarget[]): JsonValue {
   return targets.map((target) => ({
     targetId: target.targetId,
@@ -893,7 +852,6 @@ function authorizeCompilerModelCall(
   }
 }
 
-/** Revalidates the exact preparation, signal, profile, and Runtime proof. */
 async function reprove(
   state: KnowledgeCompilerModelAdapterState,
   stage: "generating"
@@ -927,7 +885,6 @@ async function reprove(
   }
 }
 
-/** Reports one Queue stage without retaining infrastructure failures. */
 async function reportStage(
   state: KnowledgeCompilerModelAdapterState,
   stage: "generating"
@@ -940,7 +897,6 @@ async function reportStage(
   }
 }
 
-/** Executes the one authorized private route invocation without a model selection gate. */
 async function invokeModel(
   state: KnowledgeCompilerModelAdapterState,
   requestValue: unknown,
@@ -1000,14 +956,7 @@ async function invokeModel(
   }
 }
 
-/**
- * Opaque private route capability whose credential and transport live only in a closure.
- *
- * The class deliberately exposes no invoke method. Only the job-bound adapter in
- * this module can reach the closure after exact profile and execution reproof.
- */
 export class KnowledgePrivateModelRoute {
-  /** Rejects direct construction without the module-private provider-factory token. */
   constructor(
     token: symbol,
     descriptor: KnowledgePrivateModelRouteDescriptor,
@@ -1037,17 +986,14 @@ export class KnowledgePrivateModelRoute {
     Object.freeze(this);
   }
 
-  /** Rejects spread copies, prototype forgeries, and ordinary descriptor DTOs. */
   static assert(value: unknown): asserts value is KnowledgePrivateModelRoute {
     requireRouteState(value);
   }
 
-  /** Returns the detached secret-free declaration for diagnostics and composition. */
   getDescriptor(): Readonly<KnowledgePrivateModelRouteDescriptor> {
     return requireRouteState(this).descriptor;
   }
 
-  /** Returns whether this exact route was sealed for one secret-free pipeline profile. */
   matchesProfile(profile: KnowledgeBundlePipelineProfile): boolean {
     try {
       assertRouteMatchesProfile(requireRouteState(this), profile);
@@ -1061,12 +1007,6 @@ export class KnowledgePrivateModelRoute {
 Object.freeze(KnowledgePrivateModelRoute.prototype);
 Object.freeze(KnowledgePrivateModelRoute);
 
-/**
- * Seals one reviewed provider transport behind an opaque route capability.
- *
- * Concrete provider modules remain responsible for constructing one exact,
- * non-streaming, no-fallback transport call and returning bounded JSON text.
- */
 export function bindKnowledgePrivateModelRoute(
   descriptor: KnowledgePrivateModelRouteDescriptor,
   invoke: KnowledgePrivateModelInvoke,
@@ -1075,14 +1015,6 @@ export function bindKnowledgePrivateModelRoute(
   return new KnowledgePrivateModelRoute(ROUTE_TOKEN, descriptor, invoke, classifyFailure);
 }
 
-/**
- * Seals a private provider route to one complete secret-free pipeline profile.
- *
- * Concrete transports should prefer this binder whenever prompt behavior is
- * derived from profile fields outside the model configuration. The adapter
- * then rejects reuse with another output language, compiler, parser, or
- * citation contract even when the provider/model pair is otherwise identical.
- */
 export function bindKnowledgePrivateModelRouteToProfile(
   profile: KnowledgeBundlePipelineProfile,
   invoke: KnowledgePrivateModelInvoke,
@@ -1111,11 +1043,7 @@ export function bindKnowledgePrivateModelRouteToProfile(
   }
 }
 
-/**
- * Single-attempt CompilerModelPort bound to an authentic source preparation and Queue signal.
- */
 export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
-  /** Binds exact preparation, private route, and Queue stage capability without own fields. */
   constructor(
     token: symbol,
     preparation: KnowledgeAuthorizedSourcePreparation,
@@ -1145,17 +1073,14 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
     Object.freeze(this);
   }
 
-  /** Requires an authentic binder-created adapter instance. */
   static assert(value: unknown): asserts value is KnowledgeCompilerModelAdapter {
     requireAdapterState(value);
   }
 
-  /** Consumes the exact one-shot compiler authorization for the next model stage. */
   authorizeModelCall(authorization: unknown): void {
     authorizeCompilerModelCall(requireAdapterState(this), authorization);
   }
 
-  /** Executes one compiler-authorized generation call through the exact private route. */
   async generate(request: CompilerGenerationRequest, signal: AbortSignal): Promise<unknown> {
     return invokeModel(requireAdapterState(this), request, signal);
   }
@@ -1164,15 +1089,6 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
 Object.freeze(KnowledgeCompilerModelAdapter.prototype);
 Object.freeze(KnowledgeCompilerModelAdapter);
 
-/**
- * Classifies only sanitized failures created by this model boundary.
- *
- * The returned value contains no provider payload, request, URL, credential,
- * or original cause. Queue policy remains responsible for scheduling retries.
- *
- * @param error - Opaque rejection caught by the Compiler
- * @returns Provider-neutral retry facts, or undefined for an unrelated error
- */
 export function classifyKnowledgeCompilerModelAdapterFailure(
   error: unknown
 ): KnowledgeCompilerInfrastructureFailureCode | undefined {
@@ -1206,7 +1122,6 @@ export function classifyKnowledgeCompilerModelAdapterFailure(
   return "model_authority_failed";
 }
 
-/** Creates job-bound adapters while keeping the constructor token module-private. */
 export function bindKnowledgeCompilerModelAdapter(
   preparation: KnowledgeAuthorizedSourcePreparation,
   route: KnowledgePrivateModelRoute,

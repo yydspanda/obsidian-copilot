@@ -23,7 +23,6 @@ const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 const MODEL_SECRET = "sk-model-secret-canary";
 const PROVIDER_SECRET = "sk-provider-secret-canary";
 
-/** Creates one caller-validated Bundle owner. */
 function createOwner(
   bundleId = "personal",
   projectId = PROJECT_ID
@@ -39,7 +38,6 @@ function createOwner(
   return { projectId, config };
 }
 
-/** Creates one project snapshot with an exact model selection. */
 function createProject(
   overrides: Partial<ProjectKnowledgePipelineProjectInput> = {}
 ): ProjectKnowledgePipelineProjectInput {
@@ -51,7 +49,6 @@ function createProject(
   };
 }
 
-/** Creates one enabled model record including its optional private credential. */
 function createModel(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name: MODEL_NAME,
@@ -65,7 +62,6 @@ function createModel(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
-/** Creates one already hydrated settings snapshot. */
 function createSettings(
   activeModels: readonly unknown[] = [createModel()],
   overrides: Partial<KnowledgeProductionPreflightSettingsInput> = {}
@@ -81,7 +77,6 @@ function createSettings(
   };
 }
 
-/** Creates production static compiler, parser, prompt, and route behavior. */
 function createProfileOptions(
   overrides: Partial<ProjectKnowledgePipelineProfileSourceOptions> = {}
 ): ProjectKnowledgePipelineProfileSourceOptions {
@@ -106,14 +101,12 @@ function createProfileOptions(
   };
 }
 
-/** Creates a fetch capability that makes any accidental preflight network use fail. */
 function createFetchPort(): KnowledgeDeepSeekFetchPort {
   return jest.fn(async () => {
     throw new Error("Preflight must not invoke native fetch");
   });
 }
 
-/** Creates one complete production preflight input. */
 function createInput(
   overrides: Partial<KnowledgeProductionPreflightComposerInput> = {}
 ): KnowledgeProductionPreflightComposerInput {
@@ -370,7 +363,6 @@ describe("KnowledgeProductionPreflightComposer", () => {
   it("resolves an authentic subclass through the frozen base authority method", () => {
     let overrideCalls = 0;
     class OverridingProfileSource extends ProjectKnowledgePipelineProfileSource {
-      /** Must not replace the authentic base resolution boundary. */
       override resolve(owner: ConfiguredProjectKnowledgeBundle) {
         overrideCalls += 1;
         return super.resolve(owner);

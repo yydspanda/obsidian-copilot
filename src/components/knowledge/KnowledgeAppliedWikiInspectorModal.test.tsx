@@ -36,7 +36,6 @@ jest.mock("obsidian", () => {
     contentEl = window.document.createElement("div");
     close = jest.fn();
 
-    /** Captures the minimum Modal owner used by the wrapper suite. */
     constructor(app: unknown) {
       this.app = app;
     }
@@ -50,7 +49,6 @@ interface Deferred<T> {
   readonly reject: (error: unknown) => void;
 }
 
-/** Creates a manually controlled asynchronous result. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -61,7 +59,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Creates one authentic-shape frozen UI session without private projector authority. */
 function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   return Object.freeze({
     pageRef: "a".repeat(64),
@@ -106,7 +103,6 @@ function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   });
 }
 
-/** Creates one forward-revised session retaining the same original Source evidence. */
 function createForwardSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   return Object.freeze({
     ...createSession(),
@@ -134,12 +130,10 @@ function createForwardSession(): Readonly<KnowledgeAppliedWikiPageInspectionSess
   });
 }
 
-/** Creates a session projection for a different page without mutating the base fixture. */
 function createSessionAt(pagePath: string): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   return Object.freeze({ ...createSession(), displayPagePath: pagePath });
 }
 
-/** Creates a configurable inspector recording the exact opaque calls. */
 function createInspector(
   inspectPage: KnowledgeAppliedWikiPageInspectorPort["inspectPage"] = async () => createSession(),
   openEvidence: KnowledgeAppliedWikiPageInspectorPort["openEvidence"] = async () => ({
@@ -149,7 +143,6 @@ function createInspector(
   return { inspectPage: jest.fn(inspectPage), openEvidence: jest.fn(openEvidence) };
 }
 
-/** Creates the separate read-only known-output capability used by the Modal. */
 function createKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
   return {
     inspectKnownOutputs: jest.fn(async () =>
@@ -186,7 +179,6 @@ function createKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
   };
 }
 
-/** Creates an applied session with one earlier output eligible for proposal publication. */
 function createProposalKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
   const currentRef = `known-wiki-output-${"1".repeat(64)}`;
   const earlierRef = `known-wiki-output-${"2".repeat(64)}`;
@@ -253,7 +245,6 @@ function createProposalKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPo
   };
 }
 
-/** Flushes pending promise continuations and React updates. */
 async function flushPromises(): Promise<void> {
   await act(async () => {
     await Promise.resolve();

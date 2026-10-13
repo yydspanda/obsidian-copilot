@@ -6,7 +6,6 @@ import {
 import type { GeneratedPageOwnership } from "@/knowledge/model/types";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Current contract version of the Runtime-owned source freshness authority. */
 export const KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION = 2 as const;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -64,7 +63,6 @@ const NO_CHANGES_REASONS: readonly NoChangesManifestCommitReason[] = Object.free
   "all_targets_unchanged",
 ]);
 
-/** One exact current Manifest output whose Vault bytes must be re-proved. */
 export interface KnowledgeRuntimeFreshnessGeneratedPage {
   readonly path: string;
   readonly windowsPathKey: string;
@@ -80,7 +78,6 @@ export interface KnowledgeRuntimeFreshnessGeneratedPage {
       }>;
 }
 
-/** Fields shared by Apply and no-changes freshness outcomes. */
 interface KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly version: typeof KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION;
   readonly runtimeId: string;
@@ -96,7 +93,6 @@ interface KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly generatedPages: readonly Readonly<KnowledgeRuntimeFreshnessGeneratedPage>[];
 }
 
-/** Latest source outcome proven by the Runtime Apply ledger and current Manifest. */
 export interface KnowledgeRuntimeAppliedFreshnessAuthority extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly kind: "applied";
   readonly transactionId: string;
@@ -108,7 +104,6 @@ export interface KnowledgeRuntimeAppliedFreshnessAuthority extends KnowledgeRunt
   readonly completedAt: number;
 }
 
-/** Latest source outcome proven by an exact Runtime/Queue no-changes commit. */
 export interface KnowledgeRuntimeNoChangesFreshnessAuthority extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly kind: "no_changes";
   readonly noChangesId: string;
@@ -120,26 +115,15 @@ export interface KnowledgeRuntimeNoChangesFreshnessAuthority extends KnowledgeRu
   readonly completedAt: number;
 }
 
-/** Read-only exact source outcome eligible for output-byte freshness verification. */
 export type KnowledgeRuntimeSourceFreshnessAuthority =
   | KnowledgeRuntimeAppliedFreshnessAuthority
   | KnowledgeRuntimeNoChangesFreshnessAuthority;
 
-/** Minimal read port consumed by production observation admission. */
 export interface KnowledgeRuntimeSourceFreshnessAuthorityPort {
-  /**
-   * Reads the latest Runtime-proven source outcome, or no authority.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable registered source identifier
-   * @returns Detached deeply frozen authority, or null when proof is absent
-   */
   readSourceFreshnessAuthority(bundleId: string, sourceId: string): Promise<unknown>;
 }
 
-/** Sanitized rejection of an untrusted Runtime freshness authority payload. */
 export class KnowledgeRuntimeSourceFreshnessAuthorityValidationError extends TypeError {
-  /** Creates one fixed validation failure without retaining the rejected value. */
   constructor() {
     super("Runtime source freshness authority does not satisfy the strict contract");
     this.name = "KnowledgeRuntimeSourceFreshnessAuthorityValidationError";
@@ -147,33 +131,22 @@ export class KnowledgeRuntimeSourceFreshnessAuthorityValidationError extends Typ
   }
 }
 
-/** Throws one fixed strict-authority validation failure. */
 function throwInvalidAuthority(): never {
   throw new KnowledgeRuntimeSourceFreshnessAuthorityValidationError();
 }
 
-/** Reports whether one scalar is a canonical non-empty identifier. */
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/** Reports whether one scalar is a lowercase SHA-256 digest. */
 function isSha256(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether one scalar is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/**
- * Snapshots one plain record with an exact own enumerable data-key set.
- *
- * @param value - Unknown record candidate
- * @param keys - Complete allowed key set
- * @returns Detached null-prototype snapshot, or undefined for exotic input
- */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -202,12 +175,6 @@ function snapshotExactRecord(
   }
 }
 
-/**
- * Snapshots one bounded dense array without invoking accessors or iterators.
- *
- * @param value - Unknown array candidate
- * @returns Detached item snapshot, or undefined for sparse or exotic input
- */
 function snapshotDensePageArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
@@ -234,7 +201,6 @@ function snapshotDensePageArray(value: unknown): readonly unknown[] | undefined 
   }
 }
 
-/** Snapshots and validates exact current generated pages. */
 function parseGeneratedPages(
   value: unknown,
   bundleId: string,
@@ -284,7 +250,6 @@ function parseGeneratedPages(
   return Object.freeze(pages);
 }
 
-/** Strictly parses and correlates one generated page's current provenance. */
 function parseGeneratedPageOrigin(
   value: unknown,
   bundleId: string,
@@ -325,7 +290,6 @@ function parseGeneratedPageOrigin(
   return Object.freeze({ kind: "forward_revision" as const, overlay });
 }
 
-/** Reads the kind data descriptor without invoking a hostile accessor. */
 function readAuthorityKind(value: unknown): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -336,7 +300,6 @@ function readAuthorityKind(value: unknown): unknown {
   }
 }
 
-/** Validates all common exact Runtime/Manifest and source bindings. */
 function parseAuthorityCommon(record: Readonly<Record<string, unknown>>) {
   if (
     record.version !== KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION ||
@@ -371,16 +334,6 @@ function parseAuthorityCommon(record: Readonly<Record<string, unknown>>) {
   });
 }
 
-/**
- * Strictly parses untrusted Runtime source-freshness authority material.
- *
- * Accessors, inherited records, extra keys, sparse arrays, path aliases,
- * duplicate Windows identities, and malformed kind-specific proof fields are
- * rejected before admission can observe or hash any Vault output.
- *
- * @param value - Unknown non-null projection returned by a read adapter
- * @returns Detached deeply frozen exact authority
- */
 export function parseKnowledgeRuntimeSourceFreshnessAuthority(
   value: unknown
 ): KnowledgeRuntimeSourceFreshnessAuthority {

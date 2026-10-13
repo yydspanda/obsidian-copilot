@@ -7,7 +7,6 @@ const SOURCE_PATH = "Sources/Research.md";
 const SOURCE_ID = "source-1";
 const ARTIFACT_ID = "artifact-1";
 
-/** Creates fields shared by exact source locator fixtures. */
 function createLocatorBase(content: string, excerpt: string) {
   return {
     sourceId: SOURCE_ID,
@@ -18,7 +17,6 @@ function createLocatorBase(content: string, excerpt: string) {
   };
 }
 
-/** Creates one structurally valid typed claim citation. */
 function createCitation(locator: SourceLocator): ClaimCitation {
   return {
     citationId: "citation-1",

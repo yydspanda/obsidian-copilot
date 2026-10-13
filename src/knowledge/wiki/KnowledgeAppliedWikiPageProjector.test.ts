@@ -13,7 +13,6 @@ import { KnowledgeAppliedWikiPageInspectorError } from "@/knowledge/wiki/Knowled
 const PAGE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 
-/** Creates one exact valid citation for a contributing Source artifact. */
 function createCitation(sourceId: string, sourceContentHash: string, index = 1): ClaimCitation {
   const excerpt = `Evidence ${index}`;
   return {
@@ -34,7 +33,6 @@ function createCitation(sourceId: string, sourceContentHash: string, index = 1):
   };
 }
 
-/** Creates one valid applied contributing-Source authority. */
 function createSource(index = 1): KnowledgeRuntimeAppliedSourceProvenance {
   const sourceId = `source-${index}`;
   const sourceContentHash = index.toString(16).padStart(64, "0");
@@ -52,7 +50,6 @@ function createSource(index = 1): KnowledgeRuntimeAppliedSourceProvenance {
   };
 }
 
-/** Creates one valid stable page authority accepted by the projector. */
 function createAuthority(
   sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[] = [createSource()],
   overrides: Partial<KnowledgeRuntimeAppliedPageProvenance> = {}

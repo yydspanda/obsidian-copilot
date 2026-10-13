@@ -92,8 +92,6 @@ describe("cliSignIn", () => {
       pid: number;
     };
     beforeEach(() => {
-      // Signal fixtures exercise POSIX process groups; Windows cases select their own platform.
-      // https://github.com/logancyang/obsidian-copilot/issues/2967
       Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
       child = Object.assign(new EventEmitter(), {
         stdout: new PassThrough(),
@@ -286,8 +284,8 @@ describe("cliSignIn", () => {
             if (proxy.pid) {
               try {
                 process.kill(-proxy.pid, "SIGKILL");
-              } catch {
-                /* Already stopped. */
+              } catch (error) {
+                expect((error as NodeJS.ErrnoException).code).toBe("ESRCH");
               }
             }
           }

@@ -4,7 +4,6 @@ import {
   type KnowledgeAppliedWikiPageInspectionRequest,
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 
-/** Fixed UI disclosure and paging limits for retained applied outputs. */
 export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   pageSize: 20,
   maxKnownOutputs: 10_000,
@@ -13,19 +12,15 @@ export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   maxContentCharacters: 2_000_000,
 });
 
-/** Canonical Wiki page request shared with the current-page inspector. */
 export type KnowledgeKnownAppliedWikiOutputsRequest = KnowledgeAppliedWikiPageInspectionRequest;
 
-/** Exact relationship between the current Vault file and retained Apply truth. */
 export type KnowledgeKnownAppliedWikiCurrentState = "applied" | "drifted" | "missing";
 
-/** Display relationship of one retained output to the current/latest state. */
 export type KnowledgeKnownAppliedWikiOutputRelation =
   | "current_applied"
   | "latest_known"
   | "earlier_known";
 
-/** One canonical, metadata-only Apply provenance summary for a retained output. */
 export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
   readonly kind: "source_apply" | "forward_revision";
   readonly verifiedApplyCount: number;
@@ -33,7 +28,6 @@ export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
   readonly newestManifestRevision: number;
 }
 
-/** Honest per-row availability of the narrow forward-proposal UI action. */
 export type KnowledgeKnownAppliedWikiOutputProposalCapability =
   | "available"
   | "current_not_applied"
@@ -41,7 +35,6 @@ export type KnowledgeKnownAppliedWikiOutputProposalCapability =
   | "forward_origin_not_supported"
   | "detail_too_large";
 
-/** Metadata-only row for one unique, strictly proven retained output. */
 export interface KnowledgeKnownAppliedWikiOutputSummary {
   readonly outputRef: string;
   readonly appliedAt: number;
@@ -51,13 +44,11 @@ export interface KnowledgeKnownAppliedWikiOutputSummary {
   readonly proposalCapability: KnowledgeKnownAppliedWikiOutputProposalCapability;
 }
 
-/** One bounded page of retained output metadata. */
 export interface KnowledgeKnownAppliedWikiOutputsPage {
   readonly items: readonly Readonly<KnowledgeKnownAppliedWikiOutputSummary>[];
   readonly nextCursor?: string;
 }
 
-/** Opaque exact-generation session returned for one canonical Wiki path. */
 export interface KnowledgeKnownAppliedWikiOutputsSession extends KnowledgeKnownAppliedWikiOutputsPage {
   readonly pageRef: string;
   readonly displayPagePath: string;
@@ -66,7 +57,6 @@ export interface KnowledgeKnownAppliedWikiOutputsSession extends KnowledgeKnownA
   readonly knownOutputCount: number;
 }
 
-/** Lazy, full retained text for one selected strictly proven output. */
 export interface KnowledgeKnownAppliedWikiOutputDetail {
   readonly outputRef: string;
   readonly appliedAt: number;
@@ -76,7 +66,6 @@ export interface KnowledgeKnownAppliedWikiOutputDetail {
   readonly content: string;
 }
 
-/** Exact current-file comparison payload for one retained output. */
 export interface KnowledgeKnownAppliedWikiOutputComparison {
   readonly outputRef: string;
   readonly currentState: KnowledgeKnownAppliedWikiCurrentState;
@@ -84,22 +73,18 @@ export interface KnowledgeKnownAppliedWikiOutputComparison {
   readonly currentContent: string;
 }
 
-/** Closed metadata-page outcome for a generation-bound cursor. */
 export type KnowledgeKnownAppliedWikiOutputsPageResult =
   | Readonly<{ kind: "loaded"; value: Readonly<KnowledgeKnownAppliedWikiOutputsPage> }>
   | Readonly<{ kind: "stale" | "unavailable" }>;
 
-/** Closed lazy-detail outcome without internal identities or errors. */
 export type KnowledgeKnownAppliedWikiOutputDetailResult =
   | Readonly<{ kind: "loaded"; value: Readonly<KnowledgeKnownAppliedWikiOutputDetail> }>
   | Readonly<{ kind: "stale" | "unavailable" | "too_large" }>;
 
-/** Closed comparison outcome without paths, hashes, or Runtime identities. */
 export type KnowledgeKnownAppliedWikiOutputComparisonResult =
   | Readonly<{ kind: "loaded"; value: Readonly<KnowledgeKnownAppliedWikiOutputComparison> }>
   | Readonly<{ kind: "stale" | "unavailable" | "too_large" }>;
 
-/** Stable sanitized failure categories for the initial history inspection. */
 export type KnowledgeKnownAppliedWikiOutputsErrorCode =
   | "invalid_request"
   | "not_known"
@@ -108,9 +93,7 @@ export type KnowledgeKnownAppliedWikiOutputsErrorCode =
 const errorCodes = new WeakMap<object, KnowledgeKnownAppliedWikiOutputsErrorCode>();
 const OPAQUE_REF_PATTERN = /^known-wiki-(?:page|output|cursor)-[a-f0-9]{64}$/;
 
-/** Sanitized initial-inspection failure that retains no path or durable cause. */
 export class KnowledgeKnownAppliedWikiOutputsError extends Error {
-  /** Creates one authentic closed failure category. */
   constructor(code: KnowledgeKnownAppliedWikiOutputsErrorCode) {
     if (code !== "invalid_request" && code !== "not_known" && code !== "unavailable") {
       throw new TypeError("The known applied Wiki output error code is invalid");
@@ -121,7 +104,6 @@ export class KnowledgeKnownAppliedWikiOutputsError extends Error {
     Object.freeze(this);
   }
 
-  /** Returns the authentic hidden failure category. */
   get code(): KnowledgeKnownAppliedWikiOutputsErrorCode {
     const code = errorCodes.get(this);
     if (!code) throw new TypeError("The known applied Wiki output error is invalid");
@@ -129,7 +111,6 @@ export class KnowledgeKnownAppliedWikiOutputsError extends Error {
   }
 }
 
-/** Returns a code only for an authentic module-minted error. */
 export function getKnowledgeKnownAppliedWikiOutputsErrorCode(
   value: unknown
 ): KnowledgeKnownAppliedWikiOutputsErrorCode | undefined {
@@ -147,7 +128,6 @@ export function getKnowledgeKnownAppliedWikiOutputsErrorCode(
   }
 }
 
-/** Strictly captures one canonical page request without retaining caller objects. */
 export function snapshotKnowledgeKnownAppliedWikiOutputsRequest(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputsRequest> {
@@ -158,7 +138,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsRequest(
   }
 }
 
-/** Validates one canonical display path inside the R3b error domain. */
 function isCanonicalDisplayPath(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -175,7 +154,6 @@ function isCanonicalDisplayPath(value: unknown): value is string {
   }
 }
 
-/** Reads an exact plain record entirely through own data descriptors. */
 function snapshotRecord(
   value: unknown,
   requiredKeys: readonly string[],
@@ -208,7 +186,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one dense bounded caller array without invoking element accessors. */
 function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -235,7 +212,6 @@ function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | 
   }
 }
 
-/** Strictly captures canonical per-origin Apply summaries and validates their aggregate. */
 function snapshotOrigins(
   value: unknown,
   verifiedApplyCount: number,
@@ -287,7 +263,6 @@ function snapshotOrigins(
   return Object.freeze(origins);
 }
 
-/** Reports whether a capability is coherent with one row relation in isolation. */
 function proposalCapabilityMatchesRelation(
   relation: KnowledgeKnownAppliedWikiOutputRelation,
   capability: unknown
@@ -302,7 +277,6 @@ function proposalCapabilityMatchesRelation(
   );
 }
 
-/** Strictly captures one metadata row returned by a production delegate. */
 function snapshotSummary(value: unknown): Readonly<KnowledgeKnownAppliedWikiOutputSummary> {
   const record = snapshotRecord(value, [
     "outputRef",
@@ -341,7 +315,6 @@ function snapshotSummary(value: unknown): Readonly<KnowledgeKnownAppliedWikiOutp
   });
 }
 
-/** Validates one relation sequence against its explicit page position. */
 function pageRelationsAreOrdered(
   items: readonly Readonly<KnowledgeKnownAppliedWikiOutputSummary>[],
   firstPage: boolean
@@ -350,7 +323,6 @@ function pageRelationsAreOrdered(
   return items.slice(1).every((item) => item.relation === "earlier_known");
 }
 
-/** Strictly captures one bounded metadata page returned by a delegate. */
 export function snapshotKnowledgeKnownAppliedWikiOutputsPage(
   value: unknown,
   firstPage = false
@@ -376,7 +348,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsPage(
   });
 }
 
-/** Strictly captures an exact-generation history session returned by a delegate. */
 export function snapshotKnowledgeKnownAppliedWikiOutputsSession(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
@@ -452,7 +423,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsSession(
   });
 }
 
-/** Strictly captures one lazy output detail returned by a delegate. */
 export function snapshotKnowledgeKnownAppliedWikiOutputDetail(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputDetail> {
@@ -496,7 +466,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputDetail(
   });
 }
 
-/** Strictly captures one comparison payload returned by a delegate. */
 export function snapshotKnowledgeKnownAppliedWikiOutputComparison(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputComparison> {
@@ -526,7 +495,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputComparison(
   });
 }
 
-/** Strictly captures one closed metadata-page result. */
 export function snapshotKnowledgeKnownAppliedWikiOutputsPageResult(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputsPageResult> {
@@ -548,7 +516,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsPageResult(
   }
 }
 
-/** Strictly captures one closed lazy-detail result. */
 export function snapshotKnowledgeKnownAppliedWikiOutputDetailResult(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputDetailResult> {
@@ -574,7 +541,6 @@ export function snapshotKnowledgeKnownAppliedWikiOutputDetailResult(
   }
 }
 
-/** Strictly captures one closed comparison result. */
 export function snapshotKnowledgeKnownAppliedWikiOutputComparisonResult(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputComparisonResult> {
@@ -600,29 +566,24 @@ export function snapshotKnowledgeKnownAppliedWikiOutputComparisonResult(
   }
 }
 
-/** Read-only exact-generation port consumed by the Known applied outputs UI. */
 export interface KnowledgeKnownAppliedWikiOutputsPort {
-  /** Re-proves one path and opens a bounded metadata-only browsing session. */
   inspectKnownOutputs(
     request: Readonly<KnowledgeKnownAppliedWikiOutputsRequest>,
     signal: AbortSignal
   ): Promise<Readonly<KnowledgeKnownAppliedWikiOutputsSession>>;
 
-  /** Loads the next metadata page bound to an authentic session and cursor. */
   listMore(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     cursor: string,
     signal: AbortSignal
   ): Promise<Readonly<KnowledgeKnownAppliedWikiOutputsPageResult>>;
 
-  /** Lazily re-proves and returns one exact retained output. */
   readOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
     signal: AbortSignal
   ): Promise<Readonly<KnowledgeKnownAppliedWikiOutputDetailResult>>;
 
-  /** Re-proves both sides and returns a read-only current-file comparison payload. */
   compareWithCurrent(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,

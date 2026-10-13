@@ -15,7 +15,7 @@ export interface KnowledgeAddMaterialButtonProps {
   port: KnowledgeStudioMaterialPort;
   bundleId: string;
   queueState: "running" | "paused" | "unknown";
-  /** Receives committed receipts after refresh/unmount; the owner checks the current bundle. */
+
   onReceipt: (receipt: Readonly<KnowledgeStudioMaterialReceipt>) => void;
   disabled?: boolean;
 }
@@ -36,10 +36,6 @@ function errorMessage(error: unknown): string {
   return ERROR_MESSAGES[error instanceof KnowledgeStudioMaterialError ? error.code : "add_failed"];
 }
 
-/**
- * Owns an explicit, cancelable chooser without direct Vault, Queue or Wiki authority.
- * @param props The released material capability, current bundle and durable receipt callback.
- */
 export function KnowledgeAddMaterialButton({
   port,
   bundleId,

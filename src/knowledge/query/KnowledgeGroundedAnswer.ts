@@ -2,10 +2,8 @@ import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type { JsonValue } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current protocol version shared by the grounded-answer prompt and validator. */
 export const KNOWLEDGE_GROUNDED_ANSWER_PROTOCOL_VERSION = 1 as const;
 
-/** Stable resource limits for one read-only grounded-answer request and response. */
 export const KNOWLEDGE_GROUNDED_ANSWER_LIMITS = Object.freeze({
   maxQuestionCharacters: 1_000,
   maxContextItems: 12,
@@ -24,7 +22,6 @@ export const KNOWLEDGE_GROUNDED_ANSWER_LIMITS = Object.freeze({
   maxInsufficientEvidenceCharacters: 2_000,
 });
 
-/** One exact applied-Wiki chunk supplied only as question context. */
 export interface KnowledgeGroundedAnswerContext {
   readonly contextId: string;
   readonly pagePath: string;
@@ -34,7 +31,6 @@ export interface KnowledgeGroundedAnswerContext {
   readonly content: string;
 }
 
-/** One exact parser-owned source excerpt that the model may cite by opaque id. */
 export interface KnowledgeGroundedAnswerEvidence {
   readonly evidenceId: string;
   readonly contextId: string;
@@ -42,7 +38,6 @@ export interface KnowledgeGroundedAnswerEvidence {
   readonly sourceRelation: "supports" | "contradicts" | "context";
 }
 
-/** Complete immutable input to one grounded-answer model call. */
 export interface KnowledgeGroundedAnswerRequest {
   readonly version: typeof KNOWLEDGE_GROUNDED_ANSWER_PROTOCOL_VERSION;
   readonly contextDigest: string;
@@ -51,10 +46,8 @@ export interface KnowledgeGroundedAnswerRequest {
   readonly evidence: readonly Readonly<KnowledgeGroundedAnswerEvidence>[];
 }
 
-/** Semantic category rendered explicitly beside every supported answer claim. */
 export type KnowledgeGroundedAnswerClaimKind = "source_fact" | "inference";
 
-/** One validated answer claim whose evidence ids all belong to the exact request. */
 export interface KnowledgeGroundedAnswerClaim {
   readonly claimId: string;
   readonly kind: KnowledgeGroundedAnswerClaimKind;
@@ -62,10 +55,8 @@ export interface KnowledgeGroundedAnswerClaim {
   readonly evidenceIds: readonly string[];
 }
 
-/** Whether the supplied evidence fully, partly, or cannot answer the question. */
 export type KnowledgeGroundedAnswerStatus = "answered" | "partial" | "insufficient_evidence";
 
-/** Strict normalized model result with no unchecked citation or free-form summary field. */
 export interface KnowledgeGroundedAnswer {
   readonly version: typeof KNOWLEDGE_GROUNDED_ANSWER_PROTOCOL_VERSION;
   readonly contextDigest: string;
@@ -74,15 +65,11 @@ export interface KnowledgeGroundedAnswer {
   readonly insufficientEvidence: readonly string[];
 }
 
-/** Provider-neutral model capability retained behind the query generation. */
 export interface KnowledgeGroundedAnswerModelPort {
-  /** Returns one bounded JSON string; the Core independently validates every field. */
   generate(request: Readonly<KnowledgeGroundedAnswerRequest>, signal: AbortSignal): Promise<string>;
 }
 
-/** Sanitized failure that never retains a question, evidence, model output, or cause. */
 export class KnowledgeGroundedAnswerError extends Error {
-  /** Creates one value-free grounded-answer boundary failure. */
   constructor() {
     super("The grounded knowledge answer is unavailable");
     this.name = "KnowledgeGroundedAnswerError";
@@ -91,7 +78,6 @@ export class KnowledgeGroundedAnswerError extends Error {
 
 const groundedAnswerRequests = new WeakSet<object>();
 
-/** Reports whether a value is a plain record without invoking user code. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -102,7 +88,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   }
 }
 
-/** Requires an exact enumerable own-key set without reading accessors. */
 function assertExactKeys(value: unknown, expected: readonly string[]): asserts value is object {
   try {
     if (!isPlainRecord(value)) throw new TypeError("Expected a plain record");
@@ -120,7 +105,6 @@ function assertExactKeys(value: unknown, expected: readonly string[]): asserts v
   }
 }
 
-/** Reads one enumerable own data property without invoking an accessor. */
 function readDataProperty(value: object, key: string): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -133,7 +117,6 @@ function readDataProperty(value: object, key: string): unknown {
   }
 }
 
-/** Captures one dense array without invoking iterators or element accessors. */
 function captureDenseArray(value: unknown, maximum: number): readonly unknown[] {
   try {
     if (!Array.isArray(value)) throw new TypeError("Expected an array");
@@ -163,7 +146,6 @@ function captureDenseArray(value: unknown, maximum: number): readonly unknown[] 
   }
 }
 
-/** Captures one bounded canonical text value. */
 function captureText(value: unknown, maximum: number, allowEmpty = false): string {
   if (
     typeof value !== "string" ||
@@ -176,7 +158,6 @@ function captureText(value: unknown, maximum: number, allowEmpty = false): strin
   return value;
 }
 
-/** Captures exact evidence bytes represented as text without trimming their locator material. */
 function captureMaterialText(value: unknown, maximum: number): string {
   if (
     typeof value !== "string" ||
@@ -189,7 +170,6 @@ function captureMaterialText(value: unknown, maximum: number): string {
   return value;
 }
 
-/** Captures a unique bounded string list. */
 function captureTextArray(
   value: unknown,
   maximumItems: number,
@@ -209,7 +189,6 @@ function captureTextArray(
   return Object.freeze(captured);
 }
 
-/** Captures one exact Wiki context item before any asynchronous model work. */
 function captureContext(value: unknown): Readonly<KnowledgeGroundedAnswerContext> {
   assertExactKeys(value, [
     "contextId",
@@ -252,7 +231,6 @@ function captureContext(value: unknown): Readonly<KnowledgeGroundedAnswerContext
   });
 }
 
-/** Captures one exact source evidence item before any asynchronous model work. */
 function captureEvidence(value: unknown): Readonly<KnowledgeGroundedAnswerEvidence> {
   assertExactKeys(value, ["evidenceId", "contextId", "sourceExcerpt", "sourceRelation"]);
   const evidenceId = captureText(readDataProperty(value, "evidenceId"), 512);
@@ -277,13 +255,6 @@ function captureEvidence(value: unknown): Readonly<KnowledgeGroundedAnswerEviden
   });
 }
 
-/**
- * Captures one exact source-backed request for a grounded model call.
- *
- * Callers must omit excerpts that lack a current source citation. Consequently,
- * every evidence id visible to the model can later be mapped back to at least one
- * current opaque citation reference.
- */
 export function createKnowledgeGroundedAnswerRequest(
   questionValue: unknown,
   contextsValue: unknown,
@@ -352,7 +323,6 @@ export function createKnowledgeGroundedAnswerRequest(
   return request;
 }
 
-/** Rejects copied or forged request records at provider and validator boundaries. */
 export function assertKnowledgeGroundedAnswerRequest(
   value: unknown
 ): asserts value is Readonly<KnowledgeGroundedAnswerRequest> {
@@ -361,7 +331,6 @@ export function assertKnowledgeGroundedAnswerRequest(
   }
 }
 
-/** Captures and validates one claim against the exact request evidence allowlist. */
 function captureClaim(
   value: unknown,
   allowedEvidenceIds: ReadonlySet<string>,
@@ -394,7 +363,6 @@ function captureClaim(
   return Object.freeze({ claimId, kind, text, evidenceIds });
 }
 
-/** Validates status-to-content semantics so unsupported prose cannot hide in the result. */
 function assertAnswerSemantics(
   status: KnowledgeGroundedAnswerStatus,
   claims: readonly Readonly<KnowledgeGroundedAnswerClaim>[],
@@ -410,13 +378,6 @@ function assertAnswerSemantics(
   }
 }
 
-/**
- * Parses and independently validates an untrusted JSON model response.
- *
- * The result cannot cite an excerpt that was absent from the exact request, and
- * it has no uncited summary/prose escape hatch: every answer statement is either
- * a source-backed fact or an explicitly labelled inference.
- */
 export function parseKnowledgeGroundedAnswerModelOutput(
   rawValue: unknown,
   request: Readonly<KnowledgeGroundedAnswerRequest>
@@ -484,7 +445,6 @@ export function parseKnowledgeGroundedAnswerModelOutput(
   }
 }
 
-/** Creates the deterministic no-model result used when no source-backed excerpt matched. */
 export function createInsufficientKnowledgeGroundedAnswer(
   contextDigest: string
 ): Readonly<KnowledgeGroundedAnswer> {

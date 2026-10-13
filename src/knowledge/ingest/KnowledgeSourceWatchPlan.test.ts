@@ -52,7 +52,6 @@ interface BehaviorMutationCase {
   mutate: (input: KnowledgeBundleWatchPlanInput) => void;
 }
 
-/** Creates one durable Manifest source with a Windows-normalized path key. */
 function createEntry(sourcePath: string, sourceId = "source-1"): SourceManifestEntry {
   return {
     sourceId,
@@ -62,7 +61,6 @@ function createEntry(sourcePath: string, sourceId = "source-1"): SourceManifestE
   };
 }
 
-/** Adds one exact successful compile snapshot to a durable source fixture. */
 function withGeneratedPages(
   entry: SourceManifestEntry,
   generatedPages: GeneratedPageReference[]
@@ -79,7 +77,6 @@ function withGeneratedPages(
   };
 }
 
-/** Creates a fresh generic parser registry for fixture isolation. */
 function createDefaultParsers(): KnowledgeSourceParserProfile[] {
   return [
     {
@@ -91,7 +88,6 @@ function createDefaultParsers(): KnowledgeSourceParserProfile[] {
   ];
 }
 
-/** Creates one complete strict Bundle authority input. */
 function createFixture(options: FixtureOptions = {}): KnowledgeBundleWatchPlanInput {
   const bundleId = options.bundleId ?? "personal";
   const sourceRoots = options.sourceRoots ?? ["Sources"];
@@ -141,7 +137,6 @@ function createFixture(options: FixtureOptions = {}): KnowledgeBundleWatchPlanIn
   };
 }
 
-/** Computes the public source fingerprint expected for one fixture parser. */
 function createExpectedFingerprint(
   input: KnowledgeBundleWatchPlanInput,
   parser: KnowledgeSourceParserProfile
@@ -166,7 +161,6 @@ function createExpectedFingerprint(
   return createPipelineFingerprint(fingerprintInput);
 }
 
-/** Returns the only watched source or fails the test fixture loudly. */
 function requireOnlySource(plan: KnowledgeSourceWatchPlan): Readonly<WatchedKnowledgeSource> {
   const sources = plan.getSources();
   if (sources.length !== 1) {
@@ -175,7 +169,6 @@ function requireOnlySource(plan: KnowledgeSourceWatchPlan): Readonly<WatchedKnow
   return sources[0];
 }
 
-/** Returns the only Bundle authority or fails the test fixture loudly. */
 function requireOnlyAuthority(
   plan: KnowledgeSourceWatchPlan
 ): Readonly<KnowledgeBundleWatchAuthority> {
@@ -186,7 +179,6 @@ function requireOnlyAuthority(
   return authorities[0];
 }
 
-/** Captures and verifies one sanitized strict-builder error. */
 function expectBuildError(
   action: () => unknown,
   code: KnowledgeSourceWatchPlanBuildErrorCode

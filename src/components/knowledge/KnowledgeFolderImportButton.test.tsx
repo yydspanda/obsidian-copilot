@@ -7,7 +7,6 @@ import type {
   KnowledgeFolderImportReceipt,
 } from "@/knowledge/capture/KnowledgeFolderImportPort";
 
-/** Creates one path-free aggregate receipt for the requested terminal status. */
 function createReceipt(
   status: KnowledgeFolderImportReceipt["status"] = "completed"
 ): KnowledgeFolderImportReceipt {
@@ -25,7 +24,6 @@ function createReceipt(
   };
 }
 
-/** Creates one import port around a Jest command spy. */
 function createPort(
   implementation: KnowledgeFolderImportPort["importFolder"] = jest
     .fn()
@@ -34,14 +32,12 @@ function createPort(
   return { importFolder: implementation as jest.Mock };
 }
 
-/** Returns the hidden folder input created beside the rendered button. */
 function getFolderInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   if (!input) throw new Error("Expected a folder input");
   return input;
 }
 
-/** Supplies a deterministic browser selection to jsdom's read-only files property. */
 function selectFiles(input: HTMLInputElement, files: readonly File[]): void {
   Object.defineProperty(input, "files", { configurable: true, value: files });
   fireEvent.change(input);

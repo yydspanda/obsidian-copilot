@@ -69,7 +69,7 @@ describe("ModelEffortPicker", () => {
         }
         const link = screen.getByRole("link", { name: /locked/ });
         expect(link.getAttribute("href")).toBe(
-          "https://obsidiancopilot.com/pricing?utm_source=obsidian-copilot&utm_medium=model-picker-lock"
+          "https://www.obsidiancopilot.com/pricing?utm_source=obsidian_copilot&utm_medium=model_picker_lock"
         );
         expect(link.getAttribute("target")).toBe("_blank");
         if (action === "keyboard") {
@@ -83,7 +83,6 @@ describe("ModelEffortPicker", () => {
           act(() => link.focus());
           const tab = createEvent.keyDown(link, { key: "Tab", shiftKey: action === "Shift+Tab" });
           fireEvent(link, tab);
-          // The drafted model has no effort slider, so this link is both focus-loop boundaries.
           expect(tab.defaultPrevented).toBe(true);
           expect(document.activeElement).toBe(link);
           expect(screen.getByRole("dialog")).toBe(dialog);

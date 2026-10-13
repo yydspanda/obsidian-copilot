@@ -40,7 +40,6 @@ import type {
   KnowledgeStudioTab,
 } from "@/knowledge/ui/KnowledgeStudioController";
 
-/** Props for the controller-backed Knowledge Studio React surface. */
 export interface KnowledgeStudioRootProps {
   controller: KnowledgeStudioController;
   folderImportPort: KnowledgeFolderImportPort;
@@ -56,7 +55,6 @@ interface KnowledgeStudioContentProps extends KnowledgeStudioRootProps {
   onConfigured: () => void;
 }
 
-/** Keeps entry receipts visible while configuration or source registration rebuilds Studio. */
 export function KnowledgeStudioRoot(props: KnowledgeStudioRootProps): React.ReactElement {
   const state = useKnowledgeStudioState(props.controller);
   const [entryFeedback, setEntryFeedback] = React.useState<
@@ -138,12 +136,6 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   abandon_recovery: "Abandoning the selected no-journal apply…",
 };
 
-/**
- * Subscribes React to one controller without copying or deriving durable state.
- *
- * @param controller - Knowledge Studio external store
- * @returns Current controller-owned state object
- */
 function useKnowledgeStudioState(controller: KnowledgeStudioController): KnowledgeStudioState {
   const subscribe = React.useCallback(
     (listener: () => void) => controller.subscribe(listener),
@@ -153,12 +145,6 @@ function useKnowledgeStudioState(controller: KnowledgeStudioController): Knowled
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/**
- * Renders one deterministic validation diagnostic.
- *
- * @param diagnostic - Sanitized diagnostic supplied by the controller
- * @returns One diagnostic list item
- */
 function DiagnosticItem({
   diagnostic,
 }: {
@@ -173,12 +159,6 @@ function DiagnosticItem({
   );
 }
 
-/**
- * Renders command feedback and its optional deterministic diagnostics.
- *
- * @param feedback - Safe controller feedback
- * @returns Feedback banner, or null when no command has reported an outcome
- */
 function FeedbackBanner({
   feedback,
 }: {
@@ -220,12 +200,6 @@ function FeedbackBanner({
   );
 }
 
-/**
- * Renders a non-authoritative progress hint while the controller reconciles.
- *
- * @param state - Current controller state
- * @returns Pending or refreshing banner, or null while settled
- */
 function ReconciliationStatus({
   state,
 }: {
@@ -250,12 +224,6 @@ function ReconciliationStatus({
   );
 }
 
-/**
- * Renders an adapter or snapshot notice without granting any action capability.
- *
- * @param state - Ready controller state with an optional snapshot notice
- * @returns Fail-closed adapter notice or informational snapshot notice
- */
 function SnapshotNotice({ state }: { state: KnowledgeStudioState }): React.ReactElement | null {
   const snapshot = state.snapshot;
   if (!snapshot) return null;
@@ -282,14 +250,6 @@ function SnapshotNotice({ state }: { state: KnowledgeStudioState }): React.React
   );
 }
 
-/**
- * Renders a load failure while retaining an explicit durable reload action.
- *
- * @param message - Sanitized controller error
- * @param controller - Controller that owns the reload
- * @param fullPage - Whether the error replaces the complete studio surface
- * @returns Error banner with a retry control
- */
 function LoadError({
   message,
   controller,
@@ -318,19 +278,12 @@ function LoadError({
   );
 }
 
-/**
- * Finds the review selected by the controller's opaque ChangeSet identity.
- *
- * @param state - Current Knowledge Studio state
- * @returns Selected review from the current snapshot, if it still exists
- */
 function getSelectedReview(state: KnowledgeStudioState): Readonly<KnowledgeReviewPlan> | undefined {
   return state.snapshot?.reviews.find(
     (review) => review.changeSetId === state.selectedReviewChangeSetId
   );
 }
 
-/** Finds the forward row selected by the controller's opaque product reference. */
 function getSelectedForwardRevision(
   state: KnowledgeStudioState
 ): Readonly<KnowledgeForwardRevisionStudioReview> | undefined {
@@ -339,7 +292,6 @@ function getSelectedForwardRevision(
   );
 }
 
-/** Returns concise stable text for one forward product state. */
 function formatForwardRevisionState(state: KnowledgeForwardRevisionStudioReview["state"]): string {
   switch (state) {
     case "pending":
@@ -357,7 +309,6 @@ function formatForwardRevisionState(state: KnowledgeForwardRevisionStudioReview[
   }
 }
 
-/** Renders one non-pending forward row without exposing protocol identities. */
 function ForwardRevisionStatusPanel({
   review,
   state,
@@ -543,13 +494,6 @@ function ForwardRevisionStatusPanel({
   );
 }
 
-/**
- * Renders the review inbox and the exact plan selected by the controller.
- *
- * @param state - Current controller state
- * @param controller - Command/navigation boundary
- * @returns Review tab content
- */
 function ReviewWorkspace({
   state,
   controller,
@@ -696,13 +640,6 @@ function ReviewWorkspace({
   );
 }
 
-/**
- * Maps an Activity job selection to the ChangeSet currently stored in the
- * controller snapshot, then delegates navigation back to the controller.
- *
- * @param controller - Current Knowledge Studio controller
- * @param jobId - Opaque Activity job identifier
- */
 function openJobReview(controller: KnowledgeStudioController, jobId: string): void {
   const item = controller
     .getState()
@@ -714,16 +651,6 @@ function openJobReview(controller: KnowledgeStudioController, jobId: string): vo
   controller.selectTab("review");
 }
 
-/**
- * Renders the Activity/Review composition over controller-owned durable truth.
- *
- * This component never writes queue, review, or Vault state. Every command is
- * delegated to the controller, and rendered job state changes only after the
- * controller publishes a reconciled snapshot.
- *
- * @param props - Knowledge Studio controller boundary
- * @returns Controller-backed Knowledge Studio surface
- */
 function KnowledgeStudioContent({
   controller,
   folderImportPort,

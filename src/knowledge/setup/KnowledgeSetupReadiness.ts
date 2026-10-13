@@ -7,7 +7,6 @@ import type {
   KnowledgeChatModelReadinessReason,
 } from "@/knowledge/setup/KnowledgeChatModelReadiness";
 
-/** Closed readiness levels rendered by the guided Knowledge setup surface. */
 export type KnowledgeSetupReadinessLevel =
   | "checking"
   | "locally_ready"
@@ -15,7 +14,6 @@ export type KnowledgeSetupReadinessLevel =
   | "blocked"
   | "not_applicable";
 
-/** Closed reasons describing Project, Bundle, storage, and workflow readiness. */
 export type KnowledgeSetupWorkspaceReason =
   | "startup_checking"
   | "plugin_unloaded"
@@ -33,7 +31,6 @@ export type KnowledgeSetupWorkspaceReason =
   | "source_recovery_required"
   | "workflow_adapters_unavailable";
 
-/** Closed reasons describing only the Knowledge compiler/model lane. */
 export type KnowledgeSetupKnowledgeModelReason =
   | "startup_checking"
   | "plugin_unloaded"
@@ -51,10 +48,8 @@ export type KnowledgeSetupKnowledgeModelReason =
   | "knowledge_model_route_unavailable"
   | "configuration_needs_attention";
 
-/** Exact, secret-free result of resolving the ordinary Chat model catalog locally. */
 export type KnowledgeSetupChatModelSelectedState = KnowledgeChatModelReadinessReason;
 
-/** Closed reasons describing the optional ordinary Chat lane. */
 export type KnowledgeSetupChatModelReason =
   | "plugin_unloaded"
   | "chat_model_missing"
@@ -65,34 +60,28 @@ export type KnowledgeSetupChatModelReason =
   | "chat_model_credential_missing"
   | "chat_model_configured";
 
-/** One immutable readiness item whose reason cannot contain a path, model key, or credential. */
 export interface KnowledgeSetupReadinessItem<Reason extends string> {
   level: KnowledgeSetupReadinessLevel;
   reason: Reason;
 }
 
-/** Plain edge projection supplied without settings, application, network, or I/O authority. */
 export interface KnowledgeSetupReadinessContext {
-  /** Number of locally discovered Project records. */
   projectCount: number;
-  /** Secret-free result of resolving the separate ordinary Chat model locally. */
+
   chatModel: KnowledgeChatModelReadiness;
 }
 
-/** Immutable, revision-free projection produced from one local startup observation. */
 export interface KnowledgeSetupReadinessProjection {
   startupStatus: KnowledgePluginStartupStatus | "plugin_unloaded";
   workspace: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupWorkspaceReason>>;
   knowledgeModel: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupKnowledgeModelReason>>;
-  /** Optional lane; its state never blocks Knowledge startup readiness. */
+
   chatModel: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupChatModelReason>>;
-  /** This local projector deliberately performs no provider request. */
+
   networkVerification: "not_tested";
 }
 
-/** Fixed input failure that never retains caller-owned settings or diagnostic text. */
 export class KnowledgeSetupReadinessInputError extends TypeError {
-  /** Creates one sanitized projection-boundary failure. */
   constructor() {
     super("Knowledge setup readiness input is invalid");
     this.name = "KnowledgeSetupReadinessInputError";
@@ -185,7 +174,6 @@ const KNOWLEDGE_REASON_PRIORITY: readonly KnowledgeSetupKnowledgeModelReason[] =
   "knowledge_model_route_unavailable",
 ]);
 
-/** Creates and freezes one closed readiness item. */
 function createItem<Reason extends string>(
   level: KnowledgeSetupReadinessLevel,
   reason: Reason
@@ -193,7 +181,6 @@ function createItem<Reason extends string>(
   return Object.freeze({ level, reason });
 }
 
-/** Creates the immutable revision-free output shared by projector branches. */
 function createProjection(
   startupStatus: KnowledgePluginStartupStatus | "plugin_unloaded",
   workspace: WorkspaceItem,
@@ -209,7 +196,6 @@ function createProjection(
   });
 }
 
-/** Reads one enumerable own data field without executing an accessor. */
 function readOwnData(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSetupReadinessInputError();
@@ -221,7 +207,6 @@ function readOwnData(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Captures and validates the non-authoritative edge context. */
 function readContext(context: KnowledgeSetupReadinessContext): {
   projectCount: number;
   chatState: KnowledgeSetupChatModelSelectedState;
@@ -243,7 +228,6 @@ function readContext(context: KnowledgeSetupReadinessContext): {
   };
 }
 
-/** Captures only the startup status after proving the state is a current closed-vocabulary value. */
 function readStartupStatus(state: KnowledgePluginStartupState): KnowledgePluginStartupStatus {
   const generation = readOwnData(state, "generation");
   const status = readOwnData(state, "status");
@@ -258,7 +242,6 @@ function readStartupStatus(state: KnowledgePluginStartupState): KnowledgePluginS
   return status as KnowledgePluginStartupStatus;
 }
 
-/** Reads a bounded dense string array without retaining any caller-owned element. */
 function readStringArray(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length > 10_000) {
     throw new KnowledgeSetupReadinessInputError();
@@ -274,12 +257,10 @@ function readStringArray(value: unknown): readonly string[] {
   return snapshot;
 }
 
-/** Returns only the configured Bundle count, discarding every identity immediately. */
 function readBundleCount(state: KnowledgePluginStartupState): number {
   return readStringArray(readOwnData(state, "bundleIds")).length;
 }
 
-/** Projects the ordinary Chat catalog result without affecting either Knowledge lane. */
 function projectChatModel(state: KnowledgeSetupChatModelSelectedState): ChatModelItem {
   switch (state) {
     case "missing":
@@ -299,14 +280,12 @@ function projectChatModel(state: KnowledgeSetupChatModelSelectedState): ChatMode
   }
 }
 
-/** Chooses a deterministic model reason when several safe diagnostics are present. */
 function selectKnowledgeReason(
   reasons: ReadonlySet<KnowledgeSetupKnowledgeModelReason>
 ): KnowledgeSetupKnowledgeModelReason | undefined {
   return KNOWLEDGE_REASON_PRIORITY.find((reason) => reasons.has(reason));
 }
 
-/** Maps invalid-Bundle diagnostics to the two separate configuration lanes. */
 function projectInvalidBundle(state: KnowledgePluginStartupState): {
   workspace: WorkspaceItem;
   knowledgeModel: KnowledgeModelItem;
@@ -363,7 +342,6 @@ function projectInvalidBundle(state: KnowledgePluginStartupState): {
   };
 }
 
-/** Projects one preflight-admitted status with exact Bundle-selection semantics. */
 function projectConfiguredStatus(
   status: KnowledgePluginStartupStatus,
   bundleCount: number
@@ -405,7 +383,6 @@ function projectConfiguredStatus(
   }
 }
 
-/** Creates the fixed fail-closed projection published immediately before plugin unload. */
 export function createKnowledgeSetupUnloadedProjection(): KnowledgeSetupReadinessProjection {
   return createProjection(
     "plugin_unloaded",
@@ -415,17 +392,6 @@ export function createKnowledgeSetupUnloadedProjection(): KnowledgeSetupReadines
   );
 }
 
-/**
- * Projects one local startup observation into a secret-free guided setup snapshot.
- *
- * A `locally_ready` result proves only catalog/configuration preflight. The
- * projector never performs provider connectivity, billing, quota, or model calls.
- * The ordinary Chat lane is optional and cannot downgrade Knowledge readiness.
- *
- * @param startupState - Sanitized state from the Knowledge startup barrier
- * @param context - Plain Project count and exact local Chat catalog result
- * @returns Frozen local readiness projection with closed reasons only
- */
 export function projectKnowledgeSetupReadiness(
   startupState: KnowledgePluginStartupState,
   context: KnowledgeSetupReadinessContext

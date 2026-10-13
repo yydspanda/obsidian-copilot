@@ -2,13 +2,11 @@ import type { ProjectConfig } from "@/aiParams";
 import { ProjectKnowledgeBundleConfigSource } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 
-/** Project record fields required for current-identity setup navigation. */
 export interface KnowledgeSetupProjectRecord {
   project: Pick<ProjectConfig, "id" | "knowledgeBundle">;
   filePath: string;
 }
 
-/** Side-effect boundaries retained by the setup navigation adapter. */
 export interface KnowledgeSetupNavigationDependencies {
   getProjectRecords(): readonly KnowledgeSetupProjectRecord[];
   getCurrentProjectId(): string | undefined;
@@ -25,28 +23,17 @@ const PROJECT_FILE_UNAVAILABLE_NOTICE =
 const SCHEMA_FILE_UNAVAILABLE_NOTICE =
   "A single current Knowledge rules file could not be resolved. Check the Project Bundle first.";
 
-/** Returns whether an object owns the advanced Bundle field, including an explicit invalid value. */
 function ownsKnowledgeBundle(project: Pick<ProjectConfig, "id" | "knowledgeBundle">): boolean {
   return Object.prototype.hasOwnProperty.call(project, "knowledgeBundle") === true;
 }
 
-/**
- * Least-authority navigation adapter for the local Knowledge setup page.
- *
- * Every file action resolves current project records again at click time. The
- * adapter never creates or updates a Project, directory, rules file, setting,
- * credential, Runtime record, or model request.
- */
 export class KnowledgeSetupNavigation implements KnowledgeSetupNavigationPort {
-  /** Creates navigation over current, injected Obsidian edge operations. */
   constructor(private readonly dependencies: KnowledgeSetupNavigationDependencies) {}
 
-  /** Opens the existing Copilot settings surface. */
   openCopilotSettings(): void | Promise<void> {
     return this.dependencies.openCopilotSettings();
   }
 
-  /** Opens one current Project file only when its identity is unambiguous. */
   openProjectFile(): void | Promise<void> {
     const records = this.dependencies.getProjectRecords();
     const configured = records.filter(({ project }) => ownsKnowledgeBundle(project));
@@ -70,7 +57,6 @@ export class KnowledgeSetupNavigation implements KnowledgeSetupNavigationPort {
     return this.dependencies.openVaultFile(candidate.filePath);
   }
 
-  /** Opens the single strictly configured Bundle's rules file after current re-resolution. */
   openSchema(): void | Promise<void> {
     const records = this.dependencies.getProjectRecords();
     const result = new ProjectKnowledgeBundleConfigSource().load(
@@ -86,17 +72,14 @@ export class KnowledgeSetupNavigation implements KnowledgeSetupNavigationPort {
     return this.dependencies.openVaultFile(result.bundles[0].config.schemaRef);
   }
 
-  /** Opens ordinary Copilot Chat without changing its model or Project. */
   openChat(): void | Promise<void> {
     return this.dependencies.openChat();
   }
 
-  /** Opens the native Project workspace without changing optional Quick Chat navigation. */
   openProjects(): void | Promise<void> {
     return this.dependencies.openProjects();
   }
 
-  /** Refreshes the displayed local projection without testing a provider connection. */
   refreshDisplayedStatus(): void | Promise<void> {
     return this.dependencies.refreshDisplayedStatus();
   }

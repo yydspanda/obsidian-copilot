@@ -26,10 +26,8 @@ import type {
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current dedicated update-only forward-Apply journal version. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION = 2 as const;
 
-/** Safe observed Vault state retained after an irreconcilable recovery conflict. */
 export interface KnowledgeForwardRevisionApplyConflictV1 {
   readonly version: 1;
   readonly kind: "forward_revision_apply_conflict";
@@ -39,7 +37,6 @@ export interface KnowledgeForwardRevisionApplyConflictV1 {
   readonly detectedAt: number;
 }
 
-/** Immutable payload shared by every phase of one dedicated forward update. */
 interface KnowledgeForwardRevisionApplyJournalBaseV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION;
   readonly kind: "forward_revision_apply_journal";
@@ -60,9 +57,9 @@ interface KnowledgeForwardRevisionApplyJournalBaseV2 {
   readonly revalidationReceipt: Readonly<KnowledgeForwardRevisionApplyRevalidationReceiptV1>;
   readonly revalidationReceiptDigest: string;
   readonly sourceBaseDigest: string;
-  /** Immutable hash last produced by the source compiler. */
+
   readonly sourceAppliedContentHash: string;
-  /** Exact effective head consumed by this journal's Vault CAS. */
+
   readonly previousEffectiveContentHash: string;
   readonly manifestBeforeRevision: number;
   readonly manifestBeforeDigest: string;
@@ -70,61 +67,53 @@ interface KnowledgeForwardRevisionApplyJournalBaseV2 {
   readonly beforeHash: string;
   readonly afterContent: string;
   readonly afterHash: string;
-  /** Deterministic logical floor used for replay identity, never an expiry clock. */
+
   readonly createdAt: number;
   readonly updatedAt: number;
 }
 
-/** Prepared journal that must be durable before any file mutation. */
 export type KnowledgeForwardRevisionPreparedApplyJournalV2 =
   KnowledgeForwardRevisionApplyJournalBaseV2 & { readonly phase: "prepared" };
 
-/** Applying journal that authorizes one exact before-to-after CAS attempt. */
 export type KnowledgeForwardRevisionApplyingApplyJournalV2 =
   KnowledgeForwardRevisionApplyJournalBaseV2 & { readonly phase: "applying" };
 
-/** Committed marker whose exact digest anchors ledger finalization. */
 export type KnowledgeForwardRevisionCommittedApplyJournalV2 =
   KnowledgeForwardRevisionApplyJournalBaseV2 & {
     readonly phase: "committed";
     readonly committedAt: number;
   };
 
-/** Sticky journal that records only safe observed conflict metadata. */
 export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2 =
   KnowledgeForwardRevisionApplyJournalBaseV2 & {
     readonly phase: "recovery_required";
     readonly conflict: Readonly<KnowledgeForwardRevisionApplyConflictV1>;
-    /** Present only when a durable committed marker later observes external drift. */
+
     readonly committedAt?: number;
   };
 
-/** Any legal phase of one dedicated forward-Apply journal. */
 export type KnowledgeForwardRevisionApplyJournalV2 =
   | KnowledgeForwardRevisionPreparedApplyJournalV2
   | KnowledgeForwardRevisionApplyingApplyJournalV2
   | KnowledgeForwardRevisionCommittedApplyJournalV2
   | KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2;
 
-/** Version-neutral canonical journal returned by every strict reader. */
 export type KnowledgeForwardRevisionApplyJournal = KnowledgeForwardRevisionApplyJournalV2;
 
-/** @deprecated Use KnowledgeForwardRevisionPreparedApplyJournalV2. */
 export type KnowledgeForwardRevisionPreparedApplyJournalV1 =
   KnowledgeForwardRevisionPreparedApplyJournalV2;
-/** @deprecated Use KnowledgeForwardRevisionApplyingApplyJournalV2. */
+
 export type KnowledgeForwardRevisionApplyingApplyJournalV1 =
   KnowledgeForwardRevisionApplyingApplyJournalV2;
-/** @deprecated Use KnowledgeForwardRevisionCommittedApplyJournalV2. */
+
 export type KnowledgeForwardRevisionCommittedApplyJournalV1 =
   KnowledgeForwardRevisionCommittedApplyJournalV2;
-/** @deprecated Use KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2. */
+
 export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV1 =
   KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2;
-/** @deprecated Use KnowledgeForwardRevisionApplyJournal. */
+
 export type KnowledgeForwardRevisionApplyJournalV1 = KnowledgeForwardRevisionApplyJournalV2;
 
-/** Input that prepares one exact update-only journal revision zero. */
 export interface CreateKnowledgeForwardRevisionPreparedApplyJournalInput {
   readonly transactionId: string;
   readonly acceptedDecision: unknown;
@@ -136,7 +125,6 @@ export interface CreateKnowledgeForwardRevisionPreparedApplyJournalInput {
   readonly createdAt: number;
 }
 
-/** Input that marks an unfinished journal with one safe conflict. */
 export interface ProjectKnowledgeForwardRevisionRecoveryRequiredInput {
   readonly code: KnowledgeForwardRevisionApplyConflictV1["code"];
   readonly actualKind: KnowledgeForwardRevisionApplyConflictV1["actualKind"];
@@ -208,9 +196,7 @@ const CONFLICT_KEYS_WITHOUT_HASH = ["version", "kind", "code", "actualKind", "de
 const RECOVERY_INPUT_KEYS_WITH_HASH = ["code", "actualKind", "actualHash", "detectedAt"] as const;
 const RECOVERY_INPUT_KEYS_WITHOUT_HASH = ["code", "actualKind", "detectedAt"] as const;
 
-/** Fixed value-free failure for malformed forward-Apply journals. */
 export class KnowledgeForwardRevisionApplyJournalValidationError extends TypeError {
-  /** Creates one sanitized error; only this module can mark it authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Apply journal does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionApplyJournalValidationError";
@@ -221,14 +207,12 @@ export class KnowledgeForwardRevisionApplyJournalValidationError extends TypeErr
 const ERROR_TOKEN = Symbol("KnowledgeForwardRevisionApplyJournalValidationError");
 const authenticErrors = new WeakSet<KnowledgeForwardRevisionApplyJournalValidationError>();
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionApplyJournalValidationError(ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local failure. */
 function isAuthenticError(
   value: unknown
 ): value is KnowledgeForwardRevisionApplyJournalValidationError {
@@ -239,7 +223,6 @@ function isAuthenticError(
   );
 }
 
-/** Reads a phase discriminant without invoking candidate code. */
 function readPhase(value: unknown): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -250,7 +233,6 @@ function readPhase(value: unknown): unknown {
   }
 }
 
-/** Reads a version discriminant without invoking candidate code. */
 function readVersion(value: unknown): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -261,7 +243,6 @@ function readVersion(value: unknown): unknown {
   }
 }
 
-/** Captures one canonical Vault page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 1_024) return undefined;
   try {
@@ -272,7 +253,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Strictly snapshots safe conflict metadata without raw file bytes. */
 function snapshotConflict(value: unknown): Readonly<KnowledgeForwardRevisionApplyConflictV1> {
   const hasHash = (() => {
     try {
@@ -311,7 +291,6 @@ function snapshotConflict(value: unknown): Readonly<KnowledgeForwardRevisionAppl
   });
 }
 
-/** Strictly snapshots and cross-validates one complete journal phase. */
 export function snapshotKnowledgeForwardRevisionApplyJournal(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyJournalV1> {
@@ -511,7 +490,6 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
   }
 }
 
-/** Creates and snapshots one prepared revision-zero journal. */
 export function createKnowledgeForwardRevisionPreparedApplyJournal(
   value: CreateKnowledgeForwardRevisionPreparedApplyJournalInput
 ): Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1> {
@@ -573,12 +551,10 @@ export function createKnowledgeForwardRevisionPreparedApplyJournal(
   }
 }
 
-/** Asserts all immutable journal fields are byte-identical across one transition. */
 function assertImmutablePayload(
   previous: Readonly<KnowledgeForwardRevisionApplyJournalV1>,
   next: Readonly<KnowledgeForwardRevisionApplyJournalV1>
 ): void {
-  /** Projects the immutable journal payload without transition-owned fields. */
   const omitPhase = (journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>): JsonValue => {
     const { revision: _revision, phase: _phase, updatedAt: _updatedAt, ...rest } = journal;
     void _revision;
@@ -592,7 +568,6 @@ function assertImmutablePayload(
   if (canonicalizeJson(omitPhase(previous)) !== canonicalizeJson(omitPhase(next))) invalid();
 }
 
-/** Projects prepared to applying with revision+1 and monotonic time. */
 export function projectKnowledgeForwardRevisionApplyJournalApplying(
   value: unknown,
   updatedAt: number
@@ -616,7 +591,6 @@ export function projectKnowledgeForwardRevisionApplyJournalApplying(
   return next;
 }
 
-/** Projects applying to committed after exact post-write verification. */
 export function projectKnowledgeForwardRevisionApplyJournalCommitted(
   value: unknown,
   committedAt: number
@@ -641,14 +615,6 @@ export function projectKnowledgeForwardRevisionApplyJournalCommitted(
   return next;
 }
 
-/**
- * Resolves a sticky journal to committed after a fresh exact-after observation.
- *
- * Recovery revision three retains its already-proven committed timestamp.
- * Revisions one and two use the fresh observation time. This dedicated collapse
- * is the only legal recovery escape into finalization and never authorizes a
- * file mutation by itself.
- */
 export function projectKnowledgeForwardRevisionRecoveryJournalCommitted(
   value: unknown,
   observedAt: number
@@ -692,7 +658,6 @@ export function projectKnowledgeForwardRevisionRecoveryJournalCommitted(
   }
 }
 
-/** Projects an unresolved prepared/applying/committed state to sticky recovery-required. */
 export function projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(
   value: unknown,
   input: ProjectKnowledgeForwardRevisionRecoveryRequiredInput
@@ -751,7 +716,6 @@ export function projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(
   }
 }
 
-/** Computes the canonical identity of one complete strict journal phase. */
 export function createKnowledgeForwardRevisionApplyJournalDigest(value: unknown): string {
   const journal = snapshotKnowledgeForwardRevisionApplyJournal(value);
   return sha256(
@@ -761,7 +725,6 @@ export function createKnowledgeForwardRevisionApplyJournalDigest(value: unknown)
   );
 }
 
-/** Parses one untrusted journal into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionApplyJournal(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionApplyJournalV1>> {
@@ -782,7 +745,6 @@ export function parseKnowledgeForwardRevisionApplyJournal(
   }
 }
 
-/** Validates one untrusted journal without retaining rejected data. */
 export function validateKnowledgeForwardRevisionApplyJournal(
   value: unknown
 ): KnowledgeValidationResult {
@@ -792,7 +754,6 @@ export function validateKnowledgeForwardRevisionApplyJournal(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed parser diagnostic. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

@@ -14,7 +14,6 @@ interface Deferred<T> {
   readonly resolve: (value: T) => void;
 }
 
-/** Creates one externally settled Promise for post-list lifecycle races. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -23,7 +22,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one frozen inspector session for publication routing tests. */
 function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   return Object.freeze({
     pageRef: "a".repeat(64),
@@ -47,7 +45,6 @@ function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   });
 }
 
-/** Creates one optional publication delegate with a configurable row-list result. */
 function createDelegate(
   listRows: KnowledgeAppliedWikiPageInspectorPublicationDelegate["listAppliedWikiPathIndexRows"]
 ): KnowledgeAppliedWikiPageInspectorPublicationDelegate {
@@ -59,7 +56,6 @@ function createDelegate(
   });
 }
 
-/** Creates stable surfaces and exact conditional publication callbacks. */
 function createHarness(delegate: KnowledgeAppliedWikiPageInspectorPublicationDelegate) {
   const port = new DelegatingKnowledgeAppliedWikiPageInspectorPort();
   const index = new KnowledgeAppliedWikiPathIndex();

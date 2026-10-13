@@ -8,7 +8,6 @@ import type {
 const ref = (kind: "page" | "output" | "cursor", value: string): string =>
   `known-wiki-${kind}-${value.padStart(64, "0")}`;
 
-/** Creates one deeply frozen source-Apply provenance summary. */
 function origins(
   appliedAt: number
 ): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {

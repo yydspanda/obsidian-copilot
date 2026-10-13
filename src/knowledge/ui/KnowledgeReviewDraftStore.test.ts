@@ -5,7 +5,6 @@ import {
   KnowledgeReviewDraftStore,
 } from "@/knowledge/ui/KnowledgeReviewDraftStore";
 
-/** Creates one compact exact-identity plan for the data-only draft store. */
 function createPlan(snapshotToken = "snapshot-1"): KnowledgeReviewPlan {
   return {
     changeSetId: "changeset-1",

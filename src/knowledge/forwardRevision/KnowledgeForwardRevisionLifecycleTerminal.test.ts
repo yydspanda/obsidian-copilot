@@ -43,12 +43,10 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates one mutable JSON replay copy. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Creates the shared exact Runtime/Bundle/source/page identity. */
 function createResource(pagePath = "Wiki/Topic.md") {
   return createKnowledgeForwardRevisionLifecycleResourceIdentity({
     runtimeId: "runtime-1",
@@ -58,7 +56,6 @@ function createResource(pagePath = "Wiki/Topic.md") {
   });
 }
 
-/** Creates one exact accepted decision and Apply-claim identity. */
 function createAcceptedIdentity() {
   return createKnowledgeForwardRevisionAcceptedClaimIdentity({
     resource: createResource(),
@@ -72,7 +69,6 @@ function createAcceptedIdentity() {
   });
 }
 
-/** Creates a strict predecessor or successor ledger reference. */
 function createLedgerRef(
   ledgerKind: KnowledgeForwardRevisionLedgerLineageRefV1["ledgerKind"],
   transactionId: string,
@@ -93,7 +89,6 @@ function createLedgerRef(
   });
 }
 
-/** Creates one coherent supersession input with a configurable successor kind. */
 function createSupersessionInput(
   successorKind: KnowledgeForwardRevisionLedgerLineageRefV1["ledgerKind"] = "source_apply"
 ) {
@@ -118,7 +113,6 @@ function createSupersessionInput(
   };
 }
 
-/** Creates one exact sticky-recovery journal reference. */
 function createRecoveryJournal(
   journalRevision: 1 | 2 | 3
 ): Readonly<KnowledgeForwardRevisionRecoveryJournalRefV1> {
@@ -138,7 +132,6 @@ function createRecoveryJournal(
   } as Parameters<typeof createKnowledgeForwardRevisionRecoveryJournalRef>[0]);
 }
 
-/** Creates one coherent sticky-recovery terminal input. */
 function createRecoveryTerminalInput(journalRevision: 1 | 2 | 3, actualHash = HASH_F) {
   return {
     acceptedIdentity: createAcceptedIdentity(),

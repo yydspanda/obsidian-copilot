@@ -20,7 +20,6 @@ const HASH_F = "f".repeat(64);
 const SELECTED_CONTENT = "# Historical\n";
 const CURRENT_CONTENT = "# Current\n";
 
-/** Creates one exact authority query used by protocol tests. */
 function createQuery(): Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1> {
   return createKnowledgeForwardRevisionProposalAuthorityQuery({
     bundleId: "bundle-a",
@@ -32,7 +31,6 @@ function createQuery(): Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV
   });
 }
 
-/** Creates one strict Runtime-projected authority response. */
 function createAuthority(query = createQuery()): Readonly<Record<string, unknown>> {
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: query.bundleId,

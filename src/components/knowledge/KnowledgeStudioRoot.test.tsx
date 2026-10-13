@@ -34,7 +34,6 @@ import type {
 } from "@/knowledge/ui/sourceLifecycleModel";
 
 jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
-  /** Test seam that exposes Activity callback wiring without testing its rendering again. */
   KnowledgeActivityPanel: (props: {
     model: { bundleId: string };
     commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities>;
@@ -103,7 +102,6 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
 }));
 
 jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
-  /** Test seam that exposes selected-plan, busy, back, and submit bindings. */
   KnowledgeReviewPanel: (props: {
     plan: KnowledgeReviewPlan;
     busy: boolean;
@@ -156,7 +154,6 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
 }));
 
 jest.mock("@/components/knowledge/KnowledgeRecoveryPanel", () => ({
-  /** Test seam that exposes the recovery model, pending identity, and command bindings. */
   KnowledgeRecoveryPanel: (props: {
     model: Readonly<KnowledgeRecoveryModel>;
     pendingRecoveryId?: string;
@@ -184,7 +181,6 @@ jest.mock("@/components/knowledge/KnowledgeRecoveryPanel", () => ({
 }));
 
 jest.mock("@/components/knowledge/KnowledgeQueryPanel", () => ({
-  /** Test seam that exposes Query and opaque citation callback wiring. */
   KnowledgeQueryPanel: (props: {
     state: { status: string };
     writebackAvailable: boolean;
@@ -209,7 +205,6 @@ jest.mock("@/components/knowledge/KnowledgeQueryPanel", () => ({
 }));
 
 jest.mock("@/components/knowledge/KnowledgeSourceLifecyclePanel", () => ({
-  /** Test seam that exposes the immutable source model and narrow command callbacks. */
   KnowledgeSourceLifecyclePanel: (props: {
     model: Readonly<KnowledgeSourceLifecycleModel>;
     onCheckAgain: (sourceId: string, signal: AbortSignal) => void;
@@ -291,7 +286,6 @@ const DISABLED_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities
   recoveryAbandon: false,
 };
 
-/** Creates one exact decision-required recovery projection for Root wiring tests. */
 function createRecoveryModel(): Readonly<KnowledgeRecoveryModel> {
   return {
     bundleId: "personal",
@@ -307,7 +301,6 @@ function createRecoveryModel(): Readonly<KnowledgeRecoveryModel> {
   };
 }
 
-/** Creates one missing-source lifecycle projection for Sources tab wiring tests. */
 function createSourceLifecycleModel(): Readonly<KnowledgeSourceLifecycleModel> {
   return {
     bundleId: "personal",
@@ -329,7 +322,6 @@ function createSourceLifecycleModel(): Readonly<KnowledgeSourceLifecycleModel> {
   };
 }
 
-/** Creates one compact review plan for composition tests. */
 function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
   return {
     changeSetId,
@@ -368,7 +360,6 @@ function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
 const FORWARD_REVIEW_REF = `forward-studio-review-${"a".repeat(64)}`;
 const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"b".repeat(64)}`;
 
-/** Creates one pending forward row rendered through the reusable Review panel. */
 function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPendingReview> {
   return {
     state: "pending",
@@ -382,7 +373,6 @@ function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPe
   };
 }
 
-/** Embeds forward rows into a ready Review-tab state with no legacy proposal. */
 function createForwardReadyState(
   reviews: readonly Readonly<KnowledgeForwardRevisionStudioReview>[]
 ): KnowledgeStudioState {
@@ -399,7 +389,6 @@ function createForwardReadyState(
   };
 }
 
-/** Creates one ready controller state with optional reviews. */
 function createReadyState(
   reviews: readonly KnowledgeReviewPlan[] = [createReviewPlan("changeset-1")],
   commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities> = ENABLED_COMMAND_CAPABILITIES,
@@ -455,10 +444,6 @@ function createReadyState(
   };
 }
 
-/**
- * Minimal observable controller used to verify the React composition boundary.
- * It intentionally owns state changes so the component cannot update optimistically.
- */
 class TestKnowledgeStudioController {
   private readonly listeners = new Set<() => void>();
   private state: KnowledgeStudioState;
@@ -466,35 +451,29 @@ class TestKnowledgeStudioController {
   submitted?: KnowledgeReviewCommand;
   submittedForward?: KnowledgeReviewCommand;
 
-  /** Creates the fake with one externally owned state object. */
   constructor(initialState: KnowledgeStudioState) {
     this.state = initialState;
   }
 
-  /** Returns the current external-store snapshot. */
   getState(): KnowledgeStudioState {
     return this.state;
   }
 
-  /** Subscribes one React listener. */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  /** Publishes a replacement state exactly as a real controller would. */
   publish(state: KnowledgeStudioState): void {
     this.state = state;
     this.listeners.forEach((listener) => listener());
   }
 
-  /** Records a tab selection and publishes only UI navigation state. */
   selectTab(tab: KnowledgeStudioState["activeTab"]): void {
     this.calls.push(`tab:${tab}`);
     this.publish({ ...this.state, activeTab: tab });
   }
 
-  /** Records an opaque review selection and publishes controller navigation. */
   openReview(changeSetId: string): void {
     this.calls.push(`review:${changeSetId}`);
     this.publish({
@@ -504,7 +483,6 @@ class TestKnowledgeStudioController {
     });
   }
 
-  /** Records one dedicated forward-row selection and clears legacy selection. */
   openForwardRevision(reviewRef: string): void {
     this.calls.push(`forward:${reviewRef}`);
     this.publish({
@@ -515,27 +493,22 @@ class TestKnowledgeStudioController {
     });
   }
 
-  /** Records a durable reload request without changing render state. */
   async refresh(): Promise<void> {
     this.calls.push("refresh");
   }
 
-  /** Records a bundle pause request without optimistic state. */
   async pauseBundle(): Promise<void> {
     this.calls.push("pause");
   }
 
-  /** Records a bundle resume request without optimistic state. */
   async resumeBundle(): Promise<void> {
     this.calls.push("resume");
   }
 
-  /** Records an opaque job cancellation request without optimistic state. */
   async cancelJob(jobId: string): Promise<void> {
     this.calls.push(`cancel:${jobId}`);
   }
 
-  /** Records an opaque job retry request without optimistic state. */
   async retryJob(jobId: string): Promise<void> {
     this.calls.push(`retry:${jobId}`);
   }
@@ -548,13 +521,11 @@ class TestKnowledgeStudioController {
     this.calls.push(`run-selected:${jobId}:${revision}`);
   }
 
-  /** Records an opaque review command without optimistic state. */
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
     this.calls.push(`submit:${command.changeSetId}`);
     this.submitted = command;
   }
 
-  /** Records a reusable Review command routed through the distinct forward boundary. */
   async submitForwardRevisionReview(
     reviewRef: string,
     command: KnowledgeReviewCommand
@@ -563,82 +534,66 @@ class TestKnowledgeStudioController {
     this.submittedForward = command;
   }
 
-  /** Records a retry of one durable accepted-ready forward decision. */
   async applyForwardRevision(reviewRef: string): Promise<void> {
     this.calls.push(`forward-apply:${reviewRef}`);
   }
 
-  /** Records one accepted-ready no-write terminal command. */
   async abandonForwardRevision(reviewRef: string): Promise<void> {
     this.calls.push(`forward-abandon:${reviewRef}`);
   }
 
-  /** Records one sticky exact-state recheck and bounded Forward Apply retry. */
   async retryForwardRevisionRecovery(reviewRef: string): Promise<void> {
     this.calls.push(`forward-recovery-retry:${reviewRef}`);
   }
 
-  /** Records one sticky zero-write decision to retain the freshly observed Wiki value. */
   async keepCurrentForwardRevision(reviewRef: string): Promise<void> {
     this.calls.push(`forward-recovery-keep:${reviewRef}`);
   }
 
-  /** Returns no retained Review decisions from this focused composition fake. */
   getReviewDraft(_plan: Readonly<KnowledgeReviewPlan>): Readonly<Record<string, never>> {
     return Object.freeze({});
   }
 
-  /** Returns no active textarea from this focused composition fake. */
   getReviewActiveEdit(_plan: Readonly<KnowledgeReviewPlan>): undefined {
     return undefined;
   }
 
-  /** Accepts a Review draft update without simulating content-bearing state. */
   updateReviewDraft(_plan: Readonly<KnowledgeReviewPlan>, _draft: unknown): boolean {
     return true;
   }
 
-  /** Accepts an active-editor update without simulating content-bearing state. */
   updateReviewActiveEdit(_plan: Readonly<KnowledgeReviewPlan>, _activeEdit: unknown): boolean {
     return true;
   }
 
-  /** Records one opaque Review evidence reference without receiving a source path or locator. */
   async openReviewEvidence(evidenceRef: string): Promise<void> {
     this.calls.push(`review-evidence:${evidenceRef}`);
   }
 
-  /** Records an explicit recovery continuation without optimistic state. */
   async continueRecovery(recoveryId: string): Promise<void> {
     this.calls.push(`continue:${recoveryId}`);
   }
 
-  /** Records an explicit no-journal abandonment without optimistic state. */
   async abandonRecovery(recoveryId: string): Promise<void> {
     this.calls.push(`abandon:${recoveryId}`);
   }
 
-  /** Records one retrieval-only Query request without synthesizing UI state. */
   async runQuery(query: string): Promise<void> {
     this.calls.push(`query:${query}`);
   }
 
-  /** Records one opaque citation reference without receiving its source path. */
   async openQueryCitation(citationRef: string): Promise<void> {
     this.calls.push(`citation:${citationRef}`);
   }
 
-  /** Records one reviewed writeback title without receiving generated content or paths. */
   async saveCurrentQueryToWiki(title: string): Promise<void> {
     this.calls.push(`save:${title}`);
   }
 
-  /** Records a source recheck without receiving its path or model row. */
   async checkSourceAgain(sourceId: string, _signal?: AbortSignal): Promise<void> {
     this.calls.push(`source-check:${sourceId}`);
   }
 
-  /** Records exact source retirement authority without updating React state. */
   async retireSource(
     confirmation: Readonly<KnowledgeSourceRemovalConfirmation>,
     _signal?: AbortSignal
@@ -650,7 +605,6 @@ class TestKnowledgeStudioController {
   }
 }
 
-/** Converts the focused fake to the concrete controller boundary expected by React. */
 function asController(controller: TestKnowledgeStudioController): KnowledgeStudioController {
   return controller as unknown as KnowledgeStudioController;
 }
@@ -676,7 +630,6 @@ const READY_SETUP_PROJECTION: KnowledgeSetupReadinessProjection = {
   networkVerification: "not_tested",
 };
 
-/** Creates inert setup navigation for Root composition tests. */
 function createSetupNavigation(): KnowledgeSetupNavigationPort {
   return {
     openCopilotSettings: jest.fn(),
@@ -688,7 +641,6 @@ function createSetupNavigation(): KnowledgeSetupNavigationPort {
   };
 }
 
-/** Renders Knowledge Studio with the suite's inert folder import boundary. */
 function renderStudio(
   controller: TestKnowledgeStudioController,
   setupReadiness = new KnowledgeSetupReadinessStore(READY_SETUP_PROJECTION),

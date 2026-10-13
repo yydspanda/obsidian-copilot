@@ -15,7 +15,6 @@ import type { SourceManifest, SourceManifestEntry } from "@/knowledge/model/type
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { KnowledgeFolderImportFileStoreError } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
 
-/** Creates one valid project-owned Bundle for folder import tests. */
 function createOwner(sourceRoots: string[] = ["Sources"]): ConfiguredProjectKnowledgeBundle {
   return {
     projectId: "project-personal",
@@ -30,7 +29,6 @@ function createOwner(sourceRoots: string[] = ["Sources"]): ConfiguredProjectKnow
   };
 }
 
-/** Creates the current text and PDF parser ownership projection. */
 function createParserProfiles(): KnowledgeSourceParserProfile[] {
   return [
     {
@@ -48,7 +46,6 @@ function createParserProfiles(): KnowledgeSourceParserProfile[] {
   ];
 }
 
-/** Creates a browser-file shaped capability without an external absolute path. */
 function createSelectedFile(
   relativePath: string,
   values: readonly number[],
@@ -62,7 +59,6 @@ function createSelectedFile(
   } as File;
 }
 
-/** Creates an in-memory registration core and captures its writes. */
 function createRegistrationFixture(
   existing: readonly SourceManifestEntry[] = [],
   commitThenThrowOnce = false
@@ -105,7 +101,6 @@ function createRegistrationFixture(
   return { core, registrations, manifest };
 }
 
-/** Creates one exact byte store with create/reuse/conflict behavior. */
 function createFileStore(): KnowledgeFolderImportFileStorePort & {
   files: Map<string, Uint8Array>;
   publish: jest.Mock;
@@ -125,7 +120,6 @@ function createFileStore(): KnowledgeFolderImportFileStorePort & {
   return { files, publish };
 }
 
-/** Creates a coordinator with individually overridable authority inputs. */
 function createCoordinator(options?: {
   owners?: readonly ConfiguredProjectKnowledgeBundle[];
   parserProfiles?: readonly KnowledgeSourceParserProfile[];
@@ -158,7 +152,6 @@ function createCoordinator(options?: {
   };
 }
 
-/** Expects one sanitized folder import error code. */
 async function expectImportError(
   promise: Promise<unknown>,
   code: KnowledgeFolderImportErrorCode

@@ -51,11 +51,6 @@ export const NoEffortControl: StoryObj<Props> = {
   },
 };
 
-/**
- * Click a locked row or lock, or Tab to the row and press Enter, to open pricing
- * with model-picker-lock attribution. Drafting another model or effort first
- * must not commit that change when pricing opens. Reopen to check the selection.
- */
 export const Unlicensed: StoryObj<Props> = {
   args: {
     override: {
@@ -73,6 +68,40 @@ export const Unlicensed: StoryObj<Props> = {
         ...ConcreteEffort.args.override.models,
         { name: "local", displayName: "Local model", provider: "ollama", enabled: true },
       ],
+    },
+  },
+};
+
+export const CustomEndpointLabels: StoryObj<Props> = {
+  args: {
+    override: {
+      ...ConcreteEffort.args.override,
+      models: [
+        {
+          name: "d5df8680-65f4-4c4b-81d2-7797550f47fe/auto",
+          displayName: "Office LiteLLM proxy/auto",
+          provider: "agent",
+          enabled: true,
+          _group: "opencode",
+        },
+        {
+          name: "8a1c33e2-0f5b-4a7e-9d61-2b7f4c0e9a10/auto",
+          displayName: "Home lab vLLM server running on the basement workstation/auto",
+          provider: "agent",
+          enabled: true,
+          _group: "opencode",
+        },
+        {
+          name: "copilot-plus/copilot-plus-flash",
+          displayName: "copilot-plus/copilot-plus-flash",
+          provider: "agent",
+          enabled: true,
+          _group: "opencode",
+        },
+      ],
+      value: "d5df8680-65f4-4c4b-81d2-7797550f47fe/auto|agent",
+      effort: undefined,
+      effortOptionsByModelKey: {},
     },
   },
 };

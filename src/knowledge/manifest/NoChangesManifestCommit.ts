@@ -13,38 +13,31 @@ import { validateVaultRelativePath } from "@/knowledge/model/validation";
 import { findWindowsPathCollisions, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of the durable no-changes Manifest plan and marker. */
 export const NO_CHANGES_MANIFEST_COMMIT_VERSION = 1 as const;
 
-/** Bound on content-free evidence diagnostics retained with one no-changes result. */
 export const MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS = 2048;
 
-/** Reserved source extension containing the latest atomic no-changes commit marker. */
 export const KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY =
   "obsidianCopilotKnowledgeNoChangesCommit" as const;
 
-/** Deterministic compiler boundary that established an exact no-changes outcome. */
 export type NoChangesManifestCommitReason =
   | "analysis_no_targets"
   | "resolved_no_targets"
   | "all_targets_unchanged";
 
-/** Content-free explanation of why generation produced no Wiki mutations. */
 export interface NoChangesGenerationOutcomes {
   explicitUnchanged: number;
   identicalWrites: number;
 }
 
-/** Analysis-stage evidence use, not a guarantee that generation expressed every claim. */
 export interface NoChangesEvidenceCoverageEntry {
   quoteHash: string;
-  /** Distinct analysis claims supported by this evidence. */
+
   supportingClaimCount: number;
-  /** Supporting claims assigned to at least one analysis write target. */
+
   targetClaimCount: number;
 }
 
-/** Fields shared by ordinary and query-writeback no-changes plans. */
 interface NoChangesManifestCommitPlanBase {
   version: typeof NO_CHANGES_MANIFEST_COMMIT_VERSION;
   bundleId: string;
@@ -64,30 +57,25 @@ interface NoChangesManifestCommitPlanBase {
   baseGeneratedPages: ManifestCommitPage[];
 }
 
-/** No-file success plan for one ordinary durable source compile. */
 export interface SourceNoChangesManifestCommitPlan extends NoChangesManifestCommitPlanBase {
   kind: "source_compile";
 }
 
-/** No-file success plan retaining the exact managed query-capture origin. */
 export interface QueryWritebackNoChangesManifestCommitPlan extends NoChangesManifestCommitPlanBase {
   kind: "query_writeback_source_compile";
   sourceOriginDigest: string;
 }
 
-/** Complete proposal-time proof that compilation intentionally changed no Wiki files. */
 export type NoChangesManifestCommitPlan =
   | SourceNoChangesManifestCommitPlan
   | QueryWritebackNoChangesManifestCommitPlan;
 
-/** Distributive no-id plan core used to derive the non-circular identity. */
 type NoChangesManifestCommitPlanCore = NoChangesManifestCommitPlan extends infer TPlan
   ? TPlan extends NoChangesManifestCommitPlan
     ? Omit<TPlan, "noChangesId">
     : never
   : never;
 
-/** Input used to create one content-addressed no-changes plan. */
 export interface CreateNoChangesManifestCommitPlanInput {
   bundleId: string;
   sourceId: string;
@@ -106,7 +94,6 @@ export interface CreateNoChangesManifestCommitPlanInput {
   sourceAuthority: KnowledgeSourceCompileAuthority;
 }
 
-/** Exact processing claim bound to a no-changes Queue completion. */
 export interface NoChangesManifestQueueClaim {
   jobId: string;
   sourceId: string;
@@ -117,7 +104,6 @@ export interface NoChangesManifestQueueClaim {
   startedAt: number;
 }
 
-/** Input used to bind one strict plan to its exact Queue completion. */
 export interface CreateNoChangesManifestCommitMarkerInput {
   plan: NoChangesManifestCommitPlan;
   jobClaim: NoChangesManifestQueueClaim;
@@ -125,7 +111,6 @@ export interface CreateNoChangesManifestCommitMarkerInput {
   manifestAfterRevision: number;
 }
 
-/** Fields shared by ordinary and query-writeback no-changes commit markers. */
 interface NoChangesManifestCommitMarkerBase extends NoChangesManifestCommitPlanBase {
   planDigest: string;
   jobId: string;
@@ -135,25 +120,20 @@ interface NoChangesManifestCommitMarkerBase extends NoChangesManifestCommitPlanB
   manifestAfterRevision: number;
 }
 
-/** Durable ordinary-source marker published with Queue completion. */
 export interface SourceNoChangesManifestCommitMarker extends NoChangesManifestCommitMarkerBase {
   kind: "source_compile";
 }
 
-/** Durable query-writeback marker published with Queue completion. */
 export interface QueryWritebackNoChangesManifestCommitMarker extends NoChangesManifestCommitMarkerBase {
   kind: "query_writeback_source_compile";
   sourceOriginDigest: string;
 }
 
-/** Exact Manifest/Queue proof for one durably completed no-changes compile. */
 export type NoChangesManifestCommitMarker =
   | SourceNoChangesManifestCommitMarker
   | QueryWritebackNoChangesManifestCommitMarker;
 
-/** Stable sanitized failure for invalid no-changes commit material. */
 export class NoChangesManifestCommitValidationError extends TypeError {
-  /** Creates one failure carrying only bounded deterministic diagnostics. */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("No-changes Manifest commit material does not satisfy the strict contract");
     this.name = "NoChangesManifestCommitValidationError";
@@ -240,7 +220,6 @@ const planBaseShape = {
   baseGeneratedPages: z.array(manifestCommitPageSchema),
 } as const;
 
-/** Strict runtime schema for a durable no-changes Manifest plan. */
 export const noChangesManifestCommitPlanSchema: z.ZodType<NoChangesManifestCommitPlan> = z.union([
   z
     .object({
@@ -267,7 +246,6 @@ const markerBaseShape = {
   manifestAfterRevision: nonNegativeIntegerSchema,
 } as const;
 
-/** Strict runtime schema for one atomic Manifest/Queue no-changes marker. */
 export const noChangesManifestCommitMarkerSchema: z.ZodType<NoChangesManifestCommitMarker> =
   z.union([
     z
@@ -285,7 +263,6 @@ export const noChangesManifestCommitMarkerSchema: z.ZodType<NoChangesManifestCom
       .strict(),
   ]);
 
-/** Converts one Zod issue path to stable dotted/indexed notation. */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") return `${result}[${segment}]`;
@@ -294,7 +271,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/** Maps strict structural parse issues into the public diagnostic contract. */
 function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.map((issue) => ({
     code: `schema_${issue.code}`,
@@ -307,7 +283,6 @@ function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/** Creates one aggregate deterministic validation result. */
 function toValidationResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValidationResult {
   return {
     valid: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
@@ -315,7 +290,6 @@ function toValidationResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValida
   };
 }
 
-/** Adds one deterministic error diagnostic. */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -325,42 +299,35 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/** Compares identifiers without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Compares Manifest pages by Windows path identity and exact path spelling. */
 function comparePages(left: ManifestCommitPage, right: ManifestCommitPage): number {
   const keyComparison = compareText(toWindowsPathKey(left.path), toWindowsPathKey(right.path));
   return keyComparison === 0 ? compareText(left.path, right.path) : keyComparison;
 }
 
-/** Returns detached canonically ordered base-page material. */
 function normalizePages(pages: readonly ManifestCommitPage[]): ManifestCommitPage[] {
   return pages.map((page) => ({ ...page })).sort(comparePages);
 }
 
-/** Reconstructs the exact plan core whose digest creates noChangesId. */
 function createPlanIdentityCore(plan: NoChangesManifestCommitPlanCore): JsonValue {
   return plan as unknown as JsonValue;
 }
 
-/** Creates a non-circular content address over every behavior-defining plan field. */
 function createNoChangesIdFromCore(plan: NoChangesManifestCommitPlanCore): string {
   return `knowledge-no-changes-${sha256(
     `knowledge-no-changes-plan-identity-v1\n${canonicalizeJson(createPlanIdentityCore(plan))}`
   )}`;
 }
 
-/** Removes the derived noChangesId while preserving the exact plan variant. */
 function omitNoChangesId(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitPlanCore {
   const { noChangesId: _noChangesId, ...core } = plan;
   void _noChangesId;
   return core;
 }
 
-/** Validates canonical paths, ordering, and identity shared by parsed plans. */
 function validatePlanSemantics(plan: NoChangesManifestCommitPlan): KnowledgeDiagnostic[] {
   const diagnostics: KnowledgeDiagnostic[] = [];
   // Earlier exits did not run generation, so counts would misrepresent their outcome.
@@ -410,7 +377,6 @@ function validatePlanSemantics(plan: NoChangesManifestCommitPlan): KnowledgeDiag
   return diagnostics;
 }
 
-/** Deeply freezes one detached strict plan for safe asynchronous hand-off. */
 function freezePlan(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitPlan {
   return Object.freeze({
     ...plan,
@@ -430,7 +396,6 @@ function freezePlan(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitP
   }) as NoChangesManifestCommitPlan;
 }
 
-/** Deeply freezes one detached strict marker for safe asynchronous hand-off. */
 function freezeMarker(marker: NoChangesManifestCommitMarker): NoChangesManifestCommitMarker {
   return Object.freeze({
     ...marker,
@@ -450,7 +415,6 @@ function freezeMarker(marker: NoChangesManifestCommitMarker): NoChangesManifestC
   }) as NoChangesManifestCommitMarker;
 }
 
-/** Parses unknown JSON as one strict no-changes Manifest plan. */
 export function parseNoChangesManifestCommitPlan(
   value: unknown
 ): KnowledgeParseResult<NoChangesManifestCommitPlan> {
@@ -460,14 +424,12 @@ export function parseNoChangesManifestCommitPlan(
     : { ok: false, issues: mapSchemaIssues(parsed.error) };
 }
 
-/** Validates one strict plan's canonical paths and complete derived identity. */
 export function validateNoChangesManifestCommitPlan(value: unknown): KnowledgeValidationResult {
   const parsed = parseNoChangesManifestCommitPlan(value);
   if (!parsed.ok) return toValidationResult(parsed.issues);
   return toValidationResult(validatePlanSemantics(parsed.value));
 }
 
-/** Creates one canonical no-changes plan from exact source and Manifest authority. */
 export function createNoChangesManifestCommitPlan(
   input: Readonly<CreateNoChangesManifestCommitPlanInput>
 ): NoChangesManifestCommitPlan {
@@ -525,7 +487,6 @@ export function createNoChangesManifestCommitPlan(
   return freezePlan(parsed.value);
 }
 
-/** Computes the canonical digest of one exact validated no-changes plan. */
 export function createNoChangesManifestCommitPlanDigest(
   value: NoChangesManifestCommitPlan
 ): string {
@@ -539,7 +500,6 @@ export function createNoChangesManifestCommitPlanDigest(
   );
 }
 
-/** Reconstructs the exact plan embedded in one flat durable marker. */
 function markerToPlan(marker: NoChangesManifestCommitMarker): NoChangesManifestCommitPlan {
   const {
     planDigest: _planDigest,
@@ -559,7 +519,6 @@ function markerToPlan(marker: NoChangesManifestCommitMarker): NoChangesManifestC
   return plan;
 }
 
-/** Validates plan binding, Queue timing, and exact Manifest revision advancement. */
 function validateMarkerSemantics(marker: NoChangesManifestCommitMarker): KnowledgeDiagnostic[] {
   const plan = markerToPlan(marker);
   const diagnostics = validatePlanSemantics(plan);
@@ -603,7 +562,6 @@ function validateMarkerSemantics(marker: NoChangesManifestCommitMarker): Knowled
   return diagnostics;
 }
 
-/** Parses unknown JSON as one strict durable no-changes commit marker. */
 export function parseKnowledgeNoChangesCommitMarker(
   value: unknown
 ): KnowledgeParseResult<NoChangesManifestCommitMarker> {
@@ -613,14 +571,12 @@ export function parseKnowledgeNoChangesCommitMarker(
     : { ok: false, issues: mapSchemaIssues(parsed.error) };
 }
 
-/** Validates a marker's exact plan digest, timing, revision, and derived identity. */
 export function validateNoChangesManifestCommitMarker(value: unknown): KnowledgeValidationResult {
   const parsed = parseKnowledgeNoChangesCommitMarker(value);
   if (!parsed.ok) return toValidationResult(parsed.issues);
   return toValidationResult(validateMarkerSemantics(parsed.value));
 }
 
-/** Creates one strict flat marker from an exact plan and matching Queue claim. */
 export function createKnowledgeNoChangesCommitMarker(
   input: Readonly<CreateNoChangesManifestCommitMarkerInput>
 ): NoChangesManifestCommitMarker {

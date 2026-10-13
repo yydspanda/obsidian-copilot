@@ -45,7 +45,6 @@ type Operation =
   | "get_pending"
   | "finalize";
 
-/** Creates the Bundle used by coordinator tests. */
 function createBundle(id = "personal"): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -57,7 +56,6 @@ function createBundle(id = "personal"): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the accepted ChangeSet retained by the committed journal. */
 function createChangeSet(): KnowledgeChangeSet {
   return {
     id: "changeset-1",
@@ -83,7 +81,6 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
-/** Creates the final complete Manifest projection carried by the committed journal. */
 function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestCommitIntent {
   const manifest: SourceManifest = {
     version: 1,
@@ -114,7 +111,6 @@ function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestComm
   };
 }
 
-/** Creates a complete committed journal for one applying job attempt. */
 function createCommittedJournal(): CommittedChangeSetTransactionJournal {
   const bundle = createBundle();
   const changeSet = createChangeSet();
@@ -157,7 +153,6 @@ function createCommittedJournal(): CommittedChangeSetTransactionJournal {
   };
 }
 
-/** Derives the public commit receipt expected from the test journal. */
 function createReceipt(
   journal: CommittedChangeSetTransactionJournal = createCommittedJournal()
 ): TransactionCommitReceipt {
@@ -181,7 +176,6 @@ function createReceipt(
   };
 }
 
-/** Creates the completed queue job correlated with the committed receipt. */
 function createCompletedJob(receipt: TransactionCommitReceipt): KnowledgeIngestJob {
   return {
     id: receipt.jobClaim.jobId,
@@ -201,7 +195,6 @@ function createCompletedJob(receipt: TransactionCommitReceipt): KnowledgeIngestJ
   };
 }
 
-/** Converts a receipt into the durable queue hand-off marker. */
 function createMarker(receipt: TransactionCommitReceipt): IngestApplyCommitMarker {
   return {
     transactionId: receipt.transactionId,
@@ -219,7 +212,6 @@ function createMarker(receipt: TransactionCommitReceipt): IngestApplyCommitMarke
   };
 }
 
-/** Creates a detached queue snapshot reflecting the fake queue's current marker. */
 function createQueueSnapshot(
   receipt: TransactionCommitReceipt,
   marker: IngestApplyCommitMarker | null
@@ -257,16 +249,13 @@ function createQueueSnapshot(
   };
 }
 
-/** One-shot failure injector shared by all fake durable ports. */
 class FailureInjector {
   private pending?: Operation;
 
-  /** Configures one operation to fail before changing its fake durable state. */
   failOnce(operation: Operation): void {
     this.pending = operation;
   }
 
-  /** Throws once when the configured operation is reached. */
   reach(operation: Operation): void {
     if (this.pending === operation) {
       this.pending = undefined;
@@ -275,13 +264,11 @@ class FailureInjector {
   }
 }
 
-/** Stateful fake transaction port that behaves like the global journal slot. */
 class FakeTransactionPort implements ApplyCommitTransactionPort {
   active: ChangeSetTransactionJournal | null;
   acknowledgeFalseOnce = false;
   recoveryOverride?: TransactionRecoveryResult;
 
-  /** Creates a fake around one active committed journal. */
   constructor(
     private readonly calls: Operation[],
     private readonly failures: FailureInjector,
@@ -290,7 +277,6 @@ class FakeTransactionPort implements ApplyCommitTransactionPort {
     this.active = journal;
   }
 
-  /** Recovers or observes the fake active journal. */
   async recoverOnStartup(_bundle: KnowledgeBundleConfig): Promise<TransactionRecoveryResult> {
     this.calls.push("recover");
     this.failures.reach("recover");
@@ -315,14 +301,12 @@ class FakeTransactionPort implements ApplyCommitTransactionPort {
     return { kind: "committed", action: "already_committed", receipt: createReceipt(this.active) };
   }
 
-  /** Reads the fake active journal. */
   async loadActive(): Promise<ChangeSetTransactionJournal | null> {
     this.calls.push("load");
     this.failures.reach("load");
     return this.active;
   }
 
-  /** Clears the fake journal or simulates an observed prior clear. */
   async acknowledgeCommitted(_receipt: TransactionCommitReceipt): Promise<boolean> {
     this.calls.push("ack");
     this.failures.reach("ack");
@@ -339,25 +323,21 @@ class FakeTransactionPort implements ApplyCommitTransactionPort {
   }
 }
 
-/** Stateful fake queue port with an idempotent durable commit marker. */
 class FakeQueuePort implements ApplyCommitQueuePort {
   marker: IngestApplyCommitMarker | null = null;
 
-  /** Creates the fake queue around the shared receipt. */
   constructor(
     private readonly calls: Operation[],
     private readonly failures: FailureInjector,
     private readonly receipt: TransactionCommitReceipt
   ) {}
 
-  /** Verifies the fake queue identity without changing its marker. */
   async verifyApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     this.calls.push("verify");
     this.failures.reach("verify");
     return createCompletedJob(receipt);
   }
 
-  /** Completes the job and records the fake marker idempotently. */
   async resolveApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     this.calls.push("resolve");
     this.failures.reach("resolve");
@@ -365,14 +345,12 @@ class FakeQueuePort implements ApplyCommitQueuePort {
     return createCompletedJob(receipt);
   }
 
-  /** Reads the current fake marker. */
   async getPendingApplyCommit(_bundleId: string): Promise<IngestApplyCommitMarker | null> {
     this.calls.push("get_pending");
     this.failures.reach("get_pending");
     return this.marker ? { ...this.marker } : null;
   }
 
-  /** Clears the exact fake marker and returns reconciled queue state. */
   async finalizeApplyRecovery(
     _bundleId: string,
     transactionId: string
@@ -387,17 +365,14 @@ class FakeQueuePort implements ApplyCommitQueuePort {
   }
 }
 
-/** Idempotent fake manifest port keyed by the exact transaction identity. */
 class FakeManifestPort implements ApplyCommitManifestPort {
   readonly durableTransactions = new Set<string>();
 
-  /** Creates a fake manifest over shared call and failure state. */
   constructor(
     private readonly calls: Operation[],
     private readonly failures: FailureInjector
   ) {}
 
-  /** Records one logical manifest success idempotently. */
   async recordCommitted(
     journal: CommittedChangeSetTransactionJournal,
     _receipt: TransactionCommitReceipt
@@ -408,7 +383,6 @@ class FakeManifestPort implements ApplyCommitManifestPort {
   }
 }
 
-/** Creates a coordinator and inspectable fake persistence state. */
 function createHarness(): {
   coordinator: ApplyCommitCoordinator;
   transaction: FakeTransactionPort;

@@ -4,7 +4,6 @@ import type {
   KnowledgeAppliedWikiPathIndexRow,
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 
-/** Installation capabilities retained by one revocable inspector/index generation. */
 export interface KnowledgeAppliedWikiPageInspectorGenerationLeaseInput {
   readonly delegate: KnowledgeAppliedWikiPageInspectorPort;
   readonly indexRows: readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[];
@@ -29,21 +28,19 @@ interface LeaseState {
 
 const leaseStates = new WeakMap<object, LeaseState>();
 
-/** Creates the platform-standard cancellation for a stale installation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Invokes cleanup after authority is withdrawn without leaking cleanup failures. */
 function closeSafely(close: () => void): void {
   try {
     close();
   } catch {
     // The exact owning generation is already non-authoritative.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Reads one exact own enumerable data record without invoking accessors. */
 function snapshotInput(
   value: unknown
 ): Readonly<KnowledgeAppliedWikiPageInspectorGenerationLeaseInput> {
@@ -118,7 +115,6 @@ function snapshotInput(
   }
 }
 
-/** Returns hidden state only for one authentic frozen lease. */
 function requireLeaseState(value: unknown): LeaseState {
   if (
     typeof value !== "object" ||
@@ -132,7 +128,6 @@ function requireLeaseState(value: unknown): LeaseState {
   return state;
 }
 
-/** Withdraws both advisory discovery and inspector authority conditionally. */
 function withdraw(state: LeaseState): void {
   if (!state.active && !state.indexLease && !state.delegatePublished) return;
   state.active = false;
@@ -145,7 +140,6 @@ function withdraw(state: LeaseState): void {
   }
 }
 
-/** Unconditionally attempts exact conditional revocation after a failed publication. */
 function cleanupPublished(state: LeaseState): void {
   state.active = false;
   const indexLease = state.indexLease;
@@ -155,14 +149,7 @@ function cleanupPublished(state: LeaseState): void {
   closeSafely(() => state.input.revokeDelegate(state.input.delegate));
 }
 
-/**
- * Atomically installs an inspector delegate and its matching advisory path index.
- *
- * Invalidation is subscribed before either publication. Withdrawal is exact and
- * conditional, so an obsolete lease cannot remove a newer generation.
- */
 export class KnowledgeAppliedWikiPageInspectorGenerationLease {
-  /** Publishes one exact generation only while upstream observation remains current. */
   constructor(inputValue: KnowledgeAppliedWikiPageInspectorGenerationLeaseInput) {
     const input = snapshotInput(inputValue);
     const state: LeaseState = {
@@ -194,7 +181,6 @@ export class KnowledgeAppliedWikiPageInspectorGenerationLease {
     }
   }
 
-  /** Proves local installation plus the upstream production generation. */
   assertCurrent(): void {
     const state = requireLeaseState(this);
     if (!state.active || state.closed) throw createAbortError();
@@ -207,7 +193,6 @@ export class KnowledgeAppliedWikiPageInspectorGenerationLease {
     if (!state.active || state.closed) throw createAbortError();
   }
 
-  /** Idempotently closes invalidation and both exact publications. */
   close(): void {
     const state = requireLeaseState(this);
     if (state.closed) return;

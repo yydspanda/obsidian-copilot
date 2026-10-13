@@ -30,7 +30,6 @@ interface ReconcilerHarness extends KnowledgeSourceObservationStartupReconcilerP
   close: jest.Mock<void, []>;
 }
 
-/** Creates one externally settled Promise for lifecycle interleaving tests. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -39,7 +38,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one strict reconciler aggregate result. */
 function createReconciliation(
   patch: Partial<Omit<KnowledgeSourceObservationStartupResult, "kind">> = {}
 ): KnowledgeSourceObservationStartupResult {
@@ -53,7 +51,6 @@ function createReconciliation(
   };
 }
 
-/** Creates one observable watcher port with optional event ordering. */
 function createWatcher(
   order: string[] = [],
   blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[] = []
@@ -94,7 +91,6 @@ function createWatcher(
   };
 }
 
-/** Creates one two-pass reconciler port with optional event ordering. */
 function createReconciler(
   results: readonly KnowledgeSourceObservationStartupResult[] = [
     createReconciliation(),
@@ -116,7 +112,6 @@ function createReconciler(
   };
 }
 
-/** Creates one complete coordinator dependency fixture. */
 function createDependencies(
   watcher: WatcherHarness,
   reconciler: ReconcilerHarness,
@@ -125,7 +120,6 @@ function createDependencies(
   return { watcher, reconciler, assertCurrent };
 }
 
-/** Flushes bounded Promise turns until a synchronous predicate becomes true. */
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (predicate()) return;

@@ -28,11 +28,6 @@ interface Deferred<T> {
   resolve: (value: T) => void;
 }
 
-/**
- * Creates an externally controlled Promise.
- *
- * @returns Deferred Promise controls
- */
 function createDeferred<T>(): Deferred<T> {
   let resolvePromise!: (value: T) => void;
   const promise = new Promise<T>((resolve) => {
@@ -41,12 +36,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve: resolvePromise };
 }
 
-/**
- * Creates a Vault whose adapter calls can be observed independently.
- *
- * @param exists - Result or deferred result for adapter.exists
- * @returns Vault and its adapter mocks
- */
 function createVault(exists: boolean | Promise<boolean>): {
   adapter: { exists: jest.Mock; write: jest.Mock; remove: jest.Mock };
   vault: Vault;
@@ -66,12 +55,6 @@ function createVault(exists: boolean | Promise<boolean>): {
   };
 }
 
-/**
- * Creates an App whose Vault and Workspace can be distinguished from other owners.
- *
- * @param vault - Exact Vault owned by the App
- * @returns App with observable Workspace access
- */
 function createApp(vault: Vault): App {
   return {
     vault,

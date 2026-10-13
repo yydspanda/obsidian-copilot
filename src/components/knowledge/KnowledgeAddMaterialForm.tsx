@@ -22,10 +22,6 @@ export interface KnowledgeAddMaterialFormProps {
   onCancel: () => void;
 }
 
-/**
- * Displays the exact material and custody choice before an explicit command.
- * @param props Read-only chooser state and explicit user-action callbacks.
- */
 export function KnowledgeAddMaterialForm({
   session,
   selection,

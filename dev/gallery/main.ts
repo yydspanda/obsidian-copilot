@@ -391,10 +391,6 @@ class GalleryView extends ItemView {
   }
 }
 
-/**
- * Manages only the development component gallery view and its open command.
- * It does not load or alter the production Copilot runtime.
- */
 export default class GalleryPlugin extends Plugin {
   private catalog: GalleryCatalog = createGalleryCatalog([], 0);
   private externalOperationQueue: Promise<void> = Promise.resolve();
@@ -402,14 +398,23 @@ export default class GalleryPlugin extends Plugin {
   private lastGalleryState = resolveGalleryViewState(null, []);
   private operationAbortController = new AbortController();
   private readonly views = new Set<GalleryView>();
+  private lifecycleActive = true;
+  private initialization: Promise<void> = Promise.resolve();
 
-  async onload(): Promise<void> {
+  onload(): void {
+    this.initialization = this.initialize();
+  }
+
+  private async initialize(): Promise<void> {
     const storyModules = await Promise.all(
       modules.map(async ({ componentId, load }) => ({
         componentId,
         storyModule: (await load()) as LoadedStoryModule["storyModule"],
       }))
     );
+    // Obsidian never waits for onload before unloading, and views or commands registered on an
+    // unloaded plugin are never removed. https://github.com/logancyang/obsidian-copilot/issues/3518
+    if (!this.lifecycleActive) return;
     this.catalog = createGalleryCatalog(storyModules, presentationalComponentCount);
     this.lastGalleryState = resolveGalleryViewState(this.lastGalleryState, this.catalog.stories);
 
@@ -495,6 +500,7 @@ export default class GalleryPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.lifecycleActive = false;
     this.operationAbortController.abort();
     this.views.forEach((view) => view.cancelOperations());
     this.views.clear();

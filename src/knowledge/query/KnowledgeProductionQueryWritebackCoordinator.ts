@@ -18,16 +18,13 @@ import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 const MANAGED_QUERY_SOURCE_PREFIX = "Knowledge Query ";
 const SOURCE_ID_PATTERN = /^source-[a-f0-9]{64}$/;
 
-/** Sanitized production capture failure that retains no paths or answer material. */
 export class KnowledgeProductionQueryWritebackError extends Error {
-  /** Creates one value-free failure for the production persistence boundary. */
   constructor() {
     super("The grounded answer could not be registered for reviewed Wiki writeback");
     this.name = "KnowledgeProductionQueryWritebackError";
   }
 }
 
-/** Exact production dependencies retained by one released writeback generation. */
 export interface KnowledgeProductionQueryWritebackCoordinatorInput {
   readonly owners: readonly ConfiguredProjectKnowledgeBundle[];
   readonly fileStore: Pick<KnowledgeFileStore, "compareAndSwap">;
@@ -42,12 +39,10 @@ interface KnowledgeProductionQueryWritebackOwner {
   readonly sourceRoots: readonly string[];
 }
 
-/** Creates the platform-standard cancellation category for stale generation work. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Proves caller cancellation and the owning production generation together. */
 function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void): void {
   if (signal.aborted) throw createAbortError();
   try {
@@ -58,17 +53,14 @@ function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void)
   if (signal.aborted) throw createAbortError();
 }
 
-/** Builds the visible, content-addressed managed-source path under one exact root. */
 function createManagedSourcePath(sourceRoot: string, captureDigest: string): string {
   return `${sourceRoot}/${MANAGED_QUERY_SOURCE_PREFIX}${captureDigest}.md`;
 }
 
-/** Reports whether a failure already carries the standard cancellation category. */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-/** Reads one enumerable own data property without evaluating an accessor. */
 function readDataProperty(value: object, key: string): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -81,7 +73,6 @@ function readDataProperty(value: object, key: string): unknown {
   }
 }
 
-/** Captures one plain data record with an exact enumerable key set. */
 function captureExactDataRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -117,7 +108,6 @@ function captureExactDataRecord(
   }
 }
 
-/** Accepts only the two exact durable-success outcomes of file compare-and-swap. */
 function assertSuccessfulFileWrite(value: unknown): void {
   const { kind } = captureExactDataRecord(value, ["kind"]);
   if (kind !== "applied" && kind !== "already_after") {
@@ -125,7 +115,6 @@ function assertSuccessfulFileWrite(value: unknown): void {
   }
 }
 
-/** Re-proves the strict query origin retained by a returned Manifest entry. */
 function assertRegisteredQuerySource(
   value: unknown,
   sourcePath: string,
@@ -171,15 +160,6 @@ function assertRegisteredQuerySource(
   return status;
 }
 
-/**
- * Persists one grounded answer as an immutable managed source, then registers it.
- *
- * The coordinator never writes Wiki files or fabricates Queue state. A successful
- * result means only that an exact content-addressed source exists and its Manifest
- * identity is durable; the replacement generation owns watcher, Queue, Review,
- * and Apply processing. Creating the source before registration makes interruption
- * safe: a retry converges through `already_after` and exact Manifest replay.
- */
 export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQueryWritebackSubmissionPort {
   private readonly owners: readonly Readonly<KnowledgeProductionQueryWritebackOwner>[];
   private readonly compareAndSwap: Pick<KnowledgeFileStore, "compareAndSwap">["compareAndSwap"];
@@ -188,7 +168,6 @@ export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQu
   private readonly requestGenerationRefresh: () => void;
   private readonly retainDrain: ((drain: Promise<void>) => void) | undefined;
 
-  /** Captures one exact released-generation persistence boundary. */
   constructor(input: KnowledgeProductionQueryWritebackCoordinatorInput) {
     if (
       !input ||
@@ -225,13 +204,6 @@ export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQu
     Object.freeze(this);
   }
 
-  /**
-   * Persists and registers one authentic deterministic query capture.
-   *
-   * @param capture - Branded capture minted by the current Query coordinator
-   * @param signal - Linked caller and production-generation cancellation
-   * @returns Truthful durable-registration receipt
-   */
   submit(
     capture: Readonly<KnowledgeQueryWritebackCapture>,
     signal: AbortSignal
@@ -246,7 +218,6 @@ export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQu
     return operation;
   }
 
-  /** Performs the retained create-and-register sequence for one submission. */
   private async performSubmit(
     capture: Readonly<KnowledgeQueryWritebackCapture>,
     signal: AbortSignal
@@ -286,9 +257,6 @@ export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQu
       );
       const registrationStatus = assertRegisteredQuerySource(registration, sourcePath, capture);
 
-      // New registration schedules recovery at the exact durable boundary. An
-      // exact replay schedules it here so a prior process death between commit
-      // and invalidation also converges.
       if (registrationStatus === "already_registered") {
         this.requestGenerationRefresh();
       }
@@ -303,14 +271,12 @@ export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQu
     }
   }
 
-  /** Requires the capture Bundle to name exactly one released production owner. */
   private resolveOwner(bundleId: string): Readonly<KnowledgeProductionQueryWritebackOwner> {
     const matches = this.owners.filter((owner) => owner.bundleId === bundleId);
     if (matches.length !== 1) throw new KnowledgeProductionQueryWritebackError();
     return matches[0];
   }
 
-  /** Requires one source root so writeback never guesses a durable destination. */
   private resolveSourceRoot(owner: Readonly<KnowledgeProductionQueryWritebackOwner>): string {
     if (owner.sourceRoots.length !== 1) {
       throw new KnowledgeProductionQueryWritebackError();

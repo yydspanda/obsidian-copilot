@@ -12,23 +12,19 @@ import type { GeneratedPageOwnership, SourceManifest } from "@/knowledge/model/t
 import { validateSourceManifest } from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Source-compile authority remains the current effective page authority. */
 export interface KnowledgeSourceApplyPageOrigin {
   readonly kind: "source_apply";
 }
 
-/** One exact active forward-revision lineage layered over a source-compile base. */
 export interface KnowledgeForwardRevisionPageOrigin {
   readonly kind: "forward_revision";
   readonly overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>;
 }
 
-/** Provenance of the bytes that currently constitute one effective Wiki page. */
 export type KnowledgeEffectivePageOrigin =
   | KnowledgeSourceApplyPageOrigin
   | KnowledgeForwardRevisionPageOrigin;
 
-/** Windows-unique page authority with its immutable source base and effective head. */
 export interface KnowledgeEffectiveManifestPage {
   readonly bundleId: string;
   readonly path: string;
@@ -37,7 +33,7 @@ export interface KnowledgeEffectiveManifestPage {
   readonly sourceIds: readonly string[];
   readonly sourceAppliedContentHash: string;
   readonly effectiveContentHash: string;
-  /** Compatibility alias for consumers whose projection already calls the head `contentHash`. */
+
   readonly contentHash: string;
   readonly origin: Readonly<KnowledgeEffectivePageOrigin>;
 }
@@ -53,9 +49,7 @@ interface MutableEffectivePage {
   origin: Readonly<KnowledgeEffectivePageOrigin>;
 }
 
-/** Fixed value-free rejection for an invalid or unprovable effective-page projection. */
 export class KnowledgeEffectivePageProjectionError extends TypeError {
-  /** Creates one sanitized projection failure. */
   constructor() {
     super("Effective Manifest pages do not satisfy the strict authority contract");
     this.name = "KnowledgeEffectivePageProjectionError";
@@ -63,17 +57,14 @@ export class KnowledgeEffectivePageProjectionError extends TypeError {
   }
 }
 
-/** Throws one fixed projection failure without retaining rejected values. */
 function invalid(): never {
   throw new KnowledgeEffectivePageProjectionError();
 }
 
-/** Compares strings by code unit without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Captures and validates one complete standalone Source Manifest. */
 function snapshotManifest(value: unknown): Readonly<SourceManifest> {
   const captured = captureForwardApplyJson(value);
   if (captured === undefined) return invalid();
@@ -82,7 +73,6 @@ function snapshotManifest(value: unknown): Readonly<SourceManifest> {
   return freezeForwardApplyJson(parsed.value);
 }
 
-/** Adds one source-applied page while rejecting ambiguous Windows identities. */
 function addSourceAppliedPage(
   pagesByKey: Map<string, MutableEffectivePage>,
   bundleId: string,
@@ -121,7 +111,6 @@ function addSourceAppliedPage(
   existing.sourceIds.add(sourceId);
 }
 
-/** Applies one exact forward overlay only to its unique source-applied base page. */
 function applyForwardOverlay(
   pagesByKey: Map<string, MutableEffectivePage>,
   overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>,
@@ -149,7 +138,6 @@ function applyForwardOverlay(
   });
 }
 
-/** Freezes one deterministic public page projection. */
 function freezePage(page: MutableEffectivePage): Readonly<KnowledgeEffectiveManifestPage> {
   const sourceIds = [...page.sourceIds].sort(compareText);
   if (sourceIds.length > 1 && page.ownership !== "shared") return invalid();
@@ -166,17 +154,6 @@ function freezePage(page: MutableEffectivePage): Readonly<KnowledgeEffectiveMani
   });
 }
 
-/**
- * Projects every Windows-unique Manifest page into its source base and effective head.
- *
- * `lastSuccessful` remains the immutable source-compile history. An active strict
- * forward overlay changes only the effective head. Missing hashes, ambiguous
- * source ownership, malformed extensions, and overlays that cannot rejoin their
- * exact source-applied page fail closed.
- *
- * @param manifestValue - Strict Source Manifest candidate
- * @returns Deterministically ordered, deeply frozen effective page authorities
- */
 export function projectKnowledgeEffectiveManifestPages(
   manifestValue: unknown
 ): readonly Readonly<KnowledgeEffectiveManifestPage>[] {

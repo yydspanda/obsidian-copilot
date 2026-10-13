@@ -7,7 +7,6 @@ import {
 
 const MODEL_KEY = "chat-model|provider";
 
-/** Creates one complete secret-free candidate with explicit test overrides. */
 function createCandidate(
   overrides: Partial<KnowledgeChatModelReadinessCandidateInput> = {}
 ): KnowledgeChatModelReadinessCandidateInput {

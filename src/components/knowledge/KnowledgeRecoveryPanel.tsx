@@ -11,14 +11,14 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/CardTitle";
 import type {
   KnowledgeRecoveryItem,
   KnowledgeRecoveryModel,
   KnowledgeRecoveryStatus,
 } from "@/knowledge/ui/recoveryModel";
 
-/** Callback-only boundary for the recovery panel. */
 export interface KnowledgeRecoveryPanelProps {
   model: Readonly<KnowledgeRecoveryModel>;
   pendingRecoveryId?: string;
@@ -95,12 +95,6 @@ const RECOVERY_PRESENTATION: Readonly<Record<KnowledgeRecoveryStatus, RecoveryPr
   },
 };
 
-/**
- * Resolves the safe visible detail for one recovery item.
- *
- * @param item - Opaque recovery row
- * @returns Human-readable detail without adding recovery authority
- */
 function getRecoveryDetail(item: Readonly<KnowledgeRecoveryItem>): string {
   // https://github.com/yydspanda/obsidian-copilot/issues/2
   // A changed Knowledge read-set makes retry misleading, so the row explains the only safe exit.
@@ -117,12 +111,6 @@ function getRecoveryDetail(item: Readonly<KnowledgeRecoveryItem>): string {
   return RECOVERY_PRESENTATION.apply_blocked.detail;
 }
 
-/**
- * Reports whether the status may expose an explicit continue command.
- *
- * @param item - Recovery row and action hints
- * @returns True only for a model-authorized no-journal state
- */
 function canContinue(item: Readonly<KnowledgeRecoveryItem>): boolean {
   return (
     (item.status === "accepted_not_started" || item.status === "decision_required") &&
@@ -130,22 +118,10 @@ function canContinue(item: Readonly<KnowledgeRecoveryItem>): boolean {
   );
 }
 
-/**
- * Reports whether the status may expose an explicit abandon command.
- *
- * @param item - Recovery row and action hints
- * @returns True only for a model-authorized decision-required state
- */
 function canAbandon(item: Readonly<KnowledgeRecoveryItem>): boolean {
   return item.status === "decision_required" && item.actions.canAbandon;
 }
 
-/**
- * Renders one content-free recovery row and only its permitted actions.
- *
- * @param props - Recovery item, pending identity, and callbacks
- * @returns One accessible recovery list item
- */
 function RecoveryItem({
   item,
   pendingRecoveryId,
@@ -248,16 +224,6 @@ function RecoveryItem({
   );
 }
 
-/**
- * Presents immutable recovery state without owning any transaction authority.
- *
- * Continue and Abandon are rendered only for exact model-authorized no-journal
- * states. Active, blocked, finalizing, global, and Queue blockers can only ask
- * the caller to re-read durable state; this panel never fabricates rollback.
- *
- * @param props - Recovery model, pending command identity, and callbacks
- * @returns Pure recovery panel
- */
 export function KnowledgeRecoveryPanel({
   model,
   pendingRecoveryId,

@@ -29,7 +29,6 @@ const HASH_F = "f".repeat(64);
 const HISTORICAL = "# Historical\n";
 const CURRENT = "# Current\n";
 
-/** Creates one strict pending proposal used by authority tests. */
 function createProposal() {
   const historicalHash = createFileContentHash(HISTORICAL);
   const currentHash = createFileContentHash(CURRENT);
@@ -101,7 +100,6 @@ function createProposal() {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 100 });
 }
 
-/** Creates one exact Runtime-current acceptance tuple for the pending proposal. */
 function createAcceptanceAuthority(proposal: ReturnType<typeof createProposal>) {
   return {
     runtimeId: "runtime-1",
@@ -134,7 +132,6 @@ function createAcceptanceAuthority(proposal: ReturnType<typeof createProposal>) 
   };
 }
 
-/** Creates one valid citation whose artifact hash intentionally differs from source bytes. */
 function createCitation() {
   const excerpt = "Exact historical evidence";
   return {
@@ -154,7 +151,6 @@ function createCitation() {
   };
 }
 
-/** Creates one strict authority for snapshot and hostile-input tests. */
 function createAuthority(citations: unknown = [createCitation()]) {
   const proposal = createProposal();
   const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
@@ -176,7 +172,6 @@ function createAuthority(citations: unknown = [createCitation()]) {
   });
 }
 
-/** Makes a mutable JSON clone for strict persisted-shape checks. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

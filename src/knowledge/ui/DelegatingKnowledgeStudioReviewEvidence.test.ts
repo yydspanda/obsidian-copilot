@@ -13,7 +13,6 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
 
-/** Promise whose settlement is controlled explicitly by one test. */
 function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -22,26 +21,22 @@ function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   return { promise, resolve };
 }
 
-/** Flushes delegate invocation scheduled through the stable wrapper. */
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/** Complete Studio delegate with a scriptable evidence handler. */
 class EvidenceDelegate
   implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioReviewEvidencePort
 {
   calls: Array<{ request: Readonly<KnowledgeReviewEvidenceOpenRequest>; signal: AbortSignal }> = [];
 
-  /** Captures one evidence handler for this exact delegate generation. */
   constructor(
     private readonly handler: (
       signal: AbortSignal
     ) => Promise<Readonly<KnowledgeReviewEvidenceOpenResult>>
   ) {}
 
-  /** Returns one ready empty snapshot. */
   async load(bundleId: string): Promise<KnowledgeStudioSnapshot> {
     return {
       ...createUnavailableKnowledgeStudioSnapshot(bundleId),
@@ -50,32 +45,26 @@ class EvidenceDelegate
     };
   }
 
-  /** Provides an inert reload subscription. */
   subscribe(): () => void {
     return () => undefined;
   }
 
-  /** Keeps unrelated pause unavailable in this focused fixture. */
   async pauseBundle(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps unrelated resume unavailable in this focused fixture. */
   async resumeBundle(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps unrelated cancellation unavailable in this focused fixture. */
   async cancelJob(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps unrelated retry unavailable in this focused fixture. */
   async retryJob(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps unrelated Review mutation unavailable in this focused fixture. */
   async submitReview(
     _bundleId: string,
     _command: KnowledgeReviewCommand,
@@ -84,7 +73,6 @@ class EvidenceDelegate
     throw new Error("unavailable");
   }
 
-  /** Records and delegates one evidence operation. */
   async openReviewEvidence(
     _bundleId: string,
     request: Readonly<KnowledgeReviewEvidenceOpenRequest>,

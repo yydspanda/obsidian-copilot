@@ -12,10 +12,8 @@ import {
   verifyKnowledgeByteParserRequest,
 } from "@/knowledge/parser/KnowledgeByteParser";
 
-/** Current exact Obsidian PDF.js page-text behavior contract. */
 export const PDF_PAGE_KNOWLEDGE_PARSER_VERSION = "obsidian-pdfjs-page-text-v1";
 
-/** Explicit resource and routing configuration for the built-in PDF parser. */
 export interface PdfPageKnowledgeByteParserOptions {
   id: string;
   pathSuffixes: readonly string[];
@@ -25,20 +23,17 @@ export interface PdfPageKnowledgeByteParserOptions {
   extractPages?: PdfPageTextExtractor;
 }
 
-/** Exact copied-byte request exposed to the narrow PDF page-text extractor. */
 export interface PdfPageTextExtractionRequest {
   bytes: Uint8Array;
   maxPages: number;
   maxCharacters: number;
 }
 
-/** Path-incapable PDF page-text extraction boundary. */
 export type PdfPageTextExtractor = (
   request: Readonly<PdfPageTextExtractionRequest>,
   signal: AbortSignal
 ) => Promise<unknown>;
 
-/** Stable, value-free content failures emitted by the built-in PDF parser. */
 export type PdfPageKnowledgeParserErrorCode =
   | "source_too_large"
   | "invalid_pdf"
@@ -46,9 +41,7 @@ export type PdfPageKnowledgeParserErrorCode =
   | "extracted_text_too_large"
   | "extracted_text_empty";
 
-/** Reports rejected PDF material without retaining bytes, text, or paths. */
 export class PdfPageKnowledgeParserError extends Error {
-  /** Creates one sanitized parser-content failure. */
   constructor(public readonly code: PdfPageKnowledgeParserErrorCode) {
     super("The knowledge source is not a valid bounded PDF");
     this.name = "PdfPageKnowledgeParserError";
@@ -70,7 +63,6 @@ interface PdfJsPage {
   cleanup?: () => unknown;
 }
 
-/** Checks a positive safe parser resource bound. */
 function requirePositiveLimit(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError(`${field} must be a positive safe integer`);
@@ -78,7 +70,6 @@ function requirePositiveLimit(value: number, field: string): number {
   return value;
 }
 
-/** Checks one stable parser identifier without normalizing it. */
 function requireIdentifier(value: string): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError("Parser id must be canonical non-empty text");
@@ -86,7 +77,6 @@ function requireIdentifier(value: string): string {
   return value;
 }
 
-/** Checks and returns the exact host API identity used by the parser profile. */
 function requireHostApiVersion(value: string): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError("Obsidian API version must be canonical non-empty text");
@@ -94,7 +84,6 @@ function requireHostApiVersion(value: string): string {
   return value;
 }
 
-/** Validates and Windows-normalizes one generic parser-owned suffix. */
 function normalizeSuffix(value: string): string {
   if (
     typeof value !== "string" ||
@@ -109,7 +98,6 @@ function normalizeSuffix(value: string): string {
   return toWindowsPathKey(value);
 }
 
-/** Checks the narrow loading-task surface returned by PDF.js. */
 function isPdfJsLoadingTask(value: unknown): value is PdfJsLoadingTask {
   return (
     typeof value === "object" &&
@@ -124,7 +112,6 @@ function isPdfJsLoadingTask(value: unknown): value is PdfJsLoadingTask {
   );
 }
 
-/** Checks the narrow document surface used for bounded page traversal. */
 function isPdfJsDocument(value: unknown): value is PdfJsDocument {
   return (
     typeof value === "object" &&
@@ -138,7 +125,6 @@ function isPdfJsDocument(value: unknown): value is PdfJsDocument {
   );
 }
 
-/** Checks the narrow page surface used for text extraction. */
 function isPdfJsPage(value: unknown): value is PdfJsPage {
   return (
     typeof value === "object" &&
@@ -148,7 +134,6 @@ function isPdfJsPage(value: unknown): value is PdfJsPage {
   );
 }
 
-/** Reads PDF.js text-content items in their exact returned array order. */
 function extractOrderedPageText(value: unknown, remainingCharacters: number): string {
   if (
     typeof value !== "object" ||
@@ -179,30 +164,24 @@ function extractOrderedPageText(value: unknown, remainingCharacters: number): st
   return text;
 }
 
-/** Destroys one PDF loading task while containing cleanup-only failures. */
 async function destroyPdfJsLoadingTask(task: PdfJsLoadingTask): Promise<void> {
   try {
     await task.destroy();
   } catch {
     // Cleanup is best-effort; the parser's primary success/failure remains authoritative.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Releases page-local PDF.js caches while containing cleanup-only failures. */
 function cleanupPdfJsPage(page: PdfJsPage): void {
   try {
     page.cleanup?.();
   } catch {
     // Page cleanup must not replace the parser's primary result.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Extracts deterministic 1-based page text through Obsidian's public PDF.js loader.
- *
- * The caller must supply a parser-owned byte copy. PDF.js is explicitly denied
- * dynamic code evaluation, and its loading task is destroyed on every outcome.
- */
 export const extractObsidianPdfPageText: PdfPageTextExtractor = async (
   request,
   signal
@@ -288,7 +267,6 @@ export const extractObsidianPdfPageText: PdfPageTextExtractor = async (
   }
 };
 
-/** Reads and freezes a narrow extractor success into dense 1-based pages. */
 function verifyExtractedPages(
   value: unknown,
   maxPages: number,
@@ -341,12 +319,6 @@ function verifyExtractedPages(
   return Object.freeze(pages);
 }
 
-/**
- * Deterministic PDF parser that consumes only copied, already-observed bytes.
- *
- * The emitted artifact hash always identifies the original raw PDF bytes so a
- * future page citation can be revoked when the Vault file drifts.
- */
 export class PdfPageKnowledgeByteParser implements KnowledgeByteParser {
   private readonly profile: KnowledgeSourceParserProfile;
   private readonly maxBytes: number;
@@ -354,7 +326,6 @@ export class PdfPageKnowledgeByteParser implements KnowledgeByteParser {
   private readonly maxCharacters: number;
   private readonly extractPages: PdfPageTextExtractor;
 
-  /** Creates one versioned parser capability and its matching fingerprint profile. */
   constructor(options: PdfPageKnowledgeByteParserOptions) {
     const id = requireIdentifier(options.id);
     const pathSuffixes = options.pathSuffixes.map(normalizeSuffix).sort();
@@ -393,12 +364,10 @@ export class PdfPageKnowledgeByteParser implements KnowledgeByteParser {
     Object.freeze(this);
   }
 
-  /** Returns the immutable behavior profile used by the watch-plan builder. */
   getProfile(): KnowledgeSourceParserProfile {
     return this.profile;
   }
 
-  /** Extracts bounded page text from a copy of the exact request bytes. */
   async parse(
     requestValue: Readonly<KnowledgeByteParserRequest>,
     signal: AbortSignal

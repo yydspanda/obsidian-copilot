@@ -1,5 +1,6 @@
 import { BottomLoadingIndicator } from "@/components/chat-components/BottomLoadingIndicator";
 import ChatSingleMessage from "@/components/chat-components/ChatSingleMessage";
+import { ChatTranscriptViewport } from "@/components/chat-components/ui/ChatTranscriptViewport";
 import { USER_SENDER } from "@/constants";
 import { useChatScrolling } from "@/hooks/useChatScrolling";
 import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
@@ -10,26 +11,17 @@ import React, { memo } from "react";
 interface ChatMessagesProps {
   chatHistory: ChatMessage[];
   currentAiMessage: string;
-  /** Stable ID for streaming message, shared with final persisted message */
   streamingMessageId?: string | null;
   loading?: boolean;
   loadingMessage?: string;
   app: App;
+  sourcePath?: string;
   onRegenerate: (messageIndex: number) => void;
   onEdit: (messageIndex: number, newMessage: string) => void;
   onDelete: (messageIndex: number) => void;
-  knowledgeChatCapturePort: KnowledgeChatCapturePort;
+  knowledgeChatCapturePort?: KnowledgeChatCapturePort;
 }
 
-/**
- * Whether the chat view has nothing to show: no visible message and no
- * in-flight AI response. `ChatMessages` swaps to its suggested-prompts branch
- * on exactly this condition and `Chat` gates the Agent mode banner on it, so
- * the two surfaces cannot drift apart over what counts as an empty chat.
- *
- * @param chatHistory Messages for the active chat, including ones flagged invisible.
- * @param currentAiMessage Text streaming in from the AI right now, empty when nothing is streaming.
- */
 export function isChatEmpty(chatHistory: ChatMessage[], currentAiMessage: string): boolean {
   return !chatHistory.some((message) => message.isVisible) && !currentAiMessage;
 }
@@ -42,20 +34,23 @@ const ChatMessages = memo(
     loading,
     loadingMessage,
     app,
+    sourcePath = "",
     onRegenerate,
     onEdit,
     onDelete,
     knowledgeChatCapturePort,
   }: ChatMessagesProps) => {
-    // Chat scrolling behavior
-    const { containerMinHeight, scrollContainerCallbackRef, getMessageKey } = useChatScrolling({
-      chatHistory,
-    });
+    const {
+      containerMinHeight,
+      scrollContainerCallbackRef,
+      contentCallbackRef,
+      onScroll,
+      isScrollPaused,
+      scrollToEnd,
+      getMessageKey,
+    } = useChatScrolling({ chatHistory });
 
     if (isChatEmpty(chatHistory, currentAiMessage)) {
-      // Height comes from the content, not the container: `Chat` centers the
-      // Agent Chat banner in the space this branch leaves free, so filling the
-      // column here would push that banner back to the top.
       return (
         <div className="tw-flex tw-w-full tw-flex-col tw-gap-2">
           {loading && <BottomLoadingIndicator label={loadingMessage} />}
@@ -65,15 +60,16 @@ const ChatMessages = memo(
 
     return (
       <div className="tw-flex tw-h-full tw-flex-1 tw-flex-col tw-overflow-hidden">
-        <div
-          ref={scrollContainerCallbackRef}
-          data-testid="chat-messages"
-          className="tw-relative tw-flex tw-w-full tw-flex-1 tw-select-text tw-flex-col tw-items-start tw-justify-start tw-overflow-y-auto tw-scroll-smooth tw-break-words tw-text-[calc(var(--font-text-size)_-_2px)]"
+        <ChatTranscriptViewport
+          scrollContainerRef={scrollContainerCallbackRef}
+          contentRef={contentCallbackRef}
+          onScroll={onScroll}
+          isScrollPaused={isScrollPaused}
+          scrollToEnd={scrollToEnd}
         >
           {chatHistory.map((message, index) => {
             const visibleMessages = chatHistory.filter((m) => m.isVisible);
             const isLastMessage = index === visibleMessages.length - 1;
-            // Only apply min-height to AI messages that are last
             const shouldApplyMinHeight = isLastMessage && message.sender !== USER_SENDER;
 
             return (
@@ -88,6 +84,7 @@ const ChatMessages = memo(
                 >
                   <ChatSingleMessage
                     message={message}
+                    sourcePath={sourcePath}
                     app={app}
                     isStreaming={false}
                     onRegenerate={() => onRegenerate(index)}
@@ -131,7 +128,7 @@ const ChatMessages = memo(
               <BottomLoadingIndicator label={loadingMessage} />
             </div>
           ) : null}
-        </div>
+        </ChatTranscriptViewport>
       </div>
     );
   }

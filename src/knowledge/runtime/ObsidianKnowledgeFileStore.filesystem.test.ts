@@ -1,4 +1,3 @@
-// Native containment fixtures need a real filesystem loader, separate from the memory suite.
 jest.mock("obsidian", () => {
   const path = jest.requireActual<typeof import("node:path")>("node:path");
   class TFile {
@@ -45,7 +44,6 @@ function fileState(content: string) {
   return { kind: "file" as const, content, contentHash: createFileContentHash(content) };
 }
 
-/** Uses native disk reads and writes so escaping updates cannot hide behind a memory mock. */
 function createFileStore(root: string) {
   const Adapter = FileSystemAdapter as unknown as new (rootPath: string) => FileSystemAdapter;
   const File = TFile as unknown as new (filePath: string) => TFile;

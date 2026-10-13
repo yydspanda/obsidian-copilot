@@ -35,15 +35,13 @@ import type {
 import { KnowledgeRuntimeReviewStorage } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import type { KnowledgePreparedIngestHandler } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 
-/** Exact generation-owned dependencies for compile-to-review production hand-off. */
 export interface KnowledgeProductionCompileReviewHandlerInput {
-  /** Preflight-owned private model routes for the current production generation. */
   routeLease: KnowledgeProductionModelRouteLease;
-  /** Read-only exact Vault target resolver captured for the same App generation. */
+
   targetResolver: CompilerTargetResolver;
-  /** Deterministic generated-candidate validator captured for this generation. */
+
   candidateValidator: CompilerCandidateValidator;
-  /** Review repository backed by the same Runtime envelope as the owning Queue. */
+
   reviews: ChangeSetReviewRepository;
 }
 
@@ -68,8 +66,6 @@ interface SafeExecutorFailure {
 
 const handlerStates = new WeakMap<object, HandlerState>();
 
-// Capturing the concrete base method prevents an own-property override or later
-// prototype mutation from replacing the strict durable repository boundary.
 // eslint-disable-next-line @typescript-eslint/unbound-method -- capture the concrete base method before prototype mutation can replace it
 const REVIEW_SAVE_PROPOSAL = ChangeSetReviewRepository.prototype.saveProposal;
 
@@ -167,16 +163,13 @@ const DEPENDENCY_FAILURE: Readonly<SafeExecutorFailure> = Object.freeze({
   rateLimited: false,
 });
 
-/** Stable construction failure retaining no dependency, Vault, source, or credential value. */
 export class KnowledgeProductionCompileReviewHandlerError extends Error {
-  /** Creates one value-free invalid-composition failure. */
   constructor() {
     super("The production Knowledge compile-to-review handler is unavailable");
     this.name = "KnowledgeProductionCompileReviewHandlerError";
   }
 }
 
-/** Reads one required own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new KnowledgeProductionCompileReviewHandlerError();
@@ -188,7 +181,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Requires the exact constructor record shape before any dependency is captured. */
 function snapshotInput(
   value: KnowledgeProductionCompileReviewHandlerInput
 ): Readonly<KnowledgeProductionCompileReviewHandlerInput> {
@@ -219,7 +211,6 @@ function snapshotInput(
   }
 }
 
-/** Rejects prototype-only repository forgeries before the route builder is consumed. */
 function getReviewExecutionOwner(value: unknown): KnowledgeExecutionOwner {
   try {
     if (
@@ -253,7 +244,6 @@ function getReviewExecutionOwner(value: unknown): KnowledgeExecutionOwner {
   }
 }
 
-/** Captures the repository method and exact receiver without retaining a mutable lookup. */
 function captureSaveProposal(
   repository: ChangeSetReviewRepository
 ): ChangeSetReviewRepository["saveProposal"] {
@@ -261,7 +251,6 @@ function captureSaveProposal(
     await Reflect.apply(REVIEW_SAVE_PROPOSAL, repository, [bundleId, input]);
 }
 
-/** Returns hidden state only for an authentic handler instance. */
 function requireHandlerState(value: unknown): HandlerState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionCompileReviewHandlerError();
@@ -271,7 +260,6 @@ function requireHandlerState(value: unknown): HandlerState {
   return state;
 }
 
-/** Captures Queue job and signal references through data descriptors before asynchronous work. */
 function captureContext(context: IngestExecutionContext): CapturedHandlerContext {
   try {
     const job = readDataProperty(context, "job");
@@ -288,12 +276,10 @@ function captureContext(context: IngestExecutionContext): CapturedHandlerContext
   }
 }
 
-/** Creates a fresh safe cancellation without retaining an arbitrary abort reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Creates one Queue-bound failure from fixed non-sensitive policy facts. */
 function createExecutorError(
   failure: Readonly<SafeExecutorFailure>,
   signal: AbortSignal
@@ -301,7 +287,6 @@ function createExecutorError(
   return new IngestExecutorError({ ...failure }, signal);
 }
 
-/** Detects deterministic Review contract/state failures for which model retry cannot help. */
 function isDeterministicReviewFailure(error: unknown): boolean {
   return (
     error instanceof ChangeSetReviewValidationError ||
@@ -315,11 +300,7 @@ function isDeterministicReviewFailure(error: unknown): boolean {
   );
 }
 
-/** Maps a dependency rejection without allowing its payload or message to escape. */
 function projectDependencyFailure(error: unknown, signal: AbortSignal): never {
-  // The Queue-owned signal is the only cancellation authority. DOMException is
-  // constructible in any renderer and crosses realms unreliably, so a thrown
-  // AbortError-shaped value cannot independently cancel this exact attempt.
   if (signal.aborted) throw createAbortError();
   const compilerFailure = createKnowledgeCompilerIngestExecutorError(error, signal);
   if (compilerFailure) throw compilerFailure;
@@ -329,7 +310,6 @@ function projectDependencyFailure(error: unknown, signal: AbortSignal): never {
   throw createExecutorError(DEPENDENCY_FAILURE, signal);
 }
 
-/** Creates the exact durable six-field Review claim for one Queue attempt. */
 function createReviewJobClaim(job: IngestExecutionContext["job"]): ChangeSetReviewJobClaim {
   return Object.freeze({
     jobId: job.id,
@@ -341,7 +321,6 @@ function createReviewJobClaim(job: IngestExecutionContext["job"]): ChangeSetRevi
   });
 }
 
-/** Compares one durable Review claim with the exact Queue processing attempt. */
 function matchesReviewJobClaim(
   record: ChangeSetReviewRecord,
   expected: ChangeSetReviewJobClaim
@@ -357,7 +336,6 @@ function matchesReviewJobClaim(
   );
 }
 
-/** Projects a Compiler rejection without retaining model-controlled diagnostic text. */
 function projectControlledFailure(result: KnowledgeCompileFailure, signal: AbortSignal): never {
   const failure = CONTROLLED_COMPILER_FAILURES[result.stage];
   // Source-writing and destination checks need the same bounded identifiers as
@@ -385,7 +363,6 @@ function projectControlledFailure(result: KnowledgeCompileFailure, signal: Abort
   );
 }
 
-/** Persists one proposal and returns only its exact durable pending Review receipt. */
 async function persistProposal(
   state: HandlerState,
   result: KnowledgeCompileProposal,
@@ -405,11 +382,6 @@ async function persistProposal(
   } catch (error) {
     projectDependencyFailure(error, context.signal);
   }
-
-  // A successful Review write is the hand-off commit boundary. Lifecycle
-  // invalidation may already have aborted the Queue signal while the durable
-  // write was in flight, but this exact receipt must still reach Queue
-  // finalization so startup recovery never sees an orphaned proposal.
 
   if (
     record.outcome !== "pending" ||
@@ -439,15 +411,7 @@ async function persistProposal(
   });
 }
 
-/**
- * Compiles one authentic production preparation and durably hands proposals to Review.
- *
- * The Review repository must carry the exact opaque execution owner already
- * bound to the Queue Runtime and workflow plan. The owner is checked again on
- * every authentic preparation before any target read or model call can begin.
- */
 export class KnowledgeProductionCompileReviewHandler implements KnowledgePreparedIngestHandler {
-  /** Captures all generation-owned ports and consumes the route's single builder slot once. */
   constructor(input: KnowledgeProductionCompileReviewHandlerInput) {
     try {
       const captured = snapshotInput(input);
@@ -474,7 +438,6 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
     Object.freeze(this);
   }
 
-  /** Requires this handler to carry one exact production composition owner. */
   static assertExecutionOwner(
     value: KnowledgeProductionCompileReviewHandler,
     expected: KnowledgeExecutionOwner
@@ -485,13 +448,6 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
     }
   }
 
-  /**
-   * Runs build → compile and returns only a Queue-safe no-change or Review outcome.
-   *
-   * @param preparation - Authentic Runtime/workflow source preparation
-   * @param context - Exact Queue-owned execution context
-   * @returns Stable no-change identity or exact durable pending Review receipt
-   */
   async execute(
     preparation: KnowledgeAuthorizedSourcePreparation,
     context: IngestExecutionContext

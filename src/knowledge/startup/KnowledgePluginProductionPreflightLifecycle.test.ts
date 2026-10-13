@@ -26,7 +26,6 @@ const PROJECT_ID = "project-personal";
 const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 
-/** Creates one strict Bundle with independent source and Wiki boundaries. */
 function createBundle(id = "personal"): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -38,7 +37,6 @@ function createBundle(id = "personal"): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the narrow Project snapshot captured by one lifecycle generation. */
 function createProjectRecord(bundle: unknown = createBundle(), modelKey = MODEL_KEY) {
   return {
     project: {
@@ -50,7 +48,6 @@ function createProjectRecord(bundle: unknown = createBundle(), modelKey = MODEL_
   };
 }
 
-/** Creates the detached complete owner shape produced by the workflow-plan loader. */
 function cloneOwner(owner: ConfiguredProjectKnowledgeBundle): ConfiguredProjectKnowledgeBundle {
   return {
     projectId: owner.projectId,
@@ -58,7 +55,6 @@ function cloneOwner(owner: ConfiguredProjectKnowledgeBundle): ConfiguredProjectK
   };
 }
 
-/** Creates already-hydrated settings without exposing a real credential. */
 function createSettings(modelName = MODEL_NAME): KnowledgeProductionPreflightSettingsInput {
   return {
     temperature: 0,
@@ -80,12 +76,10 @@ function createSettings(modelName = MODEL_NAME): KnowledgeProductionPreflightSet
   };
 }
 
-/** Creates matching parser capabilities and secret-free profile behavior. */
 function createResources(): KnowledgeProductionPipelineResources {
   return createKnowledgeProductionPipelineResources();
 }
 
-/** Creates a native-fetch-shaped capability that fails on accidental invocation. */
 function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   return jest.fn<ReturnType<KnowledgeDeepSeekFetchPort>, Parameters<KnowledgeDeepSeekFetchPort>>(
     async (_url, _init) => {
@@ -94,7 +88,6 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
-/** Creates one observable idempotent preflight candidate. */
 function createCandidate(
   result: KnowledgeProductionPreflightResult = { kind: "ready", bundleCount: 1 }
 ): KnowledgePluginProductionPreflightPort & {
@@ -127,7 +120,6 @@ function createCandidate(
   };
 }
 
-/** Creates default lifecycle dependencies with every capture point observable. */
 function createDependencies(
   overrides: Partial<KnowledgePluginProductionPreflightLifecycleDependencies> = {}
 ): KnowledgePluginProductionPreflightLifecycleDependencies {

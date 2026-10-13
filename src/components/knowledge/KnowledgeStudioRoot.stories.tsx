@@ -10,7 +10,6 @@ const success = {
   message: "The query answer was registered as a managed source.",
 } as const;
 
-/** Fixed, inert ports keep gallery states independent of plugin runtime. */
 function createProps(state: KnowledgeStudioState): Props {
   return {
     controller: {
@@ -169,7 +168,7 @@ export const AddMaterialDuringReadRefresh: StoryObj<Props> = {
     materialPort: {
       prepare: () => materialSession,
       select: () => materialSelection,
-      // Keep Adding visible without timers, Vault writes, or model requests.
+
       add: () => new Promise(noop),
     },
   },

@@ -8,28 +8,23 @@ import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type { JsonValue } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current deterministic prompt contract for read-only grounded answers. */
 export const KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_VERSION = 1 as const;
 
-/** Prompt limits kept below the private DeepSeek transport byte ceiling. */
 export const KNOWLEDGE_GROUNDED_ANSWER_PROMPT_LIMITS = Object.freeze({
   maxOutputLanguageCharacters: 1_024,
   maxPromptUtf8Bytes: 512_000,
   maxSystemUtf8Bytes: 24_576,
 });
 
-/** Profile behavior that must affect the answer prompt identity. */
 export interface KnowledgeGroundedAnswerPromptBehavior {
   readonly outputLanguage: string;
 }
 
-/** One immutable message accepted by a JSON-capable chat provider. */
 export interface KnowledgeGroundedAnswerPromptMessage {
   readonly role: "system" | "user";
   readonly content: string;
 }
 
-/** Deterministic prompt artifact consumed by the private answer transport. */
 export interface KnowledgeGroundedAnswerPromptEnvelope {
   readonly version: typeof KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_VERSION;
   readonly requestDigest: string;
@@ -41,9 +36,7 @@ export interface KnowledgeGroundedAnswerPromptEnvelope {
   readonly promptUtf8Bytes: number;
 }
 
-/** Sanitized failure that retains no question, evidence, or prompt content. */
 export class KnowledgeGroundedAnswerPromptError extends TypeError {
-  /** Creates one content-free prompt failure. */
   constructor() {
     super("The grounded answer prompt could not be encoded");
     this.name = "KnowledgeGroundedAnswerPromptError";
@@ -128,7 +121,6 @@ const SYSTEM_POLICY = [
   "Return exactly one JSON object matching OUTPUT_SCHEMA. Do not return Markdown fences, prose outside JSON, links, paths, locators, hashes, or invented evidence IDs.",
 ].join("\n");
 
-/** Stable identity covering the exact answer system policy, schema, and limits. */
 export const KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_IDENTITY = sha256(
   `knowledge-grounded-answer-prompt-v1\n${canonicalizeJson({
     version: KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_VERSION,
@@ -138,7 +130,6 @@ export const KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_IDENTITY = sha256(
   })}`
 );
 
-/** Captures the only prompt behavior supplied by the admitted Bundle profile. */
 function captureBehavior(value: unknown): Readonly<KnowledgeGroundedAnswerPromptBehavior> {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -166,7 +157,6 @@ function captureBehavior(value: unknown): Readonly<KnowledgeGroundedAnswerPrompt
   }
 }
 
-/** Encodes an authentic request into exactly two deterministic prompt messages. */
 export function encodeKnowledgeGroundedAnswerPrompt(
   request: Readonly<KnowledgeGroundedAnswerRequest>,
   behaviorValue: Readonly<KnowledgeGroundedAnswerPromptBehavior>

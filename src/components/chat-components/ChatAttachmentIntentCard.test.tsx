@@ -5,7 +5,6 @@ import React from "react";
 
 const TestTFile = TFile as unknown as new (sourcePath: string) => TFile;
 
-/** Creates the minimal immutable TFile projection rendered by the choice card. */
 function createFile(path: string): TFile {
   return new TestTFile(path);
 }

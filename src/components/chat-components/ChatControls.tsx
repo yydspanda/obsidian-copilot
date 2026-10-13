@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SettingSwitch } from "@/components/ui/setting-switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PLUS_UTM_MEDIUMS } from "@/constants";
 import { navigateToPlusPage, useIsPaidUser } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { DropdownMenu, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu";
@@ -16,6 +15,7 @@ import {
   ChatHistoryPopover,
 } from "@/components/chat-components/ChatHistoryPopover";
 import { TokenCounter } from "./TokenCounter";
+import { CopyChatLinkButton } from "./CopyChatLinkButton";
 import { ChatSettingsPopover } from "@/components/chat-components/ChatSettingsPopover";
 
 interface ChatControlsProps {
@@ -28,6 +28,7 @@ interface ChatControlsProps {
   onLoadChat: (id: string) => Promise<void>;
   onOpenSourceFile?: (id: string) => Promise<void>;
   latestTokenCount?: number | null;
+  onCopyChatLink?: () => void | Promise<void>;
 }
 
 export function ChatControls({
@@ -40,6 +41,7 @@ export function ChatControls({
   onLoadChat,
   onOpenSourceFile,
   latestTokenCount,
+  onCopyChatLink,
 }: ChatControlsProps) {
   const settings = useSettingsValue();
   const [selectedChain, setSelectedChain] = useChainType();
@@ -54,7 +56,7 @@ export function ChatControls({
           selectedChain={selectedChain}
           isPaidUser={Boolean(isPaidUser)}
           onModeChange={handleModeChange}
-          onPlusUpsell={() => navigateToPlusPage(PLUS_UTM_MEDIUMS.CHAT_MODE_SELECT)}
+          onPlusUpsell={() => navigateToPlusPage("chat_mode_select")}
         />
       </div>
       <div className="tw-flex tw-items-center tw-gap-1">
@@ -69,6 +71,7 @@ export function ChatControls({
           </TooltipTrigger>
           <TooltipContent>New Chat</TooltipContent>
         </Tooltip>
+        <CopyChatLinkButton onCopyLink={onCopyChatLink} />
         <ChatSettingsPopover />
         {!settings.autosaveChat && (
           <Tooltip>

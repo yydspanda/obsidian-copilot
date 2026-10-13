@@ -14,43 +14,36 @@ const EMPTY_SOURCE_ISSUES: readonly Readonly<VaultSourceWatcherRecoverableIssue>
   []
 );
 
-/** Recoverable source state exposed without transferring watcher authority. */
 export type KnowledgeSourceObservationRecoverableIssue =
   Readonly<VaultSourceWatcherRecoverableIssue>;
 
-/** Listener, crawl, and health surface owned by one production watcher generation. */
 export interface KnowledgeSourceObservationStartupWatcherPort {
-  /** Acquires every Vault listener without starting the initial crawl. */
   startListening(): void;
-  /** Schedules one authoritative crawl of the current opaque watch plan. */
+
   scan(): number;
-  /** Waits until every capture scheduled so far has settled. */
+
   waitForIdle(): Promise<void>;
-  /** Returns authoritative content-free blockers for the current plan generation. */
+
   getStartupBlockers(): readonly Readonly<VaultSourceWatcherStartupBlocker>[];
-  /** Subscribes one Bundle to coalesced recoverable source-issue changes. */
+
   subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void;
-  /** Synchronously invalidates listeners and all future capture stages. */
+
   close(): void;
 }
 
-/** Bound-observation recovery surface used on both sides of the full crawl. */
 export interface KnowledgeSourceObservationStartupReconcilerPort {
-  /** Replays byte-reproved bound work and reports work deferred to the crawl. */
   reconcile(signal: AbortSignal): Promise<KnowledgeSourceObservationStartupResult>;
-  /** Synchronously invalidates exact-byte recovery. */
+
   close(): void;
 }
 
-/** Exact generation capabilities consumed by one observation-startup session. */
 export interface KnowledgeSourceObservationStartupCoordinatorDependencies {
   watcher: KnowledgeSourceObservationStartupWatcherPort;
   reconciler: KnowledgeSourceObservationStartupReconcilerPort;
-  /** Re-proves plugin, Runtime, plan, and preflight generation ownership. */
+
   assertCurrent(): void;
 }
 
-/** Stable diagnostic categories that never expose paths, bytes, tokens, or causes. */
 export type KnowledgeSourceObservationStartupDiagnosticCode =
   | "dependency_invalid"
   | "listener_start_failed"
@@ -59,7 +52,6 @@ export type KnowledgeSourceObservationStartupDiagnosticCode =
   | "watcher_state_invalid"
   | `observation_recovery_${KnowledgeSourceObservationStartupFailureCode}`;
 
-/** Sanitized observation result that carries no Queue-release authority. */
 export type KnowledgeSourceObservationStartupCoordinatorResult =
   | Readonly<{
       kind: "observation_converged";
@@ -77,7 +69,6 @@ export type KnowledgeSourceObservationStartupCoordinatorResult =
       code: KnowledgeSourceObservationStartupDiagnosticCode;
     }>;
 
-/** Repeatable post-start proof returned without granting Queue or worker authority. */
 export type KnowledgeSourceObservationStartupReproofResult =
   | Readonly<{
       kind: "observation_reproved";
@@ -105,19 +96,16 @@ interface CapturedCoordinatorDependencies {
   assertCurrent(): void;
 }
 
-/** Creates the platform-standard cancellation used for stale workflow generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Compares stable diagnostic categories without depending on the host locale. */
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
 }
 
-/** Reads a required own data property without evaluating an accessor. */
 function readOwnDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     return undefined;
@@ -128,7 +116,6 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
     : undefined;
 }
 
-/** Captures a callable data method from an object or its finite prototype chain. */
 function captureMethod(value: unknown, key: string): CapturedMethod | undefined {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     return undefined;
@@ -149,12 +136,10 @@ function captureMethod(value: unknown, key: string): CapturedMethod | undefined 
   return undefined;
 }
 
-/** Invokes one captured zero-argument method. */
 function callZero(method: CapturedMethod): unknown {
   return Reflect.apply(method.method, method.receiver, []);
 }
 
-/** Captures every dependency method once so later mutation cannot replace authority. */
 function captureDependencies(
   dependencies: KnowledgeSourceObservationStartupCoordinatorDependencies
 ): CapturedCoordinatorDependencies {
@@ -216,7 +201,6 @@ function captureDependencies(
   }
 }
 
-/** Reads an error name without invoking injected accessors. */
 function readErrorName(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -236,17 +220,14 @@ function readErrorName(error: unknown): string | undefined {
   return undefined;
 }
 
-/** Tests whether an awaited port failed because its exact generation was cancelled. */
 function isAbortError(error: unknown): boolean {
   return readErrorName(error) === "AbortError";
 }
 
-/** Validates a non-negative safe counter returned by an injected core. */
 function isCounter(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** Copies and validates the reconciler's value-free aggregate result. */
 function snapshotReconciliationResult(value: unknown): KnowledgeSourceObservationStartupResult {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSourceObservationStartupError("recovery_work_invalid");
@@ -285,7 +266,6 @@ function snapshotReconciliationResult(value: unknown): KnowledgeSourceObservatio
   });
 }
 
-/** Copies exact enumerable data properties without invoking accessors. */
 function snapshotExactDataProperties(
   value: unknown,
   keys: readonly string[]
@@ -308,12 +288,10 @@ function snapshotExactDataProperties(
   return Object.freeze(snapshot);
 }
 
-/** Tests one opaque Bundle or source identifier at the startup boundary. */
 function isOpaqueIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/** Copies one strict blocker object without retaining observer-owned values. */
 function snapshotStartupBlocker(value: unknown): Readonly<VaultSourceWatcherStartupBlocker> {
   const kind = readOwnDataProperty(value, "kind");
   if (kind === "capture_failed") {
@@ -388,7 +366,6 @@ function snapshotStartupBlocker(value: unknown): Readonly<VaultSourceWatcherStar
   throw new TypeError("Invalid watcher blocker snapshot");
 }
 
-/** Copies a dense bounded blocker array without retaining observer-owned values. */
 function snapshotStartupBlockers(
   value: unknown
 ): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
@@ -436,7 +413,6 @@ function snapshotStartupBlockers(
   );
 }
 
-/** Selects deduplicated fatal blocker kinds from one strict snapshot. */
 function snapshotFatalBlockerKinds(
   blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[]
 ): readonly ("capture_failed" | "source_path_invalid")[] {
@@ -449,7 +425,6 @@ function snapshotFatalBlockerKinds(
   return Object.freeze([...kinds].sort(compareText));
 }
 
-/** Selects recoverable issues from one already detached strict snapshot. */
 function snapshotRecoverableSourceIssues(
   blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[]
 ): readonly KnowledgeSourceObservationRecoverableIssue[] {
@@ -461,20 +436,12 @@ function snapshotRecoverableSourceIssues(
   );
 }
 
-/** Maps a branded reconciler failure into a stable coordinator diagnostic. */
 function toRecoveryDiagnostic(
   error: KnowledgeSourceObservationStartupError
 ): KnowledgeSourceObservationStartupDiagnosticCode {
   return `observation_recovery_${error.code}`;
 }
 
-/**
- * Owns listener-first observation convergence without receiving Queue control.
- *
- * The first reconciliation may encounter state that the authoritative crawl can
- * supersede, so only the post-crawl reconciliation and watcher health snapshot
- * decide readiness. This class has no Release, worker, model, Review, or Wiki port.
- */
 export class KnowledgeSourceObservationStartupCoordinator {
   private readonly dependencies: CapturedCoordinatorDependencies;
   private generation = 0;
@@ -490,17 +457,10 @@ export class KnowledgeSourceObservationStartupCoordinator {
   private sourceRecoveryClassificationOpen = false;
   private sourceIssues: readonly KnowledgeSourceObservationRecoverableIssue[] = EMPTY_SOURCE_ISSUES;
 
-  /** Creates one generation-owned observation session without Queue authority. */
   constructor(dependencies: KnowledgeSourceObservationStartupCoordinatorDependencies) {
     this.dependencies = captureDependencies(dependencies);
   }
 
-  /**
-   * Runs listener → recovery → crawl → idle → final recovery in strict order.
-   *
-   * @param signal - Caller-owned plugin startup generation cancellation
-   * @returns Observation readiness only; it never releases or runs a Queue
-   */
   async start(signal: AbortSignal): Promise<KnowledgeSourceObservationStartupCoordinatorResult> {
     if (this.closed || this.started || signal.aborted) {
       throw createAbortError();
@@ -516,6 +476,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
         this.close();
       } catch {
         // Authority is already revoked; cleanup failures cannot revive this session.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     };
     this.callerSignal = signal;
@@ -546,6 +507,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
           error.code === "pipeline_fingerprint_changed"
         ) {
           // A successful crawl can supersede only this explicitly stale pipeline identity.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         } else if (isKnowledgeSourceObservationStartupError(error)) {
           return this.finishDiagnostic(toRecoveryDiagnostic(error));
         } else {
@@ -624,6 +586,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
         this.close();
       } catch {
         // Authority is already revoked; cleanup failures cannot expose injected details.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       throw createAbortError();
     } finally {
@@ -633,17 +596,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
-  /**
-   * Re-proves current captures, durable observations, and watcher blockers.
-   *
-   * Reproof is available only after the exact startup signal produced the first
-   * converged result. Calls are one-at-a-time; a mismatched, aborted, concurrent,
-   * or stale call permanently invalidates the session rather than transferring
-   * its authority to another lifecycle.
-   *
-   * @param signal - Exact caller signal retained by the successful startup run
-   * @returns A fresh health result carrying no Queue-release or worker authority
-   */
   async reprove(signal: AbortSignal): Promise<KnowledgeSourceObservationStartupReproofResult> {
     if (
       this.closed ||
@@ -721,13 +673,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
-  /**
-   * Synchronously proves that the converged session is current and fatal-blocker-free.
-   *
-   * This method deliberately returns no transferable token. A failed proof closes
-   * the whole session, so a caller cannot retain an earlier successful observation
-   * after a fatal capture/path failure, lifecycle replacement, or concurrent reproof.
-   */
   assertHealthy(): void {
     if (
       this.closed ||
@@ -762,28 +707,11 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
-  /**
-   * Returns a detached read-only snapshot of currently recoverable source issues.
-   *
-   * The synchronous health proof refreshes the snapshot first and closes the
-   * session if watcher state is malformed, fatal, or no longer current.
-   *
-   * @returns Strict source issues for a consumer-owned presentation model
-   */
   getSourceIssues(): readonly KnowledgeSourceObservationRecoverableIssue[] {
     this.assertHealthy();
     return this.sourceIssues;
   }
 
-  /**
-   * Returns the recoverable issue snapshot retained only for immediate startup classification.
-   *
-   * This narrow read is available after the exact singleton observation-pending
-   * result and before the production composer closes the coordinator. It does
-   * not make the blocked session healthy or eligible for reproof/release.
-   *
-   * @returns Frozen path-free issues, or undefined for every other blocked result
-   */
   getSourceRecoveryClassificationIssues():
     | readonly KnowledgeSourceObservationRecoverableIssue[]
     | undefined {
@@ -797,13 +725,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     return this.sourceIssues;
   }
 
-  /**
-   * Subscribes one Bundle to value-free recoverable source-issue changes.
-   *
-   * @param bundleId - Exact Bundle identity owned by this watcher generation
-   * @param listener - Best-effort reload callback
-   * @returns Idempotent cleanup for this generation-owned subscription
-   */
   subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void {
     this.assertHealthy();
     if (!isOpaqueIdentifier(bundleId) || typeof listener !== "function" || !this.callerSignal) {
@@ -825,6 +746,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
         listener();
       } catch {
         // Presentation listeners cannot affect observation authority.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     };
     try {
@@ -840,6 +762,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
           unsubscribe();
         } catch {
           // A failed subscription never became presentation authority.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
       throw createAbortError();
@@ -851,11 +774,11 @@ export class KnowledgeSourceObservationStartupCoordinator {
         (unsubscribe as () => void)();
       } catch {
         // The value-free subscription is already detached locally.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     };
   }
 
-  /** Synchronously invalidates listener, crawl, and recovery continuations exactly once. */
   close(): void {
     if (this.closed) {
       return;
@@ -878,7 +801,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
-  /** Waits for current watcher work and sanitizes only non-cancellation failures. */
   private async waitForWatcher(
     generation: number,
     signal: AbortSignal
@@ -898,7 +820,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     return undefined;
   }
 
-  /** Revokes an unusable session before publishing one sanitized diagnostic. */
   private finishDiagnostic(
     code: KnowledgeSourceObservationStartupDiagnosticCode
   ): Extract<KnowledgeSourceObservationStartupCoordinatorResult, { kind: "diagnostic" }> {
@@ -906,11 +827,11 @@ export class KnowledgeSourceObservationStartupCoordinator {
       this.close();
     } catch {
       // Revocation is already monotonic; cleanup failures cannot change the diagnostic.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     return Object.freeze({ kind: "diagnostic", code });
   }
 
-  /** Retains only exact source-recovery evidence until its composer snapshots and closes it. */
   private finishBlocked(
     blockerKinds: readonly (
       | VaultSourceWatcherStartupBlocker["kind"]
@@ -933,16 +854,15 @@ export class KnowledgeSourceObservationStartupCoordinator {
     return result;
   }
 
-  /** Closes authority without allowing cleanup failure to escape a safe result. */
   private closeSafely(): void {
     try {
       this.close();
     } catch {
       // Local generation and health are already invalid before dependency cleanup.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 
-  /** Checks only coordinator-owned lifecycle state without invoking an external port. */
   private assertLocalCurrent(generation: number, signal: AbortSignal): void {
     if (
       this.closed ||
@@ -955,7 +875,6 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
-  /** Re-proves local, caller, and plugin lifecycle ownership around every boundary. */
   private assertCurrent(generation: number, signal: AbortSignal): void {
     this.assertLocalCurrent(generation, signal);
     this.dependencies.assertCurrent();

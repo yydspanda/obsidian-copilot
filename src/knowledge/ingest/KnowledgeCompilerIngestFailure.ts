@@ -80,16 +80,6 @@ const QUEUE_FAILURES: Readonly<
   }),
 });
 
-/**
- * Translates one sanitized Compiler infrastructure failure into Queue-owned facts.
- *
- * Provider errors never choose a delay or retry count. They only supply the
- * stable booleans consumed by the Queue's existing RetryPolicy.
- *
- * @param error - Opaque Compiler rejection
- * @param signal - Exact Queue-owned signal for the current execution attempt
- * @returns Fresh Queue error, or undefined for cancellation/unrelated failures
- */
 export function createKnowledgeCompilerIngestExecutorError(
   error: unknown,
   signal: AbortSignal

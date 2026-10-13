@@ -12,7 +12,6 @@ interface KnowledgeExecutionOwnerState {
 
 const knowledgeExecutionOwnerStates = new WeakMap<object, KnowledgeExecutionOwnerState>();
 
-/** Returns hidden role bindings only for an authentic execution owner. */
 function requireKnowledgeExecutionOwnerState(value: unknown): KnowledgeExecutionOwnerState {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("The knowledge execution owner is invalid");
@@ -22,7 +21,6 @@ function requireKnowledgeExecutionOwnerState(value: unknown): KnowledgeExecution
   return state;
 }
 
-/** Exclusively binds one owner role while permitting exact-idempotent reproof. */
 function bindOwnerRole(
   value: KnowledgeExecutionOwner,
   role: keyof KnowledgeExecutionOwnerState,
@@ -39,7 +37,6 @@ function bindOwnerRole(
   state[role] = identity;
 }
 
-/** Exclusively binds one exact App/Vault/adapter lifecycle as one atomic role tuple. */
 function bindVaultLifecycleRoles(
   value: KnowledgeExecutionOwner,
   app: object,
@@ -65,15 +62,7 @@ function bindVaultLifecycleRoles(
   state.adapter = adapter;
 }
 
-/**
- * Opaque lifecycle identity shared by one Runtime Queue and one workflow generation.
- *
- * Equal durable values are not enough to cross this process-local boundary. The
- * production composer must deliberately pass the same owner to the Runtime
- * Queue storage and workflow-plan loader for one App/Vault generation.
- */
 export class KnowledgeExecutionOwner {
-  /** Rejects direct construction without the module-private factory token. */
   constructor(token: symbol) {
     if (token !== KNOWLEDGE_EXECUTION_OWNER_TOKEN) {
       throw new TypeError("The knowledge execution owner is invalid");
@@ -82,27 +71,22 @@ export class KnowledgeExecutionOwner {
     Object.freeze(this);
   }
 
-  /** Requires an authentic process-local execution owner. */
   static assert(value: unknown): asserts value is KnowledgeExecutionOwner {
     requireKnowledgeExecutionOwnerState(value);
   }
 
-  /** Exclusively binds this lifecycle to one exact durable Runtime instance. */
   static bindRuntime(value: KnowledgeExecutionOwner, runtime: object): void {
     bindOwnerRole(value, "runtime", runtime);
   }
 
-  /** Exclusively binds this lifecycle to one exact workflow-loader generation. */
   static bindWorkflow(value: KnowledgeExecutionOwner, workflow: object): void {
     bindOwnerRole(value, "workflow", workflow);
   }
 
-  /** Exclusively binds this lifecycle to one exact production workflow lease. */
   static bindProductionLease(value: KnowledgeExecutionOwner, lease: object): void {
     bindOwnerRole(value, "productionLease", lease);
   }
 
-  /** Reports whether this lifecycle owns one exact production workflow lease. */
   static matchesProductionLease(value: KnowledgeExecutionOwner, lease: object): boolean {
     try {
       return requireKnowledgeExecutionOwnerState(value).productionLease === lease;
@@ -111,12 +95,10 @@ export class KnowledgeExecutionOwner {
     }
   }
 
-  /** Exclusively binds this lifecycle to one exact production composition claim. */
   static bindCompositionClaim(value: KnowledgeExecutionOwner, claim: object): void {
     bindOwnerRole(value, "compositionClaim", claim);
   }
 
-  /** Reports whether this lifecycle owns one exact production composition claim. */
   static matchesCompositionClaim(value: KnowledgeExecutionOwner, claim: object): boolean {
     try {
       return requireKnowledgeExecutionOwnerState(value).compositionClaim === claim;
@@ -125,7 +107,6 @@ export class KnowledgeExecutionOwner {
     }
   }
 
-  /** Exclusively binds this lifecycle to one exact App, Vault, and adapter tuple. */
   static bindVaultLifecycle(
     value: KnowledgeExecutionOwner,
     app: object,
@@ -135,7 +116,6 @@ export class KnowledgeExecutionOwner {
     bindVaultLifecycleRoles(value, app, vault, adapter);
   }
 
-  /** Reports whether this owner is already bound to the exact Vault lifecycle tuple. */
   static matchesVaultLifecycle(
     value: KnowledgeExecutionOwner,
     app: object,
@@ -154,7 +134,6 @@ export class KnowledgeExecutionOwner {
 Object.freeze(KnowledgeExecutionOwner.prototype);
 Object.freeze(KnowledgeExecutionOwner);
 
-/** Creates one unique process-local App/Vault/workflow lifecycle identity. */
 export function createKnowledgeExecutionOwner(): KnowledgeExecutionOwner {
   return new KnowledgeExecutionOwner(KNOWLEDGE_EXECUTION_OWNER_TOKEN);
 }

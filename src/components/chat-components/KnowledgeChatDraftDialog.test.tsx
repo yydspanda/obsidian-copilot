@@ -13,7 +13,6 @@ jest.mock("obsidian", () => ({ Notice: jest.fn() }));
 const { Notice: noticeMock } = jest.requireMock<{ Notice: jest.Mock }>("obsidian");
 const DRAFT_SESSION = Object.freeze({ bundleId: "personal", sourceRoot: "Sources" });
 
-/** Creates one externally controlled promise for in-flight UI assertions. */
 function createDeferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -25,7 +24,6 @@ function createDeferred<T>(): {
   return { promise, resolve };
 }
 
-/** Creates a complete capture port with an overridable draft command. */
 function createPort(
   createKnowledgeDraft: KnowledgeChatCapturePort["createKnowledgeDraft"] = async () => ({
     status: "registered",
@@ -40,7 +38,6 @@ function createPort(
   };
 }
 
-/** Renders the controlled dialog in the current element-owned document. */
 function renderDialog(port: KnowledgeChatCapturePort = createPort()) {
   const onOpenChange = jest.fn();
   const rendered = render(

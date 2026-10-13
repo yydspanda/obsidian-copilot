@@ -9,7 +9,6 @@ type ResolvedChatBackendEntry = Extract<EnabledBackendEntry, { state: "ok" }>;
 const EMPTY_MATCHES: readonly ResolvedChatBackendEntry[] = Object.freeze([]);
 const DEEPSEEK_LEGACY_SUFFIX = `|${ChatModelProviders.DEEPSEEK}`;
 
-/** Complete persisted inventory used to distinguish a missing row from a disabled owner. */
 export interface ChatModelSelectionInventory {
   configuredModels: readonly ConfiguredModel[];
   providers: readonly Provider[];

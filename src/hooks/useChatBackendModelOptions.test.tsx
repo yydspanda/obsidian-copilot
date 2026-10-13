@@ -11,7 +11,7 @@ function provider(providerId: string, overrides: Partial<Provider> = {}): Provid
     displayName: providerId,
     origin: { kind: "byok", catalogProviderId: "openai" },
     addedAt: 0,
-    apiKeyKeychainId: null,
+    apiKeyKeychainId: `${providerId}-key`,
     ...overrides,
   };
 }
@@ -58,6 +58,35 @@ function deepSeekProviders(): { official: Provider; proxy: Provider } {
 
 describe("useChatBackendModelOptions", () => {
   describe("useChatBackendModelOptions()", () => {
+    it("lists enabled models whose provider can authenticate and resolves a legacy selection (https://github.com/Brevilabs/obsidian-copilot-private/issues/616)", () => {
+      const openai = provider("openai", { apiKeyKeychainId: null, requiresApiKey: false });
+      const anthropic = provider("anthropic", {
+        providerType: "anthropic",
+        apiKeyKeychainId: null,
+        requiresApiKey: true,
+        origin: { kind: "byok", catalogProviderId: "anthropic" },
+      });
+      const available = configuredModel("available", openai.providerId, "gpt-4o", "GPT-4o");
+      const missingKey = configuredModel("missing-key", anthropic.providerId, "claude", "Claude");
+      setChatInventory([openai, anthropic], [available, missingKey], ["available", "missing-key"]);
+
+      const { result } = renderHook(() => useChatBackendModelOptions(false));
+
+      expect(result.current.options).toEqual([{ label: "GPT-4o", value: "available" }]);
+      expect(result.current.resolveSelectionId("gpt-4o|openai")).toBe("available");
+    });
+
+    it("does not substitute the first model for a removed command selection (https://github.com/Brevilabs/obsidian-copilot-private/issues/616)", () => {
+      const openai = provider("openai");
+      const available = configuredModel("available", openai.providerId, "gpt-4o");
+      setChatInventory([openai], [available], [available.configuredModelId]);
+
+      const { result } = renderHook(() => useChatBackendModelOptions(false));
+
+      expect(result.current.resolveSelectionId("removed")).toBeUndefined();
+      expect(result.current.resolveSelectionId(undefined)).toBeUndefined();
+    });
+
     it("falls back from an ordinary provider's retained stale model to the first enabled option (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
       const anthropic = provider("anthropic", {
         providerType: "anthropic",

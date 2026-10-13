@@ -333,42 +333,31 @@ import {
 } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import { sha256 } from "@/utils/hash";
 
-/** Current format of the Vault-private atomic knowledge runtime store. */
 export const KNOWLEDGE_RUNTIME_STORE_VERSION = 9 as const;
 
 export { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY };
 
-/** Previous runtime envelope without the dedicated forward-revision namespace. */
 const RUNTIME_V5_STORE_VERSION = 5 as const;
 
-/** Previous Runtime envelope whose forward Review slots use pending-only v1. */
 const RUNTIME_V6_STORE_VERSION = 6 as const;
 
-/** Previous Runtime envelope without the dedicated forward-Apply journal and ledger. */
 const RUNTIME_V7_STORE_VERSION = 7 as const;
 
-/** Previous Runtime envelope with one active overlay head but no terminal lineage. */
 const RUNTIME_V8_STORE_VERSION = 8 as const;
 
-/** Previous runtime envelope without the source-retirement downgrade fence. */
 const RUNTIME_V4_STORE_VERSION = 4 as const;
 
-/** Previous runtime envelope with the observation journal but no completion proof fence. */
 const PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
 
-/** Runtime envelope with an allocator floor but no observation journal. */
 const RUNTIME_V2_STORE_VERSION = 2 as const;
 
-/** Previous outer-envelope format eligible for one constrained startup migration. */
 const LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION = 1 as const;
 
-/** One per-Bundle snapshot stored inside the atomic runtime envelope. */
 interface KnowledgeRuntimeBundleSlot {
   bundleId: string;
   value: object;
 }
 
-/** One allocated source observation retained until explicit archival. */
 export type KnowledgeRuntimeSourceObservationRecord =
   | {
       observationToken: string;
@@ -424,24 +413,21 @@ export type KnowledgeRuntimeSourceObservationRecord =
       retirementId: string;
     };
 
-/** Latest allocator floor and durable observation journal for one source. */
 export interface KnowledgeRuntimeInputRevisionRecord {
   sourceId: string;
   inputRevision: number;
-  /** Revisions at or below this migration fence have no invented observation token. */
+
   managedAfterRevision: number;
-  /** Exact Queue watermark trusted only because it existed during v2 migration. */
+
   legacyCheckpoint?: IngestSourceHighWatermark;
   observations: KnowledgeRuntimeSourceObservationRecord[];
 }
 
-/** Per-Bundle input-revision namespace retained across application restarts. */
 interface KnowledgeRuntimeInputRevisionBundle {
   bundleId: string;
   sources: KnowledgeRuntimeInputRevisionRecord[];
 }
 
-/** Exact successful-commit identity reserved for the manifest ledger adapter. */
 export interface KnowledgeApplyCommitLedgerRecord {
   transactionId: string;
   commitRevision: number;
@@ -462,7 +448,6 @@ export interface KnowledgeApplyCommitLedgerRecord {
   recordedAt: number;
 }
 
-/** Complete strict state committed through one atomic plaintext file. */
 export interface KnowledgeRuntimeStoreSnapshot {
   version: typeof KNOWLEDGE_RUNTIME_STORE_VERSION;
   runtimeId: string;
@@ -481,7 +466,6 @@ export interface KnowledgeRuntimeStoreSnapshot {
   forwardRevisionRecoveryTerminals: KnowledgeForwardRevisionRecoveryTerminalRecordV1[];
 }
 
-/** Runtime-v8 envelope accepted only by the lifecycle-lineage migration. */
 interface KnowledgeRuntimeStoreSnapshotV8 {
   version: typeof RUNTIME_V8_STORE_VERSION;
   runtimeId: string;
@@ -497,7 +481,6 @@ interface KnowledgeRuntimeStoreSnapshotV8 {
   forwardRevisionApplyCommits: object[];
 }
 
-/** Runtime-v7 envelope accepted only by the dedicated forward-Apply migration. */
 interface KnowledgeRuntimeStoreSnapshotV7 {
   version: typeof RUNTIME_V7_STORE_VERSION;
   runtimeId: string;
@@ -511,7 +494,6 @@ interface KnowledgeRuntimeStoreSnapshotV7 {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Runtime-v6 envelope accepted only by the forward Review v2 migration. */
 interface KnowledgeRuntimeStoreSnapshotV6 {
   version: typeof RUNTIME_V6_STORE_VERSION;
   runtimeId: string;
@@ -525,7 +507,6 @@ interface KnowledgeRuntimeStoreSnapshotV6 {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Runtime-v5 envelope accepted only by the forward-review namespace migration. */
 interface KnowledgeRuntimeStoreSnapshotV5 {
   version: typeof RUNTIME_V5_STORE_VERSION;
   runtimeId: string;
@@ -538,7 +519,6 @@ interface KnowledgeRuntimeStoreSnapshotV5 {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Runtime-v4 envelope accepted only by the source-retirement fence migration. */
 interface KnowledgeRuntimeStoreSnapshotV4 {
   version: typeof RUNTIME_V4_STORE_VERSION;
   runtimeId: string;
@@ -551,26 +531,23 @@ interface KnowledgeRuntimeStoreSnapshotV4 {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Detached Queue and Review state read from one atomic Runtime envelope. */
 export interface KnowledgeRuntimeStudioBundleSnapshot {
   bundleId: string;
   runtimeRevision: number;
   queue: IngestQueueSnapshot;
   review: ChangeSetReviewSnapshot;
-  /** Content-free outcomes proven for exact jobs; absent on older read ports. */
+
   completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
-  /** Eligible display hints only; the mutation reproves the exact current state. */
+
   reanalyzableJobIds?: readonly string[];
 }
 
-/** Explicit replay intent tied to the completed Activity row the user inspected. */
 export interface KnowledgeCompletedSourceReanalysisCommand {
   bundleId: string;
   jobId: string;
   expectedQueueRevision: number;
 }
 
-/** Display-only completion evidence; never grants permission to write or reuse citations. */
 export type KnowledgeRuntimeJobCompletion =
   | Readonly<{ kind: "applied" }>
   | Readonly<{
@@ -581,7 +558,6 @@ export type KnowledgeRuntimeJobCompletion =
       >;
     }>;
 
-/** Immutable accepted-source evidence attached to one applied Wiki page. */
 export interface KnowledgeRuntimeAppliedSourceProvenance {
   readonly sourceId: string;
   readonly sourcePath: string;
@@ -595,25 +571,18 @@ export interface KnowledgeRuntimeAppliedSourceProvenance {
   readonly citations: readonly Readonly<ClaimCitation>[];
 }
 
-/** Immutable current Manifest page with all exact accepted source provenance. */
 export interface KnowledgeRuntimeAppliedPageProvenance {
   readonly path: string;
   readonly windowsPathKey: string;
   readonly ownership: GeneratedPageOwnership;
   readonly sourceAppliedContentHash: string;
   readonly effectiveContentHash: string;
-  /** Compatibility alias for the current effective head. */
+
   readonly contentHash: string;
   readonly origin: Readonly<KnowledgeEffectiveManifestPage["origin"]>;
   readonly sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[];
 }
 
-/**
- * Detached, read-only applied Wiki provenance from one atomic Runtime envelope.
- *
- * This projection is evidence for retrieval only and is never a Queue, Review,
- * transaction, Manifest, or file-mutation authority.
- */
 export interface KnowledgeRuntimeAppliedProvenanceSnapshot {
   readonly bundleId: string;
   readonly runtimeRevision: number;
@@ -621,7 +590,6 @@ export interface KnowledgeRuntimeAppliedProvenanceSnapshot {
   readonly pages: readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[];
 }
 
-/** Stable reason one source cannot enter the atomic retirement transition yet. */
 export type KnowledgeSourceRetirementBlocker =
   | "active_transaction"
   | "forward_revision_overlay_active"
@@ -633,7 +601,6 @@ export type KnowledgeSourceRetirementBlocker =
   | "source_observation_pending"
   | "revision_overflow";
 
-/** One active source projected from a single atomic Runtime envelope read. */
 export interface KnowledgeSourceRetirementCandidate {
   readonly sourceId: string;
   readonly sourcePath: string;
@@ -644,7 +611,6 @@ export interface KnowledgeSourceRetirementCandidate {
   readonly blockers: readonly KnowledgeSourceRetirementBlocker[];
 }
 
-/** Batch source-retirement projection used by one Studio reload. */
 export interface KnowledgeSourceRetirementCandidateSnapshot {
   readonly bundleId: string;
   readonly runtimeRevision: number;
@@ -652,7 +618,6 @@ export interface KnowledgeSourceRetirementCandidateSnapshot {
   readonly candidates: readonly KnowledgeSourceRetirementCandidate[];
 }
 
-/** Explicit confirmations required before a source can leave the active Manifest. */
 export interface KnowledgeSourceRetirementCommand {
   version: 1;
   bundleId: string;
@@ -666,7 +631,6 @@ export interface KnowledgeSourceRetirementCommand {
   };
 }
 
-/** Durable result of one atomic source-retirement transition. */
 export interface KnowledgeSourceRetirementReceipt {
   outcome: "retired" | "already_retired";
   bundleId: string;
@@ -680,12 +644,10 @@ export interface KnowledgeSourceRetirementReceipt {
   generatedPages: readonly Readonly<GeneratedPageReference>[];
 }
 
-/** Exact durable receipt returned by the atomic Runtime Reject boundary. */
 export interface KnowledgeRuntimeReviewRejectReceipt extends KnowledgeReviewRejectTransitionReceipt {
   runtimeRevision: number;
 }
 
-/** Descriptor-safe evidence supplied after the outer Runtime/Vault observation sandwich. */
 export interface KnowledgeForwardRevisionProposalPublicationEvidence {
   readonly intent: unknown;
   readonly intentDigest: string;
@@ -695,7 +657,6 @@ export interface KnowledgeForwardRevisionProposalPublicationEvidence {
   readonly vaultObservedBeforeHash: string;
 }
 
-/** Exact accepted forward-Apply identity used for a fresh Runtime authority read. */
 export interface KnowledgeForwardRevisionApplyAuthorityQuery {
   readonly runtimeId: string;
   readonly bundleId: string;
@@ -707,7 +668,6 @@ export interface KnowledgeForwardRevisionApplyAuthorityQuery {
   readonly applyClaimDigest: string;
 }
 
-/** Detached non-mutating proof of one accepted decision's current Apply prestate. */
 export interface KnowledgeForwardRevisionApplyAuthority {
   readonly query: Readonly<KnowledgeForwardRevisionApplyAuthorityQuery>;
   readonly runtimeId: string;
@@ -751,7 +711,6 @@ const FORWARD_REVISION_APPLY_AUTHORITY_KEYS = [
   "manifestDigest",
 ] as const;
 
-/** Strictly snapshots one scalar-only forward Apply authority query. */
 export function snapshotKnowledgeForwardRevisionApplyAuthorityQuery(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyAuthorityQuery> {
@@ -805,12 +764,6 @@ export function snapshotKnowledgeForwardRevisionApplyAuthorityQuery(
   }
 }
 
-/**
- * Strictly detaches one complete Runtime forward-Apply authority projection.
- *
- * The optional expected query closes the coordinator's before/after sandwich:
- * a structurally valid authority for any different accepted decision is rejected.
- */
 export function snapshotKnowledgeForwardRevisionApplyAuthority(
   value: unknown,
   expectedQueryValue?: unknown
@@ -892,7 +845,6 @@ export function snapshotKnowledgeForwardRevisionApplyAuthority(
   }
 }
 
-/** Computes the domain-separated digest of one strict detached Apply authority. */
 export function createKnowledgeForwardRevisionApplyAuthorityDigest(value: unknown): string {
   const authority = snapshotKnowledgeForwardRevisionApplyAuthority(value);
   return sha256(
@@ -902,7 +854,6 @@ export function createKnowledgeForwardRevisionApplyAuthorityDigest(value: unknow
   );
 }
 
-/** Stable closed reasons an atomic forward-proposal publication cannot proceed. */
 export type KnowledgeForwardRevisionPublicationConflictReason =
   | "request_invalid"
   | "intent_conflict"
@@ -915,9 +866,7 @@ export type KnowledgeForwardRevisionPublicationConflictReason =
   | "resource_limit"
   | "revision_overflow";
 
-/** Reports a fail-closed dedicated forward-proposal publication conflict. */
 export class KnowledgeForwardRevisionPublicationConflictError extends Error {
-  /** Creates a sanitized conflict without retaining rejected evidence or Vault bytes. */
   constructor(
     public readonly bundleId: string,
     public readonly reason: KnowledgeForwardRevisionPublicationConflictReason
@@ -928,13 +877,11 @@ export class KnowledgeForwardRevisionPublicationConflictError extends Error {
   }
 }
 
-/** Scalar allocator state used by runtime versions 1 and 2. */
 interface PreviousKnowledgeRuntimeInputRevisionRecord {
   sourceId: string;
   inputRevision: number;
 }
 
-/** Per-Bundle scalar allocator namespace used by runtime versions 1 and 2. */
 interface PreviousKnowledgeRuntimeInputRevisionBundle {
   bundleId: string;
   sources: PreviousKnowledgeRuntimeInputRevisionRecord[];
@@ -948,7 +895,6 @@ interface RuntimeMutation<T> {
   value: T;
 }
 
-/** Structurally strict legacy envelope read only by the startup migration. */
 interface LegacyKnowledgeRuntimeStoreSnapshot {
   version: typeof LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION;
   revision: number;
@@ -960,7 +906,6 @@ interface LegacyKnowledgeRuntimeStoreSnapshot {
   applyCommits: object[];
 }
 
-/** Strict runtime-v2 envelope read only by the v2-to-v3 migration. */
 interface KnowledgeRuntimeStoreSnapshotV2 {
   version: typeof RUNTIME_V2_STORE_VERSION;
   revision: number;
@@ -972,7 +917,6 @@ interface KnowledgeRuntimeStoreSnapshotV2 {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Strict runtime-v3 envelope read only by the v3-to-v4 migration. */
 interface PreviousKnowledgeRuntimeStoreSnapshot {
   version: typeof PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION;
   runtimeId: string;
@@ -985,7 +929,6 @@ interface PreviousKnowledgeRuntimeStoreSnapshot {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
-/** Fields shared by runtime versions whose observation journal is authoritative. */
 type KnowledgeRuntimeSemanticSnapshot =
   | KnowledgeRuntimeStoreSnapshot
   | KnowledgeRuntimeStoreSnapshotV7
@@ -1342,23 +1285,14 @@ const completedSourceReanalysisCommandSchema: z.ZodType<KnowledgeCompletedSource
     })
     .strict();
 
-/** Reports an unreadable, malformed, or semantically torn runtime envelope. */
 export class KnowledgeRuntimeStoreCorruptError extends Error {
-  /** Creates a sanitized corruption error without retaining persisted content. */
   constructor() {
     super("The durable knowledge runtime store does not satisfy its strict contract");
     this.name = "KnowledgeRuntimeStoreCorruptError";
   }
 }
 
-/** Reports a valid envelope containing one invalid subsystem snapshot. */
 export class KnowledgeRuntimeSlotValidationError extends Error {
-  /**
-   * Creates a sanitized invalid-slot error.
-   *
-   * @param subsystem - Runtime subsystem whose persisted snapshot is invalid
-   * @param bundleId - Bundle key used to locate the snapshot
-   */
   constructor(
     public readonly subsystem: "queue" | "review" | "manifest" | "transaction",
     public readonly bundleId?: string
@@ -1372,16 +1306,13 @@ export class KnowledgeRuntimeSlotValidationError extends Error {
   }
 }
 
-/** Reports an atomic-file implementation that returned an uncommitted payload. */
 export class KnowledgeRuntimeAtomicWriteError extends Error {
-  /** Creates a stable atomic write verification failure. */
   constructor() {
     super("The knowledge runtime atomic file did not confirm the requested replacement");
     this.name = "KnowledgeRuntimeAtomicWriteError";
   }
 }
 
-/** Stable reasons a legacy runtime cannot be upgraded without inventing recovery evidence. */
 export type KnowledgeRuntimeMigrationUnsafeReason =
   | "active_transaction_present"
   | "apply_commit_ledger_present"
@@ -1397,14 +1328,7 @@ export type KnowledgeRuntimeMigrationUnsafeReason =
   | "forward_revision_source_base_unavailable"
   | "revision_overflow";
 
-/** Reports a valid v1 envelope whose durable work makes automatic migration unsafe. */
 export class KnowledgeRuntimeMigrationUnsafeError extends Error {
-  /**
-   * Creates a sanitized fail-closed migration error.
-   *
-   * @param reason - Stable unsafe-state category
-   * @param bundleId - Optional Bundle containing the unsafe subsystem state
-   */
   constructor(
     public readonly reason: KnowledgeRuntimeMigrationUnsafeReason,
     public readonly bundleId?: string
@@ -1414,7 +1338,6 @@ export class KnowledgeRuntimeMigrationUnsafeError extends Error {
   }
 }
 
-/** Stable failures while proving a committed journal and receipt at the atomic boundary. */
 export type KnowledgeApplyCommitProofErrorReason =
   | "journal_invalid"
   | "journal_not_committed"
@@ -1422,14 +1345,7 @@ export type KnowledgeApplyCommitProofErrorReason =
   | "active_journal_missing"
   | "active_journal_mismatch";
 
-/** Reports missing or conflicting commit proof without retaining persisted payloads. */
 export class KnowledgeApplyCommitProofError extends Error {
-  /**
-   * Creates an exact proof failure.
-   *
-   * @param transactionId - Transaction whose commit proof was rejected
-   * @param reason - Stable proof failure category
-   */
   constructor(
     public readonly transactionId: string,
     public readonly reason: KnowledgeApplyCommitProofErrorReason
@@ -1439,7 +1355,6 @@ export class KnowledgeApplyCommitProofError extends Error {
   }
 }
 
-/** Stable failures while proving Queue, Review, and source-observation authority. */
 export type KnowledgeApplyCommitAuthorityErrorReason =
   | "request_invalid"
   | "queue_missing"
@@ -1455,14 +1370,7 @@ export type KnowledgeApplyCommitAuthorityErrorReason =
   | "input_revision_behind"
   | "forward_lineage_time_mismatch";
 
-/** Reports missing or conflicting durable authority for one source apply. */
 export class KnowledgeApplyCommitAuthorityError extends TransactionStorageAuthorityError {
-  /**
-   * Creates a sanitized exact-authority failure.
-   *
-   * @param transactionId - Transaction whose durable authority was rejected
-   * @param reason - Stable Queue, Review, or source-observation mismatch
-   */
   constructor(
     public readonly transactionId: string,
     public readonly reason: KnowledgeApplyCommitAuthorityErrorReason
@@ -1472,16 +1380,13 @@ export class KnowledgeApplyCommitAuthorityError extends TransactionStorageAuthor
   }
 }
 
-/** Reports reuse of one durable transaction id for a different commit identity. */
 export class KnowledgeApplyCommitLedgerConflictError extends TransactionStorageAuthorityError {
-  /** Creates a fail-closed exact-ledger identity conflict. */
   constructor(public readonly transactionId: string) {
     super(`Transaction '${transactionId}' conflicts with its durable apply ledger record`);
     this.name = "KnowledgeApplyCommitLedgerConflictError";
   }
 }
 
-/** Stable Manifest/read-set failures that prevent a new ledger commit. */
 export type KnowledgeApplyCommitManifestConflictReason =
   | "intent_invalid"
   | "source_missing"
@@ -1490,16 +1395,7 @@ export type KnowledgeApplyCommitManifestConflictReason =
   | "input_revision_not_newer"
   | "revision_overflow";
 
-/** Reports a fail-closed Manifest projection or source ordering conflict. */
 export class KnowledgeApplyCommitManifestConflictError extends TransactionStorageAuthorityError {
-  /**
-   * Creates a sanitized Manifest commit conflict.
-   *
-   * @param bundleId - Bundle whose Manifest cannot accept the commit
-   * @param sourceId - Source whose successful projection was proposed
-   * @param reason - Stable conflict category
-   * @param diagnostics - Optional safe intent diagnostics
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -1511,7 +1407,6 @@ export class KnowledgeApplyCommitManifestConflictError extends TransactionStorag
   }
 }
 
-/** Stable fail-closed reasons one no-journal recovery reference cannot be trusted. */
 export type KnowledgeNoJournalApplyRecoveryConflictReason =
   | "request_invalid"
   | "review_missing"
@@ -1524,14 +1419,7 @@ export type KnowledgeNoJournalApplyRecoveryConflictReason =
   | "state_not_actionable"
   | "revision_overflow";
 
-/** Reports torn or stale no-journal recovery evidence without exposing persisted payloads. */
 export class KnowledgeNoJournalApplyRecoveryConflictError extends TransactionStorageAuthorityError {
-  /**
-   * Creates a sanitized recovery conflict.
-   *
-   * @param bundleId - Bundle whose accepted apply could not be proved
-   * @param reason - Stable fail-closed conflict category
-   */
   constructor(
     public readonly bundleId: string,
     public readonly reason: KnowledgeNoJournalApplyRecoveryConflictReason
@@ -1541,14 +1429,7 @@ export class KnowledgeNoJournalApplyRecoveryConflictError extends TransactionSto
   }
 }
 
-/** Reports an ordinary Manifest writer blocked by the Vault-global transaction reservation. */
 export class KnowledgeRuntimeManifestReservationError extends Error {
-  /**
-   * Creates a sanitized active-transaction reservation conflict.
-   *
-   * @param bundleId - Bundle whose ordinary Manifest write was blocked
-   * @param transactionId - Active Vault-global transaction holding the reservation
-   */
   constructor(
     public readonly bundleId: string,
     public readonly transactionId: string
@@ -1558,7 +1439,6 @@ export class KnowledgeRuntimeManifestReservationError extends Error {
   }
 }
 
-/** Stable protected Manifest state that generic storage writes may never mutate. */
 export type KnowledgeRuntimeManifestProtectedState =
   | "last_successful"
   | "reserved_commit_extension"
@@ -1567,15 +1447,7 @@ export type KnowledgeRuntimeManifestProtectedState =
   | "retirement_extension"
   | "forward_revision_overlay_extension";
 
-/** Reports an attempt to bypass the atomic Manifest/ledger success path. */
 export class KnowledgeRuntimeManifestProtectedStateError extends Error {
-  /**
-   * Creates a typed protected-field write error.
-   *
-   * @param bundleId - Bundle whose Manifest write was rejected
-   * @param sourceId - Source containing the protected success state
-   * @param state - Protected state changed by the generic writer
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -1586,9 +1458,7 @@ export class KnowledgeRuntimeManifestProtectedStateError extends Error {
   }
 }
 
-/** Reports a stale, blocked, missing, or malformed source-retirement command. */
 export class KnowledgeSourceRetirementConflictError extends Error {
-  /** Creates one sanitized retirement conflict. */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -1600,9 +1470,7 @@ export class KnowledgeSourceRetirementConflictError extends Error {
   }
 }
 
-/** Reports post-retirement source work that no longer has active Manifest authority. */
 export class KnowledgeRuntimeSourceRetiredError extends Error {
-  /** Creates a stable retired-source admission failure. */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string
@@ -1612,25 +1480,20 @@ export class KnowledgeRuntimeSourceRetiredError extends Error {
   }
 }
 
-/** Reports a generic Queue writer attempting to clear or weaken a recovery gate. */
 export class KnowledgeRuntimeQueueRecoveryGateProtectedError extends Error {
-  /** Creates a typed recovery-gate authority bypass failure. */
   constructor(public readonly bundleId: string) {
     super(`Queue '${bundleId}' cannot bypass protected recovery or review authority`);
     this.name = "KnowledgeRuntimeQueueRecoveryGateProtectedError";
   }
 }
 
-/** Reports a Queue observation that was not authorized by the shared revision allocator. */
 export class KnowledgeRuntimeQueueObservationAuthorityError extends Error {
-  /** Creates a typed source-observation authority failure. */
   constructor(public readonly bundleId: string) {
     super(`Queue '${bundleId}' contains an unallocated or regressing source observation`);
     this.name = "KnowledgeRuntimeQueueObservationAuthorityError";
   }
 }
 
-/** Stable reasons an atomic no-change Queue/Manifest commit can fail closed. */
 export type KnowledgeRuntimeNoChangesCommitConflictReason =
   | "authority_invalid"
   | "queue_mismatch"
@@ -1641,9 +1504,7 @@ export type KnowledgeRuntimeNoChangesCommitConflictReason =
   | "transaction_active"
   | "revision_overflow";
 
-/** Reports stale or invalid no-change evidence without exposing persisted material. */
 export class KnowledgeRuntimeNoChangesCommitConflictError extends Error {
-  /** Creates one sanitized atomic no-change commit conflict. */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -1654,23 +1515,14 @@ export class KnowledgeRuntimeNoChangesCommitConflictError extends Error {
   }
 }
 
-/** Reports a Queue attempt that lacks exact consumed-observation and Manifest authority. */
 export class KnowledgeRuntimeIngestExecutionProofError extends Error {
-  /** Creates a sanitized read-only execution-proof failure. */
   constructor() {
     super("The knowledge ingest execution claim is not authorized by Runtime");
     this.name = "KnowledgeRuntimeIngestExecutionProofError";
   }
 }
 
-/** Reports a monotonic source revision that can no longer advance exactly. */
 export class SourceInputRevisionOverflowError extends Error {
-  /**
-   * Creates an exact-integer overflow error.
-   *
-   * @param bundleId - Bundle containing the source namespace
-   * @param sourceId - Source whose revision reached the exact integer limit
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string
@@ -1680,62 +1532,50 @@ export class SourceInputRevisionOverflowError extends Error {
   }
 }
 
-/** Reports reuse of one caller capture id for a different source identity. */
 export class SourceInputCaptureConflictError extends Error {
-  /** Creates a sanitized capture-identity conflict. */
   constructor() {
     super("The source observation capture id is already bound to another identity");
     this.name = "SourceInputCaptureConflictError";
   }
 }
 
-/** Reports an unknown, malformed, or cross-runtime observation capability. */
 export class SourceInputObservationTokenError extends Error {
-  /** Creates a sanitized opaque-token failure. */
   constructor() {
     super("The source observation capability is invalid or unknown");
     this.name = "SourceInputObservationTokenError";
   }
 }
 
-/** Reports a second, different payload submitted for one observation token. */
 export class SourceInputObservationBindingConflictError extends Error {
-  /** Creates a sanitized first-write-wins binding conflict. */
   constructor() {
     super("The source observation capability is already bound to a different payload");
     this.name = "SourceInputObservationBindingConflictError";
   }
 }
 
-/** Reports a cryptographically improbable runtime-generated token collision. */
 export class SourceInputObservationTokenCollisionError extends Error {
-  /** Creates a stable fail-closed token collision. */
   constructor() {
     super("The source observation capability generator produced a duplicate token");
     this.name = "SourceInputObservationTokenCollisionError";
   }
 }
 
-/** Runtime seams used for secure ids and deterministic observation timestamps. */
 export interface KnowledgeRuntimeStoreOptions {
   clock?: () => number;
   maxTextCharacters?: number;
   opaqueIdFactory?: () => string;
-  /** One-shot opaque half of the exact Runtime/preflight production pairing. */
+
   productionExecutionClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim;
 }
 
-/** Maximum persisted Runtime text accepted before any JSON parser allocation. */
 export const DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS = 64 * 1024 * 1024;
 
-/** Generates one browser-compatible 128-bit opaque identifier. */
 function createSecureOpaqueId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-/** Creates the first empty strict runtime envelope. */
 export function createEmptyKnowledgeRuntimeStoreSnapshot(
   runtimeId = createSecureOpaqueId()
 ): KnowledgeRuntimeStoreSnapshot {
@@ -1758,12 +1598,6 @@ export function createEmptyKnowledgeRuntimeStoreSnapshot(
   };
 }
 
-/**
- * Strictly parses and semantically validates one unknown runtime envelope.
- *
- * @param value - Unknown parsed JSON value
- * @returns Detached strict runtime snapshot
- */
 export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
   const parsed = knowledgeRuntimeStoreSnapshotSchema.safeParse(value);
   if (!parsed.success) {
@@ -1800,7 +1634,6 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
   return cloneJson(snapshot);
 }
 
-/** Rejects duplicate identities in the dedicated forward-Apply success ledger. */
 function assertUniqueForwardRevisionApplyCommits(
   records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[],
   legacyRecords: readonly Readonly<KnowledgeApplyCommitLedgerRecord>[]
@@ -1831,11 +1664,6 @@ function assertUniqueForwardRevisionApplyCommits(
   }
 }
 
-/**
- * Validates every embedded subsystem before any whole-envelope rewrite.
- *
- * @param snapshot - Structurally strict runtime envelope
- */
 function assertRuntimeSlotSemantics(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   requireReusableCompletionProof = true
@@ -1950,7 +1778,6 @@ function assertRuntimeSlotSemantics(
   assertObservationJournalSemantics(snapshot, queues, manifests);
 }
 
-/** Recomputes one current source's stable forward-Apply base digest. */
 function recomputeForwardRevisionSourceBase(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -2005,7 +1832,6 @@ function recomputeForwardRevisionSourceBase(
   }
 }
 
-/** Projects one accepted decision's complete current Apply prestate from one envelope. */
 function projectForwardRevisionApplyAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   query: Readonly<KnowledgeForwardRevisionApplyAuthorityQuery>
@@ -2141,7 +1967,6 @@ function projectForwardRevisionApplyAuthority(
   );
 }
 
-/** Reconstructs the only prepared journal one genuine revalidation can begin. */
 function createPreparedForwardRevisionApplyJournal(
   projection: Readonly<KnowledgeForwardRevisionApplyCapabilityProjectionV1>
 ): Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1> {
@@ -2241,7 +2066,6 @@ const FORWARD_APPLY_RECOVERY_COMMITTED_KEYS = [
 const FORWARD_APPLY_FILE_OBSERVATION_KEYS = ["kind", "contentHash"] as const;
 const FORWARD_APPLY_NON_FILE_OBSERVATION_KEYS = ["kind"] as const;
 
-/** Strictly detaches one content-free physical observation carried by a transition proof. */
 function snapshotForwardRevisionApplyTransitionObservation(
   value: unknown
 ): Readonly<
@@ -2275,7 +2099,6 @@ function snapshotForwardRevisionApplyTransitionObservation(
   throw createForwardRevisionApplyPortError("dependency_invalid");
 }
 
-/** Reconstructs and cross-validates one exact observation-bound transition projection. */
 function snapshotForwardRevisionApplyTransitionProjection(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1> {
@@ -2451,7 +2274,6 @@ function snapshotForwardRevisionApplyTransitionProjection(
   }
 }
 
-/** Projects the atomic Manifest-overlay, ledger, and journal-clear finalization. */
 function projectForwardRevisionApplyFinalization(
   state: KnowledgeRuntimeStoreSnapshot,
   journalValue: unknown
@@ -2586,7 +2408,6 @@ function projectForwardRevisionApplyFinalization(
   });
 }
 
-/** Rejoins one finalized ledger to a retained committed journal without mutating state. */
 function confirmForwardRevisionApplyFinalization(
   state: KnowledgeRuntimeStoreSnapshot,
   journalValue: unknown
@@ -2610,7 +2431,6 @@ function confirmForwardRevisionApplyFinalization(
   }
 }
 
-/** Projects one no-write sticky-recovery terminalization from an exact observation proof. */
 function projectForwardRevisionRecoveryTerminalization(
   state: KnowledgeRuntimeStoreSnapshot,
   projection: Extract<
@@ -2742,7 +2562,6 @@ function projectForwardRevisionRecoveryTerminalization(
   });
 }
 
-/** Rejoins an ambiguously committed recovery terminal to its exact projection. */
 function confirmForwardRevisionRecoveryTerminalization(
   state: KnowledgeRuntimeStoreSnapshot,
   projection: Extract<
@@ -2764,7 +2583,6 @@ function confirmForwardRevisionRecoveryTerminalization(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Selects a deterministic valid digest unequal to both journal content hashes. */
 function createForwardRevisionApplyResourceProbeHash(
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
 ): string {
@@ -2777,7 +2595,6 @@ function createForwardRevisionApplyResourceProbeHash(
   throw createForwardRevisionApplyPortError("resource_limit");
 }
 
-/** Requires one journal timestamp to preserve its exact predecessor Forward lineage. */
 function assertForwardRevisionApplyLineageTimestampFloor(
   state: KnowledgeRuntimeStoreSnapshot,
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
@@ -2810,7 +2627,6 @@ function assertForwardRevisionApplyLineageTimestampFloor(
   }
 }
 
-/** Proves begin can durably reach committed+finalized or sticky rev3 recovery without exhaustion. */
 function assertForwardRevisionApplyBeginResources(
   state: KnowledgeRuntimeStoreSnapshot,
   prepared: Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1>,
@@ -2885,7 +2701,6 @@ function assertForwardRevisionApplyBeginResources(
   }
 }
 
-/** Requires an active forward journal to own every Runtime mutation until convergence. */
 function assertForwardRevisionApplyExclusiveMutation(
   current: KnowledgeRuntimeStoreSnapshot,
   next: KnowledgeRuntimeStoreSnapshot
@@ -2975,7 +2790,6 @@ function assertForwardRevisionApplyExclusiveMutation(
   }
 }
 
-/** Creates the canonical join key shared by accepted forward lifecycle records. */
 function createForwardRevisionAcceptedLifecycleKey(identity: {
   bundleId: string;
   proposalId: string;
@@ -2994,7 +2808,6 @@ function createForwardRevisionAcceptedLifecycleKey(identity: {
   ].join("\n");
 }
 
-/** Creates the exact lifecycle resource bound to one accepted decision. */
 function createForwardRevisionLifecycleResourceForDecision(
   runtimeId: string,
   decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
@@ -3007,7 +2820,6 @@ function createForwardRevisionLifecycleResourceForDecision(
   });
 }
 
-/** Creates the exact terminal identity bound to one accepted decision. */
 function createForwardRevisionAcceptedClaimIdentityForDecision(
   runtimeId: string,
   decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
@@ -3024,7 +2836,6 @@ function createForwardRevisionAcceptedClaimIdentityForDecision(
   });
 }
 
-/** Reports whether one accepted review has a durable lifecycle outcome and no open Apply claim. */
 function acceptedForwardRevisionReviewIsTerminal(
   state: KnowledgeRuntimeStoreSnapshot,
   decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
@@ -3072,7 +2883,6 @@ function acceptedForwardRevisionReviewIsTerminal(
   );
 }
 
-/** Creates the content-free lineage reference for one forward Apply ledger. */
 function createForwardRevisionLedgerLineageRefForLedger(
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
 ) {
@@ -3092,7 +2902,6 @@ function createForwardRevisionLedgerLineageRefForLedger(
   });
 }
 
-/** Creates the deterministic terminal identity for a successfully deleted generated page. */
 function createSourceApplyDeletedPageHash(
   ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
   change: Extract<KnowledgeFileChange, { operation: "delete" }>
@@ -3111,7 +2920,6 @@ function createSourceApplyDeletedPageHash(
   );
 }
 
-/** Returns the exact post-Apply identity for one updated or deleted generated page. */
 function getSourceApplyPageAfterHash(
   ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
   change: Extract<KnowledgeFileChange, { operation: "update" | "delete" }>
@@ -3121,7 +2929,6 @@ function getSourceApplyPageAfterHash(
     : createSourceApplyDeletedPageHash(ledger, change);
 }
 
-/** Hashes one ordinary source Apply ledger together with one exact page effect. */
 function createSourceApplyPageLedgerIdentityDigest(
   ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
   change: Extract<KnowledgeFileChange, { operation: "update" | "delete" }>
@@ -3141,7 +2948,6 @@ function createSourceApplyPageLedgerIdentityDigest(
   );
 }
 
-/** Rejoins one ordinary source Apply ledger to its unique retained accepted Review. */
 function requireAcceptedSourceApplyRecordForLedger(
   state: KnowledgeRuntimeStoreSnapshot,
   ledger: Readonly<KnowledgeApplyCommitLedgerRecord>
@@ -3160,7 +2966,6 @@ function requireAcceptedSourceApplyRecordForLedger(
   return accepted[0];
 }
 
-/** Reconstructs one ordinary source Apply page successor from retained Review evidence. */
 function projectSourceApplyPageLedgerLineageRef(
   state: KnowledgeRuntimeStoreSnapshot,
   ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
@@ -3192,7 +2997,6 @@ function projectSourceApplyPageLedgerLineageRef(
   });
 }
 
-/** Reports whether one active overlay is the exact head produced by a ledger. */
 function forwardRevisionOverlayMatchesLedger(
   overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>,
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
@@ -3215,7 +3019,6 @@ function forwardRevisionOverlayMatchesLedger(
   );
 }
 
-/** Validates the complete dedicated forward journal/ledger/overlay graph. */
 function assertForwardRevisionApplySemantics(
   state: KnowledgeRuntimeStoreSnapshot,
   manifests: ReadonlyMap<string, SourceManifest>
@@ -3283,7 +3086,6 @@ function assertForwardRevisionApplySemantics(
     }
   }
 
-  /** Finds the exact accepted forward revision bound to a durable Apply identity. */
   const findAccepted = (identity: {
     bundleId: string;
     proposalId: string;
@@ -3662,11 +3464,6 @@ function assertForwardRevisionApplySemantics(
   }
 }
 
-/**
- * Rejects duplicate Bundle keys in one runtime collection.
- *
- * @param slots - Strictly shaped Bundle slots
- */
 function assertUniqueBundleSlots(slots: readonly KnowledgeRuntimeBundleSlot[]): void {
   const bundleIds = new Set<string>();
   for (const slot of slots) {
@@ -3677,11 +3474,6 @@ function assertUniqueBundleSlots(slots: readonly KnowledgeRuntimeBundleSlot[]): 
   }
 }
 
-/**
- * Rejects duplicate Bundle/source identities in the input revision namespace.
- *
- * @param bundles - Strictly shaped input revision namespaces
- */
 function assertUniqueInputRevisionRecords(
   bundles: readonly {
     bundleId: string;
@@ -3704,13 +3496,6 @@ function assertUniqueInputRevisionRecords(
   }
 }
 
-/**
- * Cross-validates allocator floors, observation journals, and Queue watermarks.
- *
- * @param snapshot - Strict current runtime envelope
- * @param queues - Already parsed Queue slots indexed by Bundle
- * @param manifests - Already parsed Manifest slots indexed by Bundle
- */
 function assertObservationJournalSemantics(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   queues: ReadonlyMap<string, IngestQueueSnapshot>,
@@ -3907,11 +3692,6 @@ function assertObservationJournalSemantics(
   }
 }
 
-/**
- * Rejects reuse of one transaction id inside the apply-commit ledger.
- *
- * @param records - Strictly shaped commit ledger records
- */
 function assertUniqueApplyCommits(records: readonly KnowledgeApplyCommitLedgerRecord[]): void {
   const transactionIds = new Set<string>();
   const manifestRevisions = new Map<string, Set<number>>();
@@ -3949,15 +3729,6 @@ function assertUniqueApplyCommits(records: readonly KnowledgeApplyCommitLedgerRe
   }
 }
 
-/**
- * Requires every durable success projection to have one exact latest ledger proof.
- *
- * Historical records remain valid and do not need to equal the current Manifest
- * digest after later ordinary Manifest writes or shared-page co-owner updates.
- *
- * @param records - Complete retained apply ledger
- * @param manifests - Strict current Manifests keyed by Bundle
- */
 function assertManifestLedgerSemantics(
   records: readonly KnowledgeApplyCommitLedgerRecord[],
   manifests: ReadonlyMap<string, SourceManifest>
@@ -4104,17 +3875,6 @@ function assertManifestLedgerSemantics(
   }
 }
 
-/**
- * Requires every pending Queue commit acknowledgement to reference one exact
- * successful apply-ledger record from the same atomic runtime envelope.
- *
- * The marker intentionally retains the receipt fields needed by Queue
- * recovery. Binding all overlapping fields prevents a torn or forged marker
- * from completing a job whose Manifest success was never recorded.
- *
- * @param records - Complete retained apply ledger
- * @param queues - Strict current Queue snapshots keyed by Bundle
- */
 function assertQueueApplyCommitLedgerSemantics(
   records: readonly KnowledgeApplyCommitLedgerRecord[],
   queues: ReadonlyMap<string, IngestQueueSnapshot>
@@ -4145,18 +3905,6 @@ function assertQueueApplyCommitLedgerSemantics(
   }
 }
 
-/**
- * Compares a no-change read-set with the current applied page projection.
- *
- * Page ordering is not semantic. A later co-owner Apply may legitimately
- * advance the content hash of a shared page without invalidating another
- * source's retained no-change marker.
- *
- * @param source - Current registered source entry
- * @param basePages - Canonical pages captured by the no-change plan
- * @param allowSharedHashDrift - Whether a later shared-page writer may have advanced the hash
- * @returns Whether both projections identify the same authorized page set
- */
 function noChangesBasePagesMatchSource(
   source: SourceManifestEntry,
   basePages: readonly ManifestCommitPage[],
@@ -4179,10 +3927,6 @@ function noChangesBasePagesMatchSource(
   });
 }
 
-/**
- * Requires every retained no-change source marker to match one exact completed
- * Queue attempt and its consumed observation from the same Runtime envelope.
- */
 function assertNoChangesCommitSemantics(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   manifests: ReadonlyMap<string, SourceManifest>,
@@ -4270,10 +4014,8 @@ function assertNoChangesCommitSemantics(
   }
 }
 
-/** Completed Queue job whose terminal success may be reused by exact deduplication. */
 type ReusableCompletedJob = Extract<KnowledgeIngestJob, { status: "completed" }>;
 
-/** Compares the behavior-defining payload retained by two source records. */
 function runtimeSourcePayloadMatches(
   left: Pick<KnowledgeIngestJob, "sourceContentHash" | "pipelineFingerprint">,
   right: Pick<KnowledgeIngestJob, "sourceContentHash" | "pipelineFingerprint">
@@ -4284,25 +4026,16 @@ function runtimeSourcePayloadMatches(
   );
 }
 
-/** Reports whether a Queue job can still absorb or schedule the latest source input. */
 function runtimeQueueJobIsActive(job: KnowledgeIngestJob): boolean {
   return job.status !== "failed" && job.status !== "completed" && job.status !== "cancelled";
 }
 
-/** Current source outcome selected by the Queue's exact deduplication ordering. */
 type CurrentSourceTerminalOutcome =
   | { kind: "covered" }
   | { kind: "failed_or_cancelled" }
   | { kind: "completed"; job: ReusableCompletedJob }
   | { kind: "invalid" };
 
-/**
- * Finds the terminal result that a current exact source observation may reuse.
- *
- * Queue enqueue returns its active job first. Without active work it returns
- * the latest source job ordered by input revision, update time, then id. The
- * Runtime repeats that exact choice rather than searching older successes.
- */
 function findCurrentSourceTerminalOutcome(
   queue: IngestQueueSnapshot,
   highWatermark: IngestSourceHighWatermark
@@ -4335,7 +4068,6 @@ function findCurrentSourceTerminalOutcome(
   return { kind: "invalid" };
 }
 
-/** Distinguishes an exact completed write from no changes without interpreting model intent. */
 function readCompletionOutcome(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   manifest: SourceManifest | undefined,
@@ -4380,7 +4112,6 @@ function readCompletionOutcome(
   return applied ? Object.freeze({ kind: "applied" }) : undefined;
 }
 
-/** Proves one exact reusable completion by no-change marker or Apply ledger. */
 function reusableCompletionHasProof(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   manifest: SourceManifest | undefined,
@@ -4389,7 +4120,6 @@ function reusableCompletionHasProof(
   return readCompletionOutcome(snapshot, manifest, job) !== undefined;
 }
 
-/** Shares read-only eligibility with the atomic replay boundary without trusting a UI hint. */
 function readCompletedSourceReanalysis(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest | undefined,
@@ -4447,13 +4177,6 @@ function readCompletedSourceReanalysis(
   return { job, source, highWatermark };
 }
 
-/**
- * Reverse-validates every current exact-dedup completion.
- *
- * Runtime v4 never trusts Queue terminal shape alone: the newest reusable
- * completion for the current source fingerprint must be backed by either the
- * exact no-change marker or an Apply commit ledger from the same envelope.
- */
 function assertReusableCompletionSemantics(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   manifests: ReadonlyMap<string, SourceManifest>,
@@ -4474,19 +4197,11 @@ function assertReusableCompletionSemantics(
   }
 }
 
-/** Caller-derived ledger fields that identify an exact replay before Manifest mutation. */
 type KnowledgeApplyCommitLedgerIdentity = Omit<
   KnowledgeApplyCommitLedgerRecord,
   "manifestAfterRevision" | "manifestAfterDigest"
 >;
 
-/**
- * Compares every caller-reconstructable field of one ledger record.
- *
- * @param record - Existing durable ledger record
- * @param identity - Candidate identity derived from journal, receipt, and intent
- * @returns Whether the call is an exact replay
- */
 function applyCommitLedgerIdentityMatches(
   record: KnowledgeApplyCommitLedgerRecord,
   identity: KnowledgeApplyCommitLedgerIdentity
@@ -4510,14 +4225,6 @@ function applyCommitLedgerIdentityMatches(
   );
 }
 
-/**
- * Derives every replayable ledger field from exact committed proof.
- *
- * @param journal - Strict committed transaction journal
- * @param receipt - Exact journal-derived public receipt
- * @param intent - Final Manifest projection embedded in the journal
- * @returns Deterministic ledger identity excluding first-commit after proof
- */
 function createApplyCommitLedgerIdentity(
   journal: CommittedChangeSetTransactionJournal,
   receipt: TransactionCommitReceipt,
@@ -4542,7 +4249,6 @@ function createApplyCommitLedgerIdentity(
   };
 }
 
-/** Minimal strict identity required to prove Queue and Review apply authority. */
 interface KnowledgeApplyRuntimeIdentity {
   transactionId: string;
   bundleId: string;
@@ -4554,17 +4260,10 @@ interface KnowledgeApplyRuntimeIdentity {
   manifestCommitIntentDigest: string;
 }
 
-/** Complete identity required to add current Bundle and Manifest file-access authority. */
 interface KnowledgeApplyAuthorityProof extends KnowledgeApplyRuntimeIdentity {
   bundle: KnowledgeBundleConfig;
 }
 
-/**
- * Strictly parses one transaction preflight request without observing Wiki files.
- *
- * @param request - Detached identity supplied by the transaction runtime
- * @returns Strict proof suitable for shared Queue/Review authority validation
- */
 function parseApplyAuthorityRequest(
   request: ChangeSetTransactionAuthorityRequest
 ): KnowledgeApplyAuthorityProof {
@@ -4644,13 +4343,6 @@ function parseApplyAuthorityRequest(
   };
 }
 
-/**
- * Compares one Queue apply claim with the immutable transaction job claim.
- *
- * @param claim - Durable Queue claim captured at the applying boundary
- * @param journal - Prepared or committed transaction owned by that claim
- * @returns Whether every persisted execution identity field is exact
- */
 function queueClaimMatchesTransaction(
   claim: IngestQueueSnapshot["applyClaim"],
   journal: KnowledgeApplyRuntimeIdentity
@@ -4667,16 +4359,6 @@ function queueClaimMatchesTransaction(
   );
 }
 
-/**
- * Compares one accepted Review record's Queue claim with a transaction claim.
- *
- * Review records intentionally predate the applying `startedAt`, so only the
- * immutable source observation and attempt fields participate here.
- *
- * @param record - Exact accepted Review Store record
- * @param journal - Prepared or committed transaction under proof
- * @returns Whether the Review record belongs to the same Queue attempt
- */
 function reviewClaimMatchesTransaction(
   record: AcceptedChangeSetReviewRecord,
   journal: KnowledgeApplyRuntimeIdentity
@@ -4691,18 +4373,10 @@ function reviewClaimMatchesTransaction(
   );
 }
 
-/**
- * Compares strict persisted JSON payloads independently of property order.
- *
- * @param left - First JSON-compatible strict value
- * @param right - Second JSON-compatible strict value
- * @returns Whether both values have identical canonical JSON
- */
 function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
   return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
 }
 
-/** Detached external facts captured before entering the synchronous Runtime transform. */
 interface CapturedForwardRevisionPublicationEvidence {
   intent: Readonly<KnowledgeForwardRevisionIntent>;
   intentDigest: string;
@@ -4712,13 +4386,11 @@ interface CapturedForwardRevisionPublicationEvidence {
   vaultObservedBeforeHash: string;
 }
 
-/** Monotonic timestamp floors re-proved while publishing one Forward proposal. */
 interface ForwardRevisionPublicationTimeFloors {
   readonly sourceFreshnessCompletedAt: number;
   readonly lineageAppliedAtFloor: number;
 }
 
-/** Reads one exact plain record entirely through own enumerable data descriptors. */
 function snapshotExactDataRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -4752,7 +4424,6 @@ function snapshotExactDataRecord(
   }
 }
 
-/** Captures and deeply validates non-authoritative publication evidence once. */
 function snapshotForwardRevisionPublicationEvidence(
   value: unknown
 ): Readonly<CapturedForwardRevisionPublicationEvidence> {
@@ -4806,13 +4477,6 @@ function snapshotForwardRevisionPublicationEvidence(
   }
 }
 
-/**
- * Compares one startup identity with its exact immutable accepted Review record.
- *
- * @param identity - Identity returned by review startup reconciliation
- * @param record - Durable accepted Review record loaded from the shared envelope
- * @returns Whether every startup-visible identity field is exact
- */
 function acceptedRecordMatchesStartupIdentity(
   identity: AcceptedReviewStartupIdentity,
   record: AcceptedChangeSetReviewRecord
@@ -4834,18 +4498,6 @@ function acceptedRecordMatchesStartupIdentity(
   );
 }
 
-/**
- * Creates one stable opaque id from evidence retained across every apply phase.
- *
- * The applying `startedAt` is intentionally excluded because a fully finalized
- * commit retains it neither in the completed Queue job nor in the Manifest
- * ledger. The accepted Review identity remains immutable and unique for the
- * owning Queue attempt, so the id stays stable through continue and abandon.
- *
- * @param bundleId - Bundle containing the accepted record
- * @param record - Exact immutable accepted Review record
- * @returns Namespaced lowercase SHA-256 recovery identifier
- */
 function createNoJournalApplyRecoveryId(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
@@ -4853,13 +4505,6 @@ function createNoJournalApplyRecoveryId(
   return createNoJournalApplyRecoveryReference(bundleId, record).recoveryId;
 }
 
-/**
- * Compares one Queue job with the immutable accepted Review attempt.
- *
- * @param job - Durable Queue job
- * @param record - Exact accepted Review record
- * @returns Whether all source-observation and attempt fields match
- */
 function queueJobMatchesAcceptedRecord(
   job: KnowledgeIngestJob | undefined,
   record: AcceptedChangeSetReviewRecord
@@ -4875,13 +4520,6 @@ function queueJobMatchesAcceptedRecord(
   );
 }
 
-/**
- * Compares a reviewed Queue apply claim with one accepted Review record.
- *
- * @param claim - Durable active or interrupted apply claim
- * @param record - Exact accepted Review record
- * @returns Whether the claim carries the same reviewed decision and payload ids
- */
 function queueClaimMatchesAcceptedRecord(
   claim: IngestApplyClaimMarker | undefined,
   record: AcceptedChangeSetReviewRecord
@@ -4904,14 +4542,6 @@ function queueClaimMatchesAcceptedRecord(
   );
 }
 
-/**
- * Converts exact accepted Queue and Review evidence into transaction authority.
- *
- * @param bundleId - Bundle containing the evidence
- * @param record - Exact accepted Review record
- * @param claim - Exact reviewed Queue apply claim
- * @returns Identity sufficient for Queue/Review/allocator re-proof
- */
 function createNoJournalApplyRuntimeIdentity(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord,
@@ -4937,14 +4567,6 @@ function createNoJournalApplyRuntimeIdentity(
   };
 }
 
-/**
- * Creates one decision candidate only after exact Queue/Review proof succeeds.
- *
- * @param bundleId - Bundle containing the accepted apply
- * @param record - Exact immutable accepted Review record
- * @param claim - Exact durable applying claim
- * @returns Detached candidate safe to render but not itself an authority token
- */
 function createNoJournalApplyRecoveryCandidate(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord,
@@ -4964,13 +4586,6 @@ function createNoJournalApplyRecoveryCandidate(
   };
 }
 
-/**
- * Compares one append-only abandonment with its exact accepted Review record.
- *
- * @param abandonment - Durable Queue abandonment tombstone
- * @param record - Exact accepted Review record
- * @returns Whether every retained accepted decision field is exact
- */
 function abandonmentMatchesAcceptedRecord(
   abandonment: IngestApplyAbandonment,
   record: AcceptedChangeSetReviewRecord
@@ -4991,14 +4606,6 @@ function abandonmentMatchesAcceptedRecord(
   );
 }
 
-/**
- * Finds the latest retained apply ledger for one exact Bundle/source identity.
- *
- * @param records - Complete append-only apply ledger
- * @param bundleId - Bundle containing the source
- * @param sourceId - Stable source identifier
- * @returns Latest source ledger by Manifest revision, or undefined
- */
 function findLatestSourceApplyLedger(
   records: readonly KnowledgeApplyCommitLedgerRecord[],
   bundleId: string,
@@ -5014,14 +4621,6 @@ function findLatestSourceApplyLedger(
   return latest;
 }
 
-/**
- * Proves that one latest ledger is the exact current source success projection.
- *
- * @param ledger - Candidate latest source apply ledger
- * @param bundleId - Bundle containing the Manifest entry
- * @param entry - Current strict Manifest source entry
- * @returns Whether Manifest success and reserved extension match the ledger
- */
 function ledgerMatchesCurrentManifestEntry(
   ledger: KnowledgeApplyCommitLedgerRecord,
   bundleId: string,
@@ -5046,7 +4645,6 @@ function ledgerMatchesCurrentManifestEntry(
   );
 }
 
-/** Creates one deeply immutable detached citation projection. */
 function freezeAppliedClaimCitation(citation: ClaimCitation): Readonly<ClaimCitation> {
   return Object.freeze({
     ...citation,
@@ -5054,7 +4652,6 @@ function freezeAppliedClaimCitation(citation: ClaimCitation): Readonly<ClaimCita
   });
 }
 
-/** Creates one deeply immutable detached accepted-source projection. */
 function freezeAppliedSourceProvenance(
   source: KnowledgeRuntimeAppliedSourceProvenance
 ): Readonly<KnowledgeRuntimeAppliedSourceProvenance> {
@@ -5065,7 +4662,6 @@ function freezeAppliedSourceProvenance(
   });
 }
 
-/** Creates one deeply immutable detached applied-page projection. */
 function freezeAppliedPageProvenance(
   page: KnowledgeRuntimeAppliedPageProvenance
 ): Readonly<KnowledgeRuntimeAppliedPageProvenance> {
@@ -5075,7 +4671,6 @@ function freezeAppliedPageProvenance(
   });
 }
 
-/** Creates one deeply immutable detached Runtime provenance snapshot. */
 function freezeAppliedProvenanceSnapshot(
   snapshot: KnowledgeRuntimeAppliedProvenanceSnapshot
 ): KnowledgeRuntimeAppliedProvenanceSnapshot {
@@ -5085,7 +4680,6 @@ function freezeAppliedProvenanceSnapshot(
   });
 }
 
-/** Creates one detached deeply frozen current generated-page projection. */
 function freezeRuntimeFreshnessGeneratedPages(
   manifest: SourceManifest,
   entry: SourceManifestEntry
@@ -5111,7 +4705,6 @@ function freezeRuntimeFreshnessGeneratedPages(
   return Object.freeze(pages);
 }
 
-/** Creates one detached deeply frozen source freshness authority. */
 function freezeRuntimeSourceFreshnessAuthority(
   authority: KnowledgeRuntimeSourceFreshnessAuthority
 ): KnowledgeRuntimeSourceFreshnessAuthority {
@@ -5121,13 +4714,6 @@ function freezeRuntimeSourceFreshnessAuthority(
   });
 }
 
-/**
- * Re-proves that one selected no-changes marker owns an exact completed Queue job.
- *
- * Complete marker/Queue/observation cross-semantics were already required while
- * parsing the Runtime envelope. This local check prevents the read projection
- * from accidentally selecting a historical or unrelated marker.
- */
 function selectedNoChangesMarkerHasRuntimeProof(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -5151,13 +4737,6 @@ function selectedNoChangesMarkerHasRuntimeProof(
   );
 }
 
-/**
- * Projects the latest exact Apply or no-changes outcome for one current source.
- *
- * Apply and no-changes histories are ordered only by their Runtime-owned input
- * revisions. Missing, tied, legacy, or cross-subsystem-unproven state yields no
- * authority; structurally corrupt Runtime state is rejected by the outer read.
- */
 function projectRuntimeSourceFreshnessAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -5235,27 +4814,16 @@ function projectRuntimeSourceFreshnessAuthority(
   return freezeRuntimeSourceFreshnessAuthority(authority);
 }
 
-/** Exact historical writer candidate selected before cloning its citations. */
 interface AppliedSourceCommitCandidate {
   ledger: KnowledgeApplyCommitLedgerRecord;
   record: AcceptedChangeSetReviewRecord;
   entry: SourceManifestEntry;
 }
 
-/** Exact accepted commit retained internally while projecting current pages. */
 interface AppliedSourceCommitEvidence {
   provenance: Readonly<KnowledgeRuntimeAppliedSourceProvenance>;
 }
 
-/**
- * Rejoins one historical source ledger to one direct accepted Review lookup.
- *
- * @param ledger - Historical source Apply ledger under proof
- * @param manifest - Current strict Bundle Manifest
- * @param record - Direct accepted Review lookup, or undefined when absent
- * @param entry - Current Manifest source entry
- * @returns Exact historical writer candidate, or undefined when the join fails
- */
 function projectAppliedSourceCommitCandidate(
   ledger: KnowledgeApplyCommitLedgerRecord,
   manifest: SourceManifest,
@@ -5274,12 +4842,6 @@ function projectAppliedSourceCommitCandidate(
   return { ledger, record, entry };
 }
 
-/**
- * Clones exact source citations only after a historical writer wins a current page key.
- *
- * @param candidate - Exact ledger, Review, and current source join
- * @returns Detached accepted source evidence, or undefined without source citations
- */
 function createAppliedSourceCommitEvidence(
   candidate: AppliedSourceCommitCandidate
 ): AppliedSourceCommitEvidence | undefined {
@@ -5304,14 +4866,6 @@ function createAppliedSourceCommitEvidence(
   };
 }
 
-/**
- * Creates one collision-free lookup key for exact source/page-base evidence.
- *
- * @param sourceId - Manifest source claiming the page
- * @param windowsPathKey - Windows-normalized page identity
- * @param sourceAppliedContentHash - Current source-applied page base hash
- * @returns Canonical evidence lookup key
- */
 function createAppliedSourcePageEvidenceKey(
   sourceId: string,
   windowsPathKey: string,
@@ -5320,13 +4874,6 @@ function createAppliedSourcePageEvidenceKey(
   return canonicalizeJson([sourceId, windowsPathKey, sourceAppliedContentHash]);
 }
 
-/**
- * Indexes each source's latest retained Apply ledger in one complete pass.
- *
- * @param records - Complete append-only Apply ledger
- * @param bundleId - Bundle whose current source anchors are required
- * @returns Latest Manifest-revision ledger keyed by source id
- */
 function indexLatestSourceApplyLedgers(
   records: readonly KnowledgeApplyCommitLedgerRecord[],
   bundleId: string
@@ -5342,19 +4889,6 @@ function indexLatestSourceApplyLedgers(
   return latestBySourceId;
 }
 
-/**
- * Indexes the newest historical exact writer for every current active source page base.
- *
- * Each active source is first anchored to its exact latest Manifest success. Historical
- * ledgers can then ground retained pages only through one exact accepted create/update,
- * matching source id, Windows path, after hash, and non-empty source citations.
- *
- * @param state - Complete strict Runtime snapshot
- * @param manifest - Current strict Bundle Manifest
- * @param review - Current strict Review snapshot, or undefined when absent
- * @param pages - Current effective Manifest pages whose source bases need evidence
- * @returns Exact historical evidence keyed by source, page, and source-applied hash
- */
 function projectAppliedSourcePageEvidenceIndex(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -5448,18 +4982,6 @@ function projectAppliedSourcePageEvidenceIndex(
   return evidenceByPage;
 }
 
-/**
- * Projects current effective pages with exact accepted source-base evidence.
- *
- * A forward revision changes the current page bytes but does not manufacture
- * new source evidence. Its contributing citations therefore remain explicitly
- * bound to the last genuine source-applied base hash.
- *
- * @param state - Complete strict Runtime snapshot
- * @param manifest - Current strict Bundle Manifest
- * @param review - Current strict Review snapshot, or undefined when absent
- * @returns Stable frozen current-page projection
- */
 function projectAppliedManifestPages(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -5505,17 +5027,6 @@ function projectAppliedManifestPages(
   return Object.freeze(projectedPages);
 }
 
-/**
- * Projects one strict current Manifest page without scanning Review history.
- *
- * Shared co-owners must retain exactly the same path, ownership, and content
- * hash. The page scan is bounded before the history index performs any further
- * work, preventing an oversized Manifest from bypassing the read contract.
- *
- * @param manifest - Current strict Bundle Manifest
- * @param pagePath - Canonical requested Wiki path
- * @returns Detached current page identity, or undefined when not managed
- */
 function projectKnownAppliedWikiCurrentManifestPage(
   manifest: SourceManifest,
   pagePath: string
@@ -5551,14 +5062,6 @@ function projectKnownAppliedWikiCurrentManifestPage(
   };
 }
 
-/**
- * Compares an active journal's immutable accepted material with one Review record.
- *
- * @param journal - Strict global active transaction journal
- * @param bundleId - Bundle containing the Review record
- * @param record - Exact accepted Review record
- * @returns Whether the journal belongs to this accepted decision
- */
 function transactionMatchesAcceptedRecord(
   journal: ChangeSetTransactionJournal,
   bundleId: string,
@@ -5575,24 +5078,10 @@ function transactionMatchesAcceptedRecord(
   );
 }
 
-/**
- * Reports whether a queue job still occupies source execution capacity.
- *
- * @param job - Durable Queue job
- * @returns Whether a retained rerun must wait for this job
- */
 function isActiveNoJournalQueueJob(job: KnowledgeIngestJob): boolean {
   return job.status !== "failed" && job.status !== "completed" && job.status !== "cancelled";
 }
 
-/**
- * Promotes one retained latest rerun after the abandoned predecessor is terminal.
- *
- * @param snapshot - Queue already containing the cancelled predecessor
- * @param sourceId - Source whose retained rerun may be promoted
- * @param timestamp - Non-regressing promotion timestamp
- * @returns Queue with at most one newly promoted pending successor
- */
 function promoteNoJournalRerun(
   snapshot: IngestQueueSnapshot,
   sourceId: string,
@@ -5626,19 +5115,6 @@ function promoteNoJournalRerun(
   };
 }
 
-/**
- * Reconstructs successful Apply settlement of same-input repair work.
- *
- * This mirrors the Queue's durable transition: when the latest observed source
- * bytes and pipeline equal the committed Apply input, pending/paused successors
- * are obsolete output-repair work and become cancelled. Divergent work remains
- * eligible for ordinary rerun promotion.
- *
- * @param snapshot - Queue already containing the completed Apply job
- * @param appliedJob - Exact job bound to the committed transaction
- * @param timestamp - Non-regressing settlement timestamp
- * @returns Exact Queue projection accepted by the Runtime CAS boundary
- */
 function settleNoJournalRerunAfterSuccessfulApply(
   snapshot: IngestQueueSnapshot,
   appliedJob: KnowledgeIngestJob,
@@ -5690,18 +5166,6 @@ function settleNoJournalRerunAfterSuccessfulApply(
   return promoteNoJournalRerun(snapshot, appliedJob.sourceId, timestamp);
 }
 
-/**
- * Re-proves the complete source-apply authority from one atomic runtime snapshot.
- *
- * The Queue claim proves the exact execution, the accepted Review proves
- * reviewed content and final Manifest intent, and the observation
- * namespaces prove neither Queue nor allocator state moved backwards. A newer
- * observation is legal while an older apply finishes; the strict Queue
- * validator has already required an exact rerun for a divergent newer payload.
- *
- * @param state - Complete runtime envelope observed inside one atomic transform
- * @param journal - Prepared or committed transaction under proof
- */
 function assertApplyCommitRuntimeAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   journal: KnowledgeApplyRuntimeIdentity
@@ -5842,13 +5306,6 @@ function assertApplyCommitRuntimeAuthority(
   }
 }
 
-/**
- * Reads strict runtime-owned monotonic metadata from one source entry.
- *
- * @param entry - Current registered source entry
- * @param bundleId - Bundle used for sanitized typed errors
- * @returns Parsed metadata, or null when the extension is absent
- */
 function readSourceCommitExtension(
   entry: SourceManifestEntry,
   bundleId: string
@@ -5868,7 +5325,6 @@ function readSourceCommitExtension(
   return parsed.value;
 }
 
-/** Reads and validates the Runtime-owned no-change success marker from one source. */
 function readSourceNoChangesCommitMarker(
   entry: SourceManifestEntry
 ): NoChangesManifestCommitMarker | null {
@@ -5881,15 +5337,6 @@ function readSourceNoChangesCommitMarker(
   return parsed.value;
 }
 
-/**
- * Requires an incoming source observation to follow its last exact ledger commit.
- *
- * @param entry - Current registered source entry
- * @param bundleId - Owning Bundle id
- * @param inputRevision - Incoming durable source observation revision
- * @param manifest - Actual current Manifest containing the source
- * @param ledger - Complete retained exact-commit ledger
- */
 function assertSourceInputRevisionCanCommit(
   entry: SourceManifestEntry,
   bundleId: string,
@@ -5949,16 +5396,6 @@ function assertSourceInputRevisionCanCommit(
   }
 }
 
-/**
- * Creates the complete next Manifest from a verified source-compile intent.
- *
- * @param manifest - Actual pre-commit Manifest observed atomically
- * @param source - Registered primary source entry
- * @param journal - Exact committed journal
- * @param receipt - Exact journal-derived receipt
- * @param intent - Valid final page projection
- * @returns Strict candidate Manifest at the next revision
- */
 function createCommittedSourceManifest(
   manifest: SourceManifest,
   source: SourceManifestEntry,
@@ -6040,13 +5477,6 @@ function createCommittedSourceManifest(
   };
 }
 
-/**
- * Compares optional JSON values independently of object insertion order.
- *
- * @param left - First optional JSON value
- * @param right - Second optional JSON value
- * @returns Whether absence or canonical JSON is exact
- */
 function optionalJsonValuesEqual(left: unknown, right: unknown): boolean {
   if (left === undefined || right === undefined) {
     return left === right;
@@ -6054,12 +5484,6 @@ function optionalJsonValuesEqual(left: unknown, right: unknown): boolean {
   return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
 }
 
-/**
- * Prevents generic Manifest storage from bypassing the exact success ledger path.
- *
- * @param current - Actual Manifest currently stored, or null before first creation
- * @param candidate - Complete generic Manifest replacement
- */
 function assertGenericManifestPreservesCommitState(
   current: SourceManifest | null,
   candidate: SourceManifest
@@ -6139,12 +5563,6 @@ function assertGenericManifestPreservesCommitState(
   }
 }
 
-/**
- * Produces a detached JSON clone and rejects non-JSON input.
- *
- * @param value - JSON-compatible runtime value
- * @returns Detached value with no shared references
- */
 function cloneJson<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T;
@@ -6153,12 +5571,6 @@ function cloneJson<T>(value: T): T {
   }
 }
 
-/**
- * Parses exact runtime file text without exposing parser details or raw bytes.
- *
- * @param text - Complete atomic runtime file contents
- * @returns Detached strict runtime snapshot
- */
 function parseRuntimeText(
   text: string,
   maxTextCharacters = DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS
@@ -6173,22 +5585,10 @@ function parseRuntimeText(
   return parseKnowledgeRuntimeStoreSnapshot(value);
 }
 
-/**
- * Checks whether an unknown JSON value exposes named fields.
- *
- * @param value - Unknown parsed JSON value
- * @returns Whether the value is a non-array record
- */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Parses exact runtime text without assuming its outer-envelope version.
- *
- * @param text - Complete persisted runtime text
- * @returns Unknown parsed JSON value
- */
 function parseUnknownRuntimeText(
   text: string,
   maxTextCharacters = DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS
@@ -6201,13 +5601,6 @@ function parseUnknownRuntimeText(
   }
 }
 
-/**
- * Rejects an oversized persisted Runtime envelope before JSON parsing.
- *
- * @param text - Complete persisted Runtime text
- * @param maxTextCharacters - Configured inclusive character limit
- * @returns The unchanged text after the bound is proven
- */
 function requireRuntimeTextWithinLimit(text: string, maxTextCharacters: number): string {
   if (typeof text !== "string" || text.length > maxTextCharacters) {
     throw new KnowledgeRuntimeStoreCorruptError();
@@ -6215,13 +5608,6 @@ function requireRuntimeTextWithinLimit(text: string, maxTextCharacters: number):
   return text;
 }
 
-/**
- * Serializes one validated Runtime value and enforces the persisted-text bound.
- *
- * @param value - Runtime value to serialize
- * @param maxTextCharacters - Configured inclusive character limit
- * @returns Bounded JSON text
- */
 function stringifyBoundedRuntimeValue(value: unknown, maxTextCharacters: number): string {
   try {
     const text = JSON.stringify(value);
@@ -6235,7 +5621,6 @@ function stringifyBoundedRuntimeValue(value: unknown, maxTextCharacters: number)
   }
 }
 
-/** Measures one already-validated candidate without reclassifying persisted corruption. */
 function serializedRuntimeValueExceedsLimit(value: unknown, maxTextCharacters: number): boolean {
   try {
     const text = JSON.stringify(value);
@@ -6247,12 +5632,6 @@ function serializedRuntimeValueExceedsLimit(value: unknown, maxTextCharacters: n
   }
 }
 
-/**
- * Strictly validates one queue retained by a legacy outer envelope.
- *
- * @param slot - Legacy Bundle queue slot
- * @returns Detached current queue snapshot
- */
 function requireLegacyQueueSlot(slot: KnowledgeRuntimeBundleSlot): IngestQueueSnapshot {
   const parsed = parseIngestQueueSnapshot(slot.value);
   if (
@@ -6265,11 +5644,6 @@ function requireLegacyQueueSlot(slot: KnowledgeRuntimeBundleSlot): IngestQueueSn
   return cloneJson(parsed.value);
 }
 
-/**
- * Strictly validates one Manifest retained by a legacy outer envelope.
- *
- * @param slot - Legacy Bundle Manifest slot
- */
 function assertLegacyManifestSlot(slot: KnowledgeRuntimeBundleSlot): void {
   const parsed = parseSourceManifest(slot.value);
   if (
@@ -6292,12 +5666,6 @@ function assertLegacyManifestSlot(slot: KnowledgeRuntimeBundleSlot): void {
   }
 }
 
-/**
- * Migrates one empty legacy Review slot without fabricating record-level intent.
- *
- * @param slot - Legacy outer-envelope Review slot
- * @returns Strict empty Review-v2 slot
- */
 function migrateLegacyReviewSlot(slot: KnowledgeRuntimeBundleSlot): KnowledgeRuntimeBundleSlot {
   if (isRecord(slot.value) && slot.value.version === CHANGESET_REVIEW_SNAPSHOT_VERSION) {
     const parsed = parseChangeSetReviewSnapshot(slot.value);
@@ -6332,11 +5700,6 @@ function migrateLegacyReviewSlot(slot: KnowledgeRuntimeBundleSlot): KnowledgeRun
   };
 }
 
-/**
- * Rejects Queue states whose in-flight review or apply evidence cannot be upgraded safely.
- *
- * @param snapshot - Strict Queue-v3 snapshot retained by runtime v1
- */
 function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
   if (snapshot.pendingReviews.length > 0 || snapshot.reviewRejections.length > 0) {
     throw new KnowledgeRuntimeMigrationUnsafeError("queue_review_state_present", snapshot.bundleId);
@@ -6353,13 +5716,6 @@ function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
   }
 }
 
-/**
- * Adds the v3 observation journal without inventing tokens for legacy inputs.
- *
- * @param value - Strictly shaped runtime-v2 JSON
- * @param runtimeId - New stable runtime identity generated outside the transform
- * @returns Strict detached runtime-v3 snapshot
- */
 function migrateRuntimeV2ToV3Snapshot(
   value: unknown,
   runtimeId: string
@@ -6442,7 +5798,6 @@ function migrateRuntimeV2ToV3Snapshot(
   return cloneJson(validated.data);
 }
 
-/** Creates the pending projection used to re-run one unproved legacy completion. */
 function demoteLegacyCompletedJob(job: ReusableCompletedJob): KnowledgeIngestJob {
   return {
     id: job.id,
@@ -6460,13 +5815,6 @@ function demoteLegacyCompletedJob(job: ReusableCompletedJob): KnowledgeIngestJob
   };
 }
 
-/**
- * Demotes current legacy completions that have no durable success proof.
- *
- * Queue history, attempts, observations, reruns, and source high-watermarks are
- * retained byte-for-byte. Only the unsafe terminal projection changes, along
- * with the startup execution gate when the Queue was running.
- */
 function migrateRuntimeV3Queue(
   previous: PreviousKnowledgeRuntimeStoreSnapshot,
   queue: IngestQueueSnapshot,
@@ -6519,7 +5867,6 @@ function migrateRuntimeV3Queue(
   return cloneJson(parsed.value);
 }
 
-/** Strictly parses one runtime-v3 envelope without imposing v4-only semantics. */
 function parsePreviousKnowledgeRuntimeStoreSnapshot(
   value: unknown
 ): PreviousKnowledgeRuntimeStoreSnapshot {
@@ -6535,7 +5882,6 @@ function parsePreviousKnowledgeRuntimeStoreSnapshot(
   return cloneJson(snapshot);
 }
 
-/** Adds the v4 exact-completion proof fence through one atomic transform. */
 function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV4 {
   const previous = parsePreviousKnowledgeRuntimeStoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6567,7 +5913,6 @@ function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   });
 }
 
-/** Strictly parses one runtime-v4 envelope before installing the downgrade fence. */
 function parseRuntimeV4StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV4 {
   const parsed = runtimeV4StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
@@ -6608,7 +5953,6 @@ function parseRuntimeV4StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
   return cloneJson(snapshot);
 }
 
-/** Installs the runtime-v5 source-retirement downgrade fence without changing subsystem slots. */
 function migrateRuntimeV4ToV5Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV5 {
   const previous = parseRuntimeV4StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6621,7 +5965,6 @@ function migrateRuntimeV4ToV5Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   });
 }
 
-/** Strictly parses one runtime-v5 envelope before installing the forward-review fence. */
 function parseRuntimeV5StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV5 {
   const parsed = runtimeV5StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
@@ -6635,7 +5978,6 @@ function parseRuntimeV5StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
   return cloneJson(snapshot);
 }
 
-/** Adds an empty dedicated forward-review namespace through one atomic transform. */
 function migrateRuntimeV5ToV6Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV6 {
   const previous = parseRuntimeV5StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6649,7 +5991,6 @@ function migrateRuntimeV5ToV6Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   });
 }
 
-/** Strictly parses one Runtime-v6 envelope and every pending-only v1 forward slot. */
 function parseRuntimeV6StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV6 {
   const parsed = runtimeV6StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
@@ -6690,7 +6031,6 @@ function parseRuntimeV6StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
   return cloneJson(snapshot);
 }
 
-/** Migrates every v1 pending forward slot into v2 while preserving publication events. */
 function migrateRuntimeV6ToV7Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV7 {
   const previous = parseRuntimeV6StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6707,7 +6047,6 @@ function migrateRuntimeV6ToV7Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   });
 }
 
-/** Strictly parses one Runtime-v7 envelope before the forward-Apply migration. */
 function parseRuntimeV7StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV7 {
   const parsed = runtimeV7StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
@@ -6740,7 +6079,6 @@ function parseRuntimeV7StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
   return cloneJson(snapshot);
 }
 
-/** Adds empty dedicated forward-Apply state through one atomic outer migration. */
 function migrateRuntimeV7ToV8Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV8 {
   const previous = parseRuntimeV7StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6758,7 +6096,6 @@ function migrateRuntimeV7ToV8Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   return cloneJson(parsed.data);
 }
 
-/** Strictly parses one Runtime-v8 envelope before lifecycle-lineage migration. */
 function parseRuntimeV8StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV8 {
   const parsed = runtimeV8StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
@@ -6822,7 +6159,6 @@ function parseRuntimeV8StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
   return cloneJson(snapshot);
 }
 
-/** Migrates v8 active heads into v9 retained source bases and empty terminal ledgers. */
 function migrateRuntimeV8ToV9Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
   const previous = parseRuntimeV8StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
@@ -6876,22 +6212,10 @@ function migrateRuntimeV8ToV9Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
   });
 }
 
-/** Migrates one Runtime-v7 envelope through both supported forward lifecycle upgrades. */
 function migrateRuntimeV7ToV9Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
   return migrateRuntimeV8ToV9Snapshot(migrateRuntimeV7ToV8Snapshot(value));
 }
 
-/**
- * Performs the constrained v1 migration and adds the v3 observation journal.
- *
- * The migration preserves Queue, Manifest, and scalar allocator floors,
- * upgrades empty Review slots, and refuses all states carrying recovery work.
- * Both format changes occur inside one atomic file transform.
- *
- * @param value - Unknown parsed runtime JSON
- * @param runtimeId - New stable runtime identity generated outside the transform
- * @returns Strict detached runtime-v3 snapshot
- */
 function migrateLegacyRuntimeSnapshot(
   value: unknown,
   runtimeId: string
@@ -6936,23 +6260,10 @@ function migrateLegacyRuntimeSnapshot(
   return migrateRuntimeV2ToV3Snapshot(previous, runtimeId);
 }
 
-/**
- * Compares identifiers using deterministic code-unit ordering.
- *
- * @param left - First identifier
- * @param right - Second identifier
- * @returns Negative, zero, or positive ordering result
- */
 function compareIdentifiers(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/**
- * Creates the strict revision-zero Queue observed before a Bundle has durable work.
- *
- * @param bundleId - Bundle whose Queue slot is absent
- * @returns Detached empty current-version Queue snapshot
- */
 function createEmptyRuntimeQueueSnapshot(bundleId: string): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -6968,12 +6279,6 @@ function createEmptyRuntimeQueueSnapshot(bundleId: string): IngestQueueSnapshot 
   };
 }
 
-/**
- * Creates the strict revision-zero Review Store observed before a Bundle has records.
- *
- * @param bundleId - Bundle whose Review slot is absent
- * @returns Detached empty current-version Review snapshot
- */
 function createEmptyRuntimeReviewSnapshot(bundleId: string): ChangeSetReviewSnapshot {
   return {
     version: CHANGESET_REVIEW_SNAPSHOT_VERSION,
@@ -6983,7 +6288,6 @@ function createEmptyRuntimeReviewSnapshot(bundleId: string): ChangeSetReviewSnap
   };
 }
 
-/** Detects Queue state proving that startup write recovery is still unresolved. */
 function queueHasStartupWriteRecoveryEvidence(snapshot: IngestQueueSnapshot): boolean {
   return (
     snapshot.applyClaim !== undefined ||
@@ -6997,14 +6301,12 @@ function queueHasStartupWriteRecoveryEvidence(snapshot: IngestQueueSnapshot): bo
   );
 }
 
-/** Selects accepted Review classifications that are terminal for startup release. */
 function acceptedClassificationIsTerminal(
   classification: NoJournalApplyRecoveryClassification
 ): boolean {
   return classification.kind === "committed" || classification.kind === "abandoned";
 }
 
-/** Checks whether one Queue job retains the immutable identity of an apply claim. */
 function queueJobMatchesApplyClaim(
   job: KnowledgeIngestJob | undefined,
   claim: IngestApplyClaimMarker
@@ -7021,7 +6323,6 @@ function queueJobMatchesApplyClaim(
   );
 }
 
-/** Replaces one Queue job while preserving the order of every retained record. */
 function replaceRuntimeQueueJob(
   snapshot: IngestQueueSnapshot,
   replacement: KnowledgeIngestJob
@@ -7032,13 +6333,11 @@ function replaceRuntimeQueueJob(
   };
 }
 
-/** Exact non-applying Queue transition that may publish no-change success. */
 interface RuntimeNoChangesQueueTransition {
   processing: Extract<KnowledgeIngestJob, { status: "processing" }>;
   completed: Extract<KnowledgeIngestJob, { status: "completed" }>;
 }
 
-/** Reports whether a candidate attempts any non-applying Queue completion. */
 function hasProtectedNoChangesCompletion(
   current: IngestQueueSnapshot | null,
   candidate: IngestQueueSnapshot
@@ -7051,7 +6350,6 @@ function hasProtectedNoChangesCompletion(
   });
 }
 
-/** Reconstructs the only Queue projection accepted for a no-change commit. */
 function projectRuntimeNoChangesQueueTransition(
   current: IngestQueueSnapshot,
   candidate: IngestQueueSnapshot
@@ -7095,7 +6393,6 @@ function projectRuntimeNoChangesQueueTransition(
   return exactJsonValuesEqual(expected, candidate) ? { processing, completed } : null;
 }
 
-/** Creates the exact Manifest revision published with a no-change Queue terminal. */
 function createNoChangesCommittedManifest(
   manifest: SourceManifest,
   source: SourceManifestEntry,
@@ -7130,7 +6427,6 @@ function createNoChangesCommittedManifest(
   };
 }
 
-/** Validates and projects one atomic no-change Manifest mutation. */
 function projectRuntimeNoChangesManifestCommit(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7286,14 +6582,6 @@ function projectRuntimeNoChangesManifestCommit(
   return createNoChangesCommittedManifest(manifest.value, source, marker);
 }
 
-/**
- * Reconstructs the only legal accepted-Review claim transition.
- *
- * @param state - Shared Runtime envelope containing the authoritative Review
- * @param current - Queue before the accepted claim is established
- * @param candidate - Proposed next Queue revision
- * @returns Whether candidate is the exact `beginReviewApply` projection
- */
 function acceptedClaimProjectionMatches(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7388,13 +6676,6 @@ function acceptedClaimProjectionMatches(
   return exactJsonValuesEqual(expected, candidate);
 }
 
-/**
- * Preserves every accepted-but-not-started Queue anchor across generic writes.
- *
- * Watcher enqueue may update only the active job's rerun flag and monotonic
- * timestamp. Starting one accepted apply is handled separately by the exact
- * accepted-claim projection and therefore never reaches this comparison.
- */
 function acceptedNotStartedAnchorsArePreserved(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7444,21 +6725,6 @@ function acceptedNotStartedAnchorsArePreserved(
   return true;
 }
 
-/**
- * Keeps Queue observations monotonic and consumes their exact bound journal entries.
- *
- * Every advance requires a first-write-wins binding for the same Bundle,
- * source, revision, content hash, and pipeline fingerprint. Queue replacement,
- * bound-to-consumed transition, and older-observation supersession are then
- * committed by the caller in the same shared-envelope transform.
- *
- * @param state - Current strict runtime envelope
- * @param current - Current Queue slot, or null before its first write
- * @param candidate - Candidate next Queue snapshot
- * @param settledAt - Runtime-owned settlement time
- * @param authority - Opaque capability presented by the enqueue caller
- * @returns Updated observation journals, or null when authority is invalid
- */
 function consumeQueueSourceObservations(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot | null,
@@ -7559,13 +6825,6 @@ function consumeQueueSourceObservations(
   return inputRevisions;
 }
 
-/**
- * Reconstructs startup recovery of one exact interrupted applying claim.
- *
- * @param current - Queue still carrying a processing apply behind the startup gate
- * @param candidate - Proposed sticky recovery-required Queue revision
- * @returns Whether candidate is the exact `recoverOnStartup` projection
- */
 function startupApplyRecoveryProjectionMatches(
   current: IngestQueueSnapshot,
   candidate: IngestQueueSnapshot
@@ -7625,14 +6884,6 @@ function startupApplyRecoveryProjectionMatches(
   return exactJsonValuesEqual(expected, candidate);
 }
 
-/**
- * Compares recovery-owned job state while allowing only watcher bookkeeping.
- *
- * Processing and awaiting-review jobs may receive a newer source observation,
- * which changes `rerunRequested` and monotonically advances `updatedAt` without
- * changing apply/review authority. Failed and completed recovery evidence is
- * terminal and remains byte-exact.
- */
 function protectedQueueJobProjectionMatches(
   current: KnowledgeIngestJob | undefined,
   candidate: KnowledgeIngestJob | undefined
@@ -7661,7 +6912,6 @@ function protectedQueueJobProjectionMatches(
   );
 }
 
-/** Creates the Queue marker projected by one exact committed active journal. */
 function createRuntimeApplyCommitMarker(
   journal: CommittedChangeSetTransactionJournal
 ): NonNullable<IngestQueueSnapshot["applyCommit"]> {
@@ -7676,14 +6926,6 @@ function createRuntimeApplyCommitMarker(
   };
 }
 
-/**
- * Reconstructs completion of the current claim from the exact committed journal.
- *
- * @param state - Shared envelope whose committed journal and ledger own the marker
- * @param current - Queue carrying the applying claim
- * @param candidate - Proposed commit-pending acknowledgement Queue revision
- * @returns Whether candidate is the exact `resolveApplyRecovery` projection
- */
 function applyCommitProjectionMatches(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7769,14 +7011,6 @@ function applyCommitProjectionMatches(
   return exactJsonValuesEqual(expected, candidate);
 }
 
-/**
- * Reconstructs the only legal commit-marker finalization Queue revision.
- *
- * @param state - Shared envelope whose global journal must already be clear
- * @param current - Queue retaining the exact pending acknowledgement marker
- * @param candidate - Proposed startup-gated Queue after marker removal
- * @returns Whether candidate is the exact `finalizeApplyRecovery` projection
- */
 function applyCommitFinalizationProjectionMatches(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7813,7 +7047,6 @@ function applyCommitFinalizationProjectionMatches(
   return exactJsonValuesEqual(expected, candidate);
 }
 
-/** Preserves an existing claim or marker while a protected gate remains unchanged. */
 function protectedQueueEvidenceIsPreserved(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot,
@@ -7857,13 +7090,6 @@ function protectedQueueEvidenceIsPreserved(
   );
 }
 
-/**
- * Keeps all Runtime recovery gates monotonic across the generic Queue CAS facade.
- *
- * Queue validation proves the evidence required by recovery/commit controls,
- * while the outer Runtime parse additionally binds every commit marker to its
- * exact ledger. Only the dedicated release transform may reach `running`.
- */
 function protectedQueueControlTransitionIsAllowed(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot | null,
@@ -7921,13 +7147,6 @@ function protectedQueueControlTransitionIsAllowed(
   return applyCommitFinalizationProjectionMatches(state, current, candidate);
 }
 
-/**
- * Sorts accepted Reviews independently of persisted insertion order.
- *
- * @param left - First immutable accepted record
- * @param right - Second immutable accepted record
- * @returns Stable timestamp then identifier ordering
- */
 function compareAcceptedReviewRecords(
   left: AcceptedChangeSetReviewRecord,
   right: AcceptedChangeSetReviewRecord
@@ -7937,21 +7156,12 @@ function compareAcceptedReviewRecords(
   );
 }
 
-/** Requires a non-empty runtime identifier. */
 function assertIdentifier(value: string, field: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must contain non-whitespace text`);
   }
 }
 
-/**
- * Replaces or appends one Bundle slot in deterministic key order.
- *
- * @param slots - Current detached slots
- * @param bundleId - Bundle to replace
- * @param value - Complete replacement value
- * @returns New sorted slot collection
- */
 function replaceBundleSlot(
   slots: readonly KnowledgeRuntimeBundleSlot[],
   bundleId: string,
@@ -7966,7 +7176,6 @@ function replaceBundleSlot(
   ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
 }
 
-/** Reads one dedicated forward Review slot without widening generic subsystem storage. */
 function findForwardRevisionReviewSlot(
   state: KnowledgeRuntimeStoreSnapshot,
   bundleId: string
@@ -7974,7 +7183,6 @@ function findForwardRevisionReviewSlot(
   return state.forwardRevisionReviews.find((slot) => slot.bundleId === bundleId)?.value ?? null;
 }
 
-/** Projects one strict proposal authority from exactly one Runtime envelope. */
 function projectForwardRevisionProposalAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   query: Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1>
@@ -8205,7 +7413,6 @@ function projectForwardRevisionProposalAuthority(
   });
 }
 
-/** Projects the exact decision-time acceptance tuple from a current Runtime envelope. */
 function projectForwardRevisionAcceptanceAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -8260,13 +7467,6 @@ function projectForwardRevisionAcceptanceAuthority(
   });
 }
 
-/**
- * Projects complete validation proof for one exact pending v2 proposal.
- *
- * The Runtime revision/digest are current at this read. Manifest/source facts
- * must still equal the proposal-time tuple; the Vault hash remains external and
- * is only correlated here, never freshly observed or authenticated.
- */
 function projectForwardRevisionValidationAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   query: Readonly<KnowledgeForwardRevisionValidationAuthorityQueryV1>
@@ -8461,7 +7661,6 @@ function projectForwardRevisionValidationAuthority(
   }
 }
 
-/** Requires a validated capability projection to match current CAS authority exactly. */
 function assertForwardRevisionDecisionValidationProjection(
   projection: Readonly<KnowledgeForwardRevisionValidationCapabilityProjectionV1>,
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
@@ -8501,7 +7700,6 @@ function assertForwardRevisionDecisionValidationProjection(
   }
 }
 
-/** Creates one detached frozen decision result without widening terminal authority. */
 function createForwardRevisionDecisionResult(
   outcome: KnowledgeForwardRevisionDecisionResult["outcome"],
   decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>,
@@ -8518,7 +7716,6 @@ function createForwardRevisionDecisionResult(
   });
 }
 
-/** Projects exact accepted/rejected command replay from a terminal entry. */
 function projectForwardRevisionDecisionReplay(
   entry: Readonly<KnowledgeForwardRevisionTerminalReviewEntryV2>,
   command: Readonly<KnowledgeForwardRevisionReviewCommandV1>
@@ -8556,7 +7753,6 @@ function projectForwardRevisionDecisionReplay(
   }
 }
 
-/** Parses one strict Manifest during semantic projection. */
 function thisOrNullManifest(value: unknown): SourceManifest | null {
   const parsed = parseSourceManifest(value);
   if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
@@ -8565,7 +7761,6 @@ function thisOrNullManifest(value: unknown): SourceManifest | null {
   return parsed.value;
 }
 
-/** Parses one strict legacy accepted Review namespace during semantic projection. */
 function thisOrNullReview(value: unknown): ChangeSetReviewSnapshot | null {
   const parsed = parseChangeSetReviewSnapshot(value);
   if (!parsed.ok || !validateChangeSetReviewSnapshot(parsed.value).valid) {
@@ -8574,7 +7769,6 @@ function thisOrNullReview(value: unknown): ChangeSetReviewSnapshot | null {
   return parsed.value;
 }
 
-/** Requires exact current and historical authority for one pending forward proposal. */
 function assertForwardRevisionPublicationAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   evidence: Readonly<CapturedForwardRevisionPublicationEvidence>
@@ -8791,7 +7985,6 @@ function assertForwardRevisionPublicationAuthority(
   });
 }
 
-/** Groups forward-Apply ledgers by Bundle without exposing their values to hint listeners. */
 function groupForwardRevisionApplyCommitsByBundle(
   records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]
 ): ReadonlyMap<string, readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]> {
@@ -8804,13 +7997,6 @@ function groupForwardRevisionApplyCommitsByBundle(
   return grouped;
 }
 
-/**
- * Finds Bundle ids whose Studio-visible Runtime slots changed in one commit.
- *
- * @param current - Atomic envelope before the transform
- * @param next - Atomic envelope proposed by the transform
- * @returns Stable Bundle ids requiring an authoritative Studio reload
- */
 function findStudioChangedBundleIds(
   current: KnowledgeRuntimeStoreSnapshot,
   next: KnowledgeRuntimeStoreSnapshot
@@ -8904,7 +8090,6 @@ function findStudioChangedBundleIds(
     .sort(compareIdentifiers);
 }
 
-/** Replaces one source journal while retaining deterministic Bundle/source ordering. */
 function replaceInputRevisionSource(
   bundles: readonly KnowledgeRuntimeInputRevisionBundle[],
   bundleId: string,
@@ -8929,7 +8114,6 @@ function replaceInputRevisionSource(
   ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
 }
 
-/** Reconstructs a Queue-safe bound observation from runtime-owned identity. */
 function createBoundSourceInputObservation(
   bundleId: string,
   sourceId: string,
@@ -8946,7 +8130,6 @@ function createBoundSourceInputObservation(
   };
 }
 
-/** Throws a sanitized cancellation without retaining the signal reason. */
 function throwIfRuntimeExecutionProofAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   const error = new Error("The knowledge Runtime execution proof was aborted");
@@ -8954,14 +8137,6 @@ function throwIfRuntimeExecutionProofAborted(signal: AbortSignal): void {
   throw error;
 }
 
-/**
- * Reads one Bundle slot from a detached runtime snapshot.
- *
- * @param state - Strict runtime state
- * @param collection - Queue, review, or manifest namespace
- * @param bundleId - Bundle key
- * @returns Stored unknown JSON or null
- */
 function findBundleSlot(
   state: KnowledgeRuntimeStoreSnapshot,
   collection: StudioHintBundleCollection,
@@ -8970,12 +8145,6 @@ function findBundleSlot(
   return state[collection].find((slot) => slot.bundleId === bundleId)?.value ?? null;
 }
 
-/**
- * Returns the next exact global runtime-envelope revision.
- *
- * @param state - Current strict runtime state
- * @returns Next safe integer revision
- */
 function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
   if (state.revision === Number.MAX_SAFE_INTEGER) {
     throw new KnowledgeRuntimeStoreCorruptError();
@@ -8983,7 +8152,6 @@ function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
   return state.revision + 1;
 }
 
-/** Creates the source-specific anti-stale token returned by one Runtime projection. */
 function createSourceRetirementExpectedToken(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -9001,7 +8169,6 @@ function createSourceRetirementExpectedToken(
   );
 }
 
-/** Returns whether an accepted Review has already reached one terminal durable outcome. */
 function acceptedReviewIsTerminalForRetirement(
   state: KnowledgeRuntimeStoreSnapshot,
   bundleId: string,
@@ -9018,7 +8185,6 @@ function acceptedReviewIsTerminalForRetirement(
   return matchingLedgers.length === 0 && abandonments.length === 1;
 }
 
-/** Computes stable Bundle-wide blockers for the deliberately conservative MVP transition. */
 function collectSourceRetirementBlockers(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
@@ -9074,7 +8240,6 @@ function collectSourceRetirementBlockers(
   return order.filter((blocker) => blockers.has(blocker));
 }
 
-/** Reads all strict active forward overlays from one current Manifest. */
 function listManifestForwardRevisionOverlays(
   manifest: SourceManifest
 ): readonly Readonly<KnowledgeForwardRevisionOverlayEntry>[] {
@@ -9085,20 +8250,12 @@ function listManifestForwardRevisionOverlays(
   return parsed.value.entries;
 }
 
-/** Reports whether one active source owns any forward-revision overlay. */
 function sourceOwnsForwardRevisionOverlay(manifest: SourceManifest, sourceId: string): boolean {
   return listManifestForwardRevisionOverlays(manifest).some(
     (overlay) => overlay.sourceId === sourceId
   );
 }
 
-/**
- * Resolves the exact active forward overlays superseded by one ordinary Source Apply.
- *
- * Untouched overlays remain valid. A touched overlay is authorized only when the
- * accepted file mutation names the same canonical page and primary source and
- * compares against the exact effective forward head.
- */
 function listSourceApplySupersededForwardRevisionOverlays(
   state: KnowledgeRuntimeStoreSnapshot,
   transaction: Pick<ChangeSetTransactionJournal, "bundleId" | "jobClaim" | "changeSet">
@@ -9134,14 +8291,12 @@ function listSourceApplySupersededForwardRevisionOverlays(
   return Object.freeze(superseded);
 }
 
-/** Returns the logical timestamp floor owned by exact touched Forward heads. */
 function getSourceApplyForwardLineageTimestampFloor(
   overlays: readonly Readonly<KnowledgeForwardRevisionOverlayEntry>[]
 ): number {
   return overlays.reduce((floor, overlay) => Math.max(floor, overlay.appliedAt), 0);
 }
 
-/** Projects every Queue field owned by one retired source for exact history comparison. */
 function createRetiredSourceQueueProjection(
   queue: IngestQueueSnapshot | null,
   sourceId: string,
@@ -9167,7 +8322,6 @@ function createRetiredSourceQueueProjection(
   } as unknown as JsonValue;
 }
 
-/** Rejects either insertion or removal of generic Queue history for retired sources. */
 function assertRetiredQueueHistoryPreserved(
   bundleId: string,
   current: IngestQueueSnapshot | null,
@@ -9190,7 +8344,6 @@ function assertRetiredQueueHistoryPreserved(
   }
 }
 
-/** Rejects either insertion or removal of generic Review history for retired sources. */
 function assertRetiredReviewHistoryPreserved(
   bundleId: string,
   current: ChangeSetReviewSnapshot | null,
@@ -9208,7 +8361,6 @@ function assertRetiredReviewHistoryPreserved(
   }
 }
 
-/** Atomically closes pending observations owned only by the source being retired. */
 function terminalizeSourceRetirementObservations(
   inputRevisions: readonly KnowledgeRuntimeInputRevisionBundle[],
   record: KnowledgeSourceRetirementRecord
@@ -9249,7 +8401,6 @@ function terminalizeSourceRetirementObservations(
   });
 }
 
-/** Creates one detached immutable retirement receipt from its durable tombstone. */
 function createSourceRetirementReceipt(
   record: KnowledgeSourceRetirementRecord,
   runtimeRevision: number,
@@ -9271,9 +8422,6 @@ function createSourceRetirementReceipt(
   });
 }
 
-/**
- * Owns one Vault-private atomic envelope and exposes strict subsystem operations.
- */
 interface AuthenticForwardRevisionPublicationRuntimeStoreState {
   readonly file: AtomicRuntimeFile;
   readonly clock: () => number;
@@ -9294,7 +8442,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   private readonly opaqueIdFactory: () => string;
   private readonly studioListeners = new Map<string, Set<() => void>>();
 
-  /** Creates a runtime store over an atomic plaintext-file implementation. */
   constructor(
     private readonly file: AtomicRuntimeFile,
     options: KnowledgeRuntimeStoreOptions = {}
@@ -9333,7 +8480,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Initializes and validates the durable runtime file without overwriting it. */
   async initialize(): Promise<void> {
     try {
       await this.file.read();
@@ -9348,15 +8494,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     await this.readState();
   }
 
-  /** Reads one detached queue snapshot or null. */
   async readQueue(bundleId: string): Promise<unknown> {
     return this.readBundleSlot("queues", bundleId);
   }
 
-  /**
-   * Schedules a separate completed-input attempt without changing history or resuming work.
-   * @param command - Exact completed job and observed Queue revision authorized by the user
-   */
   async reanalyzeCompletedSource(
     command: KnowledgeCompletedSourceReanalysisCommand
   ): Promise<void> {
@@ -9468,7 +8609,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Atomically compares and replaces one complete queue snapshot. */
   async writeQueue(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -9598,20 +8738,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Reads one detached review snapshot or null. */
   async readReview(bundleId: string): Promise<unknown> {
     return this.readBundleSlot("reviews", bundleId);
   }
 
-  /**
-   * Reads strict Queue and Review state from exactly one Runtime envelope.
-   *
-   * Missing subsystem slots are represented by detached revision-zero snapshots;
-   * this method never creates storage or combines results from separate reads.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns One atomic Studio projection with its outer Runtime revision
-   */
   async readStudioBundle(bundleId: string): Promise<KnowledgeRuntimeStudioBundleSnapshot> {
     assertIdentifier(bundleId, "bundleId");
     const state = await this.readState();
@@ -9652,16 +8782,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     };
   }
 
-  /**
-   * Reads dedicated forward Review work from exactly one Runtime envelope.
-   *
-   * The projection retains strict durable proposal or accepted-decision material
-   * for a private product coordinator. It does not mint a Decision or Apply
-   * capability, and React-facing adapters must reduce it to opaque references.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns One bounded forward Studio classification at the outer Runtime revision
-   */
   async readForwardRevisionStudioBundle(
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>> {
@@ -9690,18 +8810,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Atomically terminalizes one exact accepted-ready forward decision before any write.
-   *
-   * The outer Runtime revision is the optimistic claim. The durable accepted
-   * identity is rejoined inside the same transform, and any matching journal,
-   * ledger, overlay, recovery terminal, or prior abandonment prevents a second
-   * terminal outcome.
-   *
-   * @param acceptedIdentityValue - Canonical accepted decision and Apply-claim identity
-   * @param expectedRuntimeRevision - Exact Runtime revision observed by Studio
-   * @returns Newly committed no-write abandonment proof
-   */
   async abandonForwardRevisionAcceptedReady(
     acceptedIdentityValue: unknown,
     expectedRuntimeRevision: number
@@ -9798,15 +8906,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Reads every active source retirement candidate from one atomic Runtime envelope.
-   *
-   * The opaque token binds the complete Runtime and Manifest revision. A later
-   * command never rebases a stale confirmation onto newer durable state.
-   *
-   * @param bundleId - Bundle whose active sources are projected
-   * @returns Immutable candidate list and exact Runtime revisions
-   */
   async readSourceRetirementCandidates(
     bundleId: string
   ): Promise<KnowledgeSourceRetirementCandidateSnapshot> {
@@ -9855,16 +8954,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Atomically moves one quiescent active source into protected retirement history.
-   *
-   * Queue, Review, input-revision, ledger, and Wiki bytes remain unchanged. The
-   * transition only changes the active Manifest projection and its exact Runtime
-   * envelope revision. Exact replay returns the original receipt without writes.
-   *
-   * @param commandValue - Strict token-bound user confirmation
-   * @returns Durable retirement receipt or exact replay
-   */
   async retireSourceAtomically(commandValue: unknown): Promise<KnowledgeSourceRetirementReceipt> {
     const parsed = sourceRetirementCommandSchema.safeParse(commandValue);
     if (!parsed.success) {
@@ -9989,16 +9078,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /**
-   * Reads current applied Wiki provenance from exactly one Runtime envelope.
-   *
-   * Only current Manifest page bases written by an exact historical ledger-backed
-   * accepted Review are projected. The frozen detached result is retrieval evidence
-   * only and grants no durable or file-mutation authority.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Immutable current applied provenance and Runtime revision
-   */
   async readAppliedProvenance(
     bundleId: string
   ): Promise<KnowledgeRuntimeAppliedProvenanceSnapshot> {
@@ -10024,18 +9103,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Reads a metadata-only index of known applied outputs for one Wiki path.
-   *
-   * The Runtime envelope is read once. Every item requires a unique exact Apply
-   * ledger ↔ accepted Review join, but accepted body bytes are discarded before
-   * the frozen result crosses this boundary. The private authority on each item
-   * is read-only and must remain behind an upper-layer opaque reference.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param pagePath - Canonical Vault-relative Wiki path
-   * @returns Immutable metadata and private detail-rejoin authorities
-   */
   async readKnownAppliedWikiOutputIndex(
     bundleId: string,
     pagePath: string
@@ -10087,19 +9154,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Rejoins one private known-output identity against a fresh Runtime envelope.
-   *
-   * At most the selected accepted body is returned, and only after the exact
-   * ledger, Review, ChangeSet digest, Manifest intent, path, and content hash are
-   * re-proved. This method never reads or writes the Vault and grants no Apply
-   * or Restore authority.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param pagePath - Canonical Vault-relative Wiki path
-   * @param authority - Private identity obtained from the metadata index
-   * @returns Bounded exact body, too-large metadata, or a stale result
-   */
   async readKnownAppliedWikiOutputDetail(
     bundleId: string,
     pagePath: string,
@@ -10137,16 +9191,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Re-proves one selected known output and current page from one Runtime envelope.
-   *
-   * The returned value is read-only proof material. The query's Vault hash is an
-   * external observation and is not authenticated by this read; publication must
-   * still perform its own fresh Runtime/Vault sandwich and atomic authority check.
-   *
-   * @param value - Strict selected-output and observed-current query
-   * @returns Detached proposal authority, or null for any semantic staleness
-   */
   async readForwardRevisionProposalAuthority(
     value: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionProposalAuthorityV1> | null> {
@@ -10155,17 +9199,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return projectForwardRevisionProposalAuthority(state, query);
   }
 
-  /**
-   * Reads complete deterministic-validation proof from one Runtime envelope.
-   *
-   * The returned Runtime revision/digest are current for this read while the
-   * Manifest/source tuple must still exactly equal the proposal-time current
-   * tuple. The proposal's Vault hash remains an external observation and is not
-   * made fresh or self-authentic by this Runtime-only projection.
-   *
-   * @param value - Strict identity of one exact pending v2 proposal
-   * @returns Detached complete proof, or null for semantic staleness
-   */
   async readForwardRevisionValidationAuthority(
     value: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null> {
@@ -10174,7 +9207,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return projectForwardRevisionValidationAuthority(state, query);
   }
 
-  /** Reads one exact accepted forward decision and its current source base. */
   async readForwardRevisionApplyAuthority(
     queryValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyAuthority> | null> {
@@ -10183,7 +9215,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return projectForwardRevisionApplyAuthority(state, query);
   }
 
-  /** Atomically publishes the one prepared journal authorized by a genuine fresh capability. */
   async beginForwardRevisionApply(
     authorizationValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1>> {
@@ -10273,7 +9304,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Re-proves the deterministic prepared journal after an ambiguous atomic write result. */
   async confirmForwardRevisionApplyBegin(
     projection: Readonly<KnowledgeForwardRevisionApplyCapabilityProjectionV1>
   ): Promise<Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1> | undefined> {
@@ -10290,7 +9320,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Reads the one detached active forward-Apply journal without requiring a live UI lease. */
   async readActiveForwardRevisionApply(): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1> | null> {
     const state = await this.readState();
     return state.activeForwardRevisionApply === null
@@ -10298,7 +9327,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       : snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
   }
 
-  /** Atomically advances one exact active journal through a genuine observation capability. */
   async advanceForwardRevisionApply(
     authorizationValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1>> {
@@ -10371,7 +9399,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Re-proves one exact journal advance after an ambiguous atomic-file result. */
   async confirmForwardRevisionApplyAdvance(
     projectionValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1> | undefined> {
@@ -10389,7 +9416,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Atomically installs the Manifest overlay and ledger, then clears one committed journal. */
   async finalizeForwardRevisionApply(
     authorizationValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord>> {
@@ -10436,7 +9462,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Rejoins one exact finalized ledger after an ambiguous atomic-file result. */
   async confirmForwardRevisionApplyFinalization(
     projectionValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined> {
@@ -10452,7 +9477,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Atomically clears one sticky journal into a no-write terminal proof. */
   async terminalizeForwardRevisionRecovery(
     authorizationValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>> {
@@ -10504,7 +9528,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Rejoins one recovery terminal after an ambiguous atomic Runtime write. */
   async confirmForwardRevisionRecoveryTerminalization(
     projectionValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined> {
@@ -10517,7 +9540,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Reads one detached dedicated forward-revision Review snapshot or an empty view. */
   async readForwardRevisionReview(
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionReviewSnapshotV2>> {
@@ -10529,7 +9551,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       : snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
   }
 
-  /** Reads one exact pending proposal selected by a strict decision command. */
   async readForwardRevisionPendingForDecision(
     commandValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionDecisionAdmission> | null> {
@@ -10565,18 +9586,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Atomically publishes one dedicated pending forward-revision proposal.
-   *
-   * External evidence is detached before durable access. The Runtime allocates
-   * request revision and time only inside its single-file transform, after exact
-   * replay lookup and complete current/historical authority re-proof. Legacy
-   * Queue and Review slots, Manifest, allocator, transaction, and Apply ledger
-   * are byte-preserved by this proposal-only transition.
-   *
-   * @param value - Descriptor-safe intent, selected body, and historical proof
-   * @returns Stable original publication receipt or exact byte-preserving replay
-   */
   async publishForwardRevisionProposalAtomically(
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ): Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>> {
@@ -10744,7 +9753,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Atomically changes one exact pending forward Review entry into terminal state. */
   async decideForwardRevisionAtomically(
     authorizationValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionDecisionResult>> {
@@ -10930,7 +9938,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Re-reads and proves one exact terminal decision after an ambiguous atomic write result. */
   async confirmForwardRevisionDecision(
     commandValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionDecisionResult> | undefined> {
@@ -10955,17 +9962,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /**
-   * Reads the latest exact Runtime-proven source outcome from one envelope.
-   *
-   * The result remains only a read authority: production admission must still
-   * re-read every projected Vault page and compare its exact SHA-256 before it
-   * skips a new source observation.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable registered source identifier
-   * @returns Detached deeply frozen authority, or null when proof is absent
-   */
   async readSourceFreshnessAuthority(
     bundleId: string,
     sourceId: string
@@ -10981,17 +9977,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return projectRuntimeSourceFreshnessAuthority(state, manifest, entry);
   }
 
-  /**
-   * Atomically rejects one exact pending Review and cancels its Queue attempt.
-   *
-   * The command is captured once before durable access and may express only
-   * literal per-change rejection. A transport failure is considered successful
-   * only when one exact terminal Queue+Review projection can be re-read.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param command - Untrusted whole-proposal Reject command
-   * @returns Exact terminal identity and committed subsystem revisions
-   */
   async rejectReviewAtomically(
     bundleId: string,
     command: unknown
@@ -11011,16 +9996,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /**
-   * Subscribes to value-free hints after Queue or Review commits for one Bundle.
-   *
-   * Events are non-authoritative. Callers must reload through
-   * {@link readStudioBundle}; listener failure cannot affect durable state.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param listener - Best-effort reload hint callback
-   * @returns Idempotent unsubscribe callback
-   */
   subscribeStudioBundle(bundleId: string, listener: () => void): () => void {
     assertIdentifier(bundleId, "bundleId");
     if (typeof listener !== "function") {
@@ -11039,7 +10014,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     };
   }
 
-  /** Atomically compares and replaces one complete review snapshot. */
   async writeReview(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -11105,12 +10079,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Reads one detached Source Manifest or null. */
   async readManifest(bundleId: string): Promise<unknown> {
     return this.readBundleSlot("manifests", bundleId);
   }
 
-  /** Atomically compares and replaces one complete Source Manifest. */
   async writeManifest(
     bundleId: string,
     manifest: SourceManifest,
@@ -11147,16 +10119,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Re-proves one accepted apply before its transaction may observe Wiki files.
-   *
-   * This read-only preflight uses a detached strict request. Prepared-journal
-   * publication repeats the proof inside its atomic runtime transform, so a
-   * concurrent Queue or Review update cannot turn preflight into authority.
-   *
-   * @param request - Strict apply identity produced without Vault file access
-   * @returns Frozen logical-time floor owned by exact touched Forward heads
-   */
   async verifyApplyAuthority(
     request: ChangeSetTransactionAuthorityRequest
   ): Promise<Readonly<ChangeSetTransactionAuthorityProof>> {
@@ -11166,16 +10128,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return Object.freeze({ minimumTimestamp });
   }
 
-  /**
-   * Classifies one accepted Review identity from exactly one runtime snapshot.
-   *
-   * Classification never observes Wiki files and never starts an apply. Queue,
-   * Review, active journal, commit marker, abandonment, allocator, and ledger
-   * evidence are interpreted from the same detached atomic-envelope read.
-   *
-   * @param identity - Accepted identity returned by review startup reconciliation
-   * @returns Exact durable phase or explicit no-journal decision candidate
-   */
   async classifyNoJournalApplyRecovery(
     identity: AcceptedReviewStartupIdentity
   ): Promise<NoJournalApplyRecoveryClassification> {
@@ -11185,18 +10137,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return this.classifyAcceptedApplyState(state, identity.bundleId, record);
   }
 
-  /**
-   * Atomically classifies every accepted Review at one expected Review revision.
-   *
-   * Queue state, accepted records, active journal, commit ledger, and every
-   * returned classification come from the same runtime-envelope read. The
-   * runtime revision is only an optimistic display token; later actions still
-   * re-resolve their opaque reference and repeat full durable authority proof.
-   *
-   * @param bundleId - Bundle whose accepted Reviews must be classified
-   * @param expectedReviewRevision - Review revision reconciled by the startup coordinator
-   * @returns One atomic recovery snapshot or an explicit Review revision miss
-   */
   async loadNoJournalApplyRecoverySnapshot(
     bundleId: string,
     expectedReviewRevision: number
@@ -11253,17 +10193,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     };
   }
 
-  /**
-   * Atomically releases one exact startup-recovery pause after repeating every proof.
-   *
-   * The optimistic Gate result is never authority. Runtime, Review, and Queue
-   * revisions, all Bundle recovery evidence, the Vault-global transaction,
-   * and every accepted Review classification are checked in the same atomic
-   * transform that changes only the target Queue control and revisions.
-   *
-   * @param requestValue - Narrow optimistic observation derived from an observed-clear Gate result
-   * @returns Released, unchanged, stale, or blocked without ambiguous partial state
-   */
   async releaseStartupRecovery(
     requestValue: KnowledgeStartupReleaseRequest
   ): Promise<KnowledgeStartupReleaseResult> {
@@ -11527,18 +10456,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Reloads and fully re-proves one continuation immediately before transaction apply.
-   *
-   * The caller's Bundle is validated against the durable accepted ChangeSet and
-   * current Manifest read-set. This method performs no Wiki file access; the
-   * transaction runtime repeats the same proof atomically when it publishes the
-   * prepared journal.
-   *
-   * @param reference - Opaque recovery id previously returned by classification
-   * @param bundleValue - Current configured Bundle boundary
-   * @returns Detached exact input for ChangeSetTransaction.apply
-   */
   async loadNoJournalApplyContinueInput(
     reference: NoJournalApplyRecoveryReference,
     bundleValue: unknown
@@ -11585,18 +10502,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     };
   }
 
-  /**
-   * Atomically abandons one exact accepted apply before any journal can exist.
-   *
-   * The shared-envelope callback proves an empty global journal, no Queue commit
-   * marker, no source-input ledger, and exact Queue/Review/allocator authority.
-   * Manifest drift deliberately does not prevent abandonment because no write
-   * intent was published. Exact tombstone replay preserves bytes and revisions.
-   *
-   * @param reference - Opaque exact recovery reference
-   * @param requestedAt - Validated explicit decision timestamp
-   * @returns Durable abandonment receipt
-   */
   async abandonNoJournalApply(
     reference: NoJournalApplyRecoveryReference,
     requestedAt: number
@@ -11742,17 +10647,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /**
-   * Atomically records one exact page commit in both Source Manifest and apply ledger.
-   *
-   * Exact ledger replay is a byte-preserving no-op. A new transaction must
-   * re-prove the current active committed journal, receipt, Manifest read-set,
-   * complete final projection, and monotonic source observation in the same
-   * synchronous runtime-file transform that publishes both durable artifacts.
-   *
-   * @param journal - Complete committed transaction with final Manifest intent
-   * @param receipt - Exact public proof derived from the committed journal
-   */
   async recordApplyCommit(
     journal: CommittedChangeSetTransactionJournal,
     receipt: TransactionCommitReceipt
@@ -11921,7 +10815,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Reads the detached Vault-global active transaction journal or null. */
   async readActiveTransaction(): Promise<unknown> {
     const state = await this.readState();
     if (state.activeTransaction === null) {
@@ -11934,7 +10827,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(active);
   }
 
-  /** Atomically compares and replaces the Vault-global active transaction slot. */
   async writeActiveTransaction(
     journal: ChangeSetTransactionJournal,
     expectedToken: TransactionStorageToken | null
@@ -11984,7 +10876,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Atomically compares and clears the Vault-global active transaction slot. */
   async clearActiveTransaction(expectedToken: TransactionStorageToken): Promise<void> {
     await this.updateState((state) => {
       const current =
@@ -12009,7 +10900,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Atomically allocates one strictly newer per-source observation revision. */
   async allocateInputRevision(
     request: AllocateSourceInputRevisionRequest
   ): Promise<SourceInputRevisionAllocation> {
@@ -12108,7 +10998,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Atomically binds one allocated capability to the exact observed payload. */
   async bindInputObservation(
     request: BindSourceInputObservationRequest
   ): Promise<BindSourceInputObservationResult> {
@@ -12246,7 +11135,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Reconciles one observation against the atomically persisted Queue watermark. */
   async settleInputObservation(
     observationToken: string
   ): Promise<SourceInputObservationSettlement> {
@@ -12342,7 +11230,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Loads stable pending source-observation work for restart recovery. */
   async loadInputObservationRecoveryWork(
     bundleId: string
   ): Promise<SourceInputObservationRecoveryWork[]> {
@@ -12385,10 +11272,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     );
   }
 
-  /**
-   * Proves one exact processing Queue attempt, consumed observation, and Manifest
-   * from the same atomic Runtime envelope without changing its bytes or revision.
-   */
   async proveIngestExecution(
     requestValue: Readonly<KnowledgeIngestExecutionProofRequest>,
     signal: AbortSignal
@@ -12492,7 +11375,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return proof;
   }
 
-  /** Migrates a supported v1/v2/v3/v4/v5 envelope through one atomic transform. */
   private async migrateLegacyStore(): Promise<void> {
     let callbackCalled = false;
     let expectedText: string | undefined;
@@ -12604,7 +11486,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     parseRuntimeText(committedText, this.maxTextCharacters);
   }
 
-  /** Reads and clones one subsystem Bundle slot. */
   private async readBundleSlot(
     collection: RuntimeBundleCollection,
     bundleId: string
@@ -12614,11 +11495,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return value === null ? null : cloneJson(value);
   }
 
-  /**
-   * Validates one accepted startup identity before durable state is inspected.
-   *
-   * @param identity - Caller-supplied startup identity
-   */
   private assertAcceptedReviewStartupIdentity(identity: AcceptedReviewStartupIdentity): void {
     const value: unknown = identity;
     if (!isRecord(value) || !isRecord(value.jobClaim)) {
@@ -12658,11 +11534,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /**
-   * Validates one opaque recovery reference before durable state is inspected.
-   *
-   * @param reference - Caller-supplied recovery reference
-   */
   private assertNoJournalApplyRecoveryReference(reference: NoJournalApplyRecoveryReference): void {
     const value: unknown = reference;
     if (
@@ -12681,13 +11552,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /**
-   * Loads the exact accepted Review record represented by one startup identity.
-   *
-   * @param state - Complete atomic runtime snapshot
-   * @param identity - Exact startup identity to revalidate
-   * @returns Detached accepted Review record
-   */
   private requireAcceptedReviewByStartupIdentity(
     state: KnowledgeRuntimeStoreSnapshot,
     identity: AcceptedReviewStartupIdentity
@@ -12715,13 +11579,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(record);
   }
 
-  /**
-   * Resolves an opaque reference back to exactly one immutable accepted record.
-   *
-   * @param state - Complete atomic runtime snapshot
-   * @param reference - Opaque Bundle-scoped recovery reference
-   * @returns Detached accepted Review record
-   */
   private requireAcceptedReviewByReference(
     state: KnowledgeRuntimeStoreSnapshot,
     reference: NoJournalApplyRecoveryReference
@@ -12745,13 +11602,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(matches[0]);
   }
 
-  /**
-   * Loads one strict Queue snapshot required by recovery classification.
-   *
-   * @param state - Complete atomic runtime snapshot
-   * @param bundleId - Bundle whose Queue is required
-   * @returns Detached strict current Queue state
-   */
   private requireNoJournalQueue(
     state: KnowledgeRuntimeStoreSnapshot,
     bundleId: string
@@ -12763,14 +11613,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return this.requireQueueSnapshot(bundleId, raw);
   }
 
-  /**
-   * Classifies one exact accepted record from a single already-loaded envelope.
-   *
-   * @param state - Complete atomic runtime snapshot
-   * @param bundleId - Bundle containing the accepted record
-   * @param record - Exact accepted Review record
-   * @returns Stable durable phase or explicit decision candidate
-   */
   private classifyAcceptedApplyState(
     state: KnowledgeRuntimeStoreSnapshot,
     bundleId: string,
@@ -12979,12 +11821,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     };
   }
 
-  /** Reads and strictly validates the complete atomic runtime envelope. */
   private async readState(): Promise<KnowledgeRuntimeStoreSnapshot> {
     return parseRuntimeText(await this.file.read(), this.maxTextCharacters);
   }
 
-  /** Re-proves one exact proposal wrapper after an uncertain atomic-file result. */
   private async confirmForwardRevisionPublication(
     evidence: Readonly<CapturedForwardRevisionPublicationEvidence>,
     attempted: Readonly<KnowledgeForwardRevisionPublicationReceiptV1>
@@ -13027,7 +11867,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Re-proves one exact tombstone after an uncertain atomic-file result. */
   private async confirmSourceRetirement(
     command: KnowledgeSourceRetirementCommand
   ): Promise<KnowledgeSourceRetirementReceipt | undefined> {
@@ -13052,7 +11891,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Commits one Queue+Review Reject projection inside one Runtime transform. */
   private async commitReviewRejection(
     bundleId: string,
     command: KnowledgeLiteralRejectCommand,
@@ -13092,7 +11930,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     });
   }
 
-  /** Re-reads and proves one exact terminal Reject after an uncertain write result. */
   private async confirmReviewRejection(
     bundleId: string,
     command: KnowledgeLiteralRejectCommand,
@@ -13117,7 +11954,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Runs one synchronous state transform through the atomic file boundary. */
   private async updateState<T>(
     transform: (state: KnowledgeRuntimeStoreSnapshot) => RuntimeMutation<T>
   ): Promise<T> {
@@ -13152,7 +11988,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return result as T;
   }
 
-  /** Publishes isolated post-commit reload hints without carrying durable data. */
   private emitStudioHints(bundleIds: readonly string[]): void {
     for (const bundleId of bundleIds) {
       const listeners = this.studioListeners.get(bundleId);
@@ -13162,22 +11997,12 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           listener();
         } catch {
           // Studio hints are best-effort and never participate in Runtime commit success.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
     }
   }
 
-  /**
-   * Proves every durable reservation required before Wiki file access.
-   *
-   * The Queue and Review own the exact accepted attempt, while the current
-   * Manifest must still satisfy the accepted read-set and monotonic source
-   * ordering. A transaction id already present in the success ledger can never
-   * be reused as unfinished work.
-   *
-   * @param state - Complete atomic runtime snapshot
-   * @param transaction - Exact accepted apply or unfinished transaction about to access files
-   */
   private assertTransactionFileAccessAuthority(
     state: KnowledgeRuntimeStoreSnapshot,
     transaction: KnowledgeApplyAuthorityProof
@@ -13253,15 +12078,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return lineageTimestampFloor;
   }
 
-  /**
-   * Preserves full file-access authority across every shared-envelope mutation.
-   *
-   * Startup parsing deliberately remains byte-preserving for legacy state, but
-   * reading, recovering, or mutating unfinished work must prove the complete
-   * Queue, Review, Manifest, ledger, and source-ordering reservation first.
-   *
-   * @param state - Strict candidate runtime envelope about to be committed
-   */
   private assertUnfinishedTransactionFileAccessAuthority(
     state: KnowledgeRuntimeStoreSnapshot
   ): void {
@@ -13274,7 +12090,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Strictly parses and validates one queue slot. */
   private requireQueueSnapshot(bundleId: string, value: unknown): IngestQueueSnapshot {
     const parsed = parseIngestQueueSnapshot(value);
     const validation = validateIngestQueueSnapshot(value);
@@ -13284,7 +12099,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(parsed.value);
   }
 
-  /** Strictly parses and validates one review slot. */
   private requireReviewSnapshot(bundleId: string, value: unknown): ChangeSetReviewSnapshot {
     const parsed = parseChangeSetReviewSnapshot(value);
     if (
@@ -13297,7 +12111,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(parsed.value);
   }
 
-  /** Strictly parses and validates one Source Manifest slot. */
   private requireManifest(bundleId: string, value: unknown): SourceManifest {
     const parsed = parseSourceManifest(value);
     const validation = validateSourceManifest(value);
@@ -13307,7 +12120,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(parsed.value);
   }
 
-  /** Strictly parses and validates the active transaction slot. */
   private requireTransaction(value: unknown): ChangeSetTransactionJournal {
     const parsed = parseChangeSetTransactionJournal(value);
     const validation = validateChangeSetTransactionJournal(value);
@@ -13317,7 +12129,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return cloneJson(parsed.value);
   }
 
-  /** Requires a Bundle snapshot to advance its observed revision exactly once. */
   private assertNextBundleRevision(
     candidateRevision: number,
     expectedRevision: number | null,
@@ -13333,14 +12144,12 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Validates one allocation request before touching durable state. */
   private assertInputRevisionRequest(request: AllocateSourceInputRevisionRequest): void {
     assertIdentifier(request.bundleId, "bundleId");
     assertIdentifier(request.sourceId, "sourceId");
     assertIdentifier(request.captureId, "captureId");
   }
 
-  /** Validates one source binding request before durable state access. */
   private assertObservationBindingRequest(request: BindSourceInputObservationRequest): void {
     this.assertObservationToken(request.observationToken);
     if (
@@ -13351,14 +12160,12 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     }
   }
 
-  /** Validates one opaque observation token without revealing persisted state. */
   private assertObservationToken(observationToken: string): void {
     if (!opaqueIdSchema.safeParse(observationToken).success) {
       throw new SourceInputObservationTokenError();
     }
   }
 
-  /** Returns one validated runtime-owned timestamp. */
   private now(): number {
     const timestamp = this.clock();
     if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
@@ -13367,7 +12174,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return timestamp;
   }
 
-  /** Returns one validated 128-bit opaque identifier from the injected factory. */
   private nextOpaqueId(field: string): string {
     const value = this.opaqueIdFactory();
     if (!opaqueIdSchema.safeParse(value).success) {
@@ -13377,7 +12183,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   }
 }
 
-/** Compares nullable active-transaction tokens field by field. */
 function sameTransactionToken(
   left: TransactionStorageToken | null,
   right: TransactionStorageToken | null
@@ -13391,12 +12196,6 @@ function sameTransactionToken(
   );
 }
 
-/**
- * Selects the immutable transaction material shared by every journal revision.
- *
- * @param journal - Strict active transaction journal
- * @returns Canonicalizable immutable payload
- */
 function selectActiveTransactionPayload(journal: ChangeSetTransactionJournal): JsonValue {
   return {
     version: journal.version,
@@ -13414,13 +12213,6 @@ function selectActiveTransactionPayload(journal: ChangeSetTransactionJournal): J
   };
 }
 
-/**
- * Compares the immutable identity and payload of two active journal revisions.
- *
- * @param left - Current durable journal
- * @param right - Candidate next journal
- * @returns Whether only transaction progress fields may differ
- */
 function sameActiveTransactionPayload(
   left: ChangeSetTransactionJournal,
   right: ChangeSetTransactionJournal
@@ -13431,12 +12223,6 @@ function sameActiveTransactionPayload(
   );
 }
 
-/**
- * Requires one active journal replacement to follow the transaction state machine.
- *
- * @param current - Exact current durable journal
- * @param candidate - Strict next journal revision
- */
 function assertActiveTransactionTransition(
   current: ChangeSetTransactionJournal,
   candidate: ChangeSetTransactionJournal
@@ -13466,7 +12252,6 @@ function assertActiveTransactionTransition(
   }
 }
 
-/** Hidden Runtime and lifecycle authority retained by one QueueStorage facade. */
 interface KnowledgeRuntimeQueueStorageState {
   runtime: KnowledgeRuntimeStore;
   executionOwner: KnowledgeExecutionOwner;
@@ -13474,7 +12259,6 @@ interface KnowledgeRuntimeQueueStorageState {
 
 const runtimeQueueStorageStates = new WeakMap<object, KnowledgeRuntimeQueueStorageState>();
 
-/** Returns hidden state only for an authentic Runtime QueueStorage facade. */
 function requireRuntimeQueueStorageState(value: unknown): KnowledgeRuntimeQueueStorageState {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("The Runtime Queue storage is invalid");
@@ -13484,9 +12268,7 @@ function requireRuntimeQueueStorageState(value: unknown): KnowledgeRuntimeQueueS
   return state;
 }
 
-/** QueueStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeQueueStorage implements QueueStorage {
-  /** Creates a queue facade over the shared runtime store and one workflow lifecycle owner. */
   constructor(
     runtime: KnowledgeRuntimeStore,
     executionOwner: KnowledgeExecutionOwner = createKnowledgeExecutionOwner()
@@ -13500,17 +12282,14 @@ export class KnowledgeRuntimeQueueStorage implements QueueStorage {
     Object.freeze(this);
   }
 
-  /** Returns the opaque lifecycle identity required by the matching workflow loader. */
   getExecutionOwner(): KnowledgeExecutionOwner {
     return requireRuntimeQueueStorageState(this).executionOwner;
   }
 
-  /** Reads one detached queue snapshot. */
   read(bundleId: string): Promise<unknown> {
     return requireRuntimeQueueStorageState(this).runtime.readQueue(bundleId);
   }
 
-  /** Atomically compares and replaces one queue snapshot. */
   write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -13529,7 +12308,6 @@ export class KnowledgeRuntimeQueueStorage implements QueueStorage {
 Object.freeze(KnowledgeRuntimeQueueStorage.prototype);
 Object.freeze(KnowledgeRuntimeQueueStorage);
 
-/** Hidden Runtime and optional execution-owner authority retained by one Review facade. */
 interface KnowledgeRuntimeReviewStorageState {
   runtime: KnowledgeRuntimeStore;
   executionOwner?: KnowledgeExecutionOwner;
@@ -13537,7 +12315,6 @@ interface KnowledgeRuntimeReviewStorageState {
 
 const runtimeReviewStorageStates = new WeakMap<object, KnowledgeRuntimeReviewStorageState>();
 
-/** Returns hidden state only for an authentic Runtime ReviewStorage facade. */
 function requireRuntimeReviewStorageState(value: unknown): KnowledgeRuntimeReviewStorageState {
   if (
     typeof value !== "object" ||
@@ -13551,14 +12328,7 @@ function requireRuntimeReviewStorageState(value: unknown): KnowledgeRuntimeRevie
   return state;
 }
 
-/** ReviewStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
-  /**
-   * Creates a Review facade, optionally branded for one exact Queue/workflow lifecycle.
-   *
-   * Recovery-only consumers do not need an execution owner. Production compile
-   * handlers must supply the same opaque owner already bound to their Queue.
-   */
   constructor(runtime: KnowledgeRuntimeStore, executionOwner?: KnowledgeExecutionOwner) {
     if (!(runtime instanceof KnowledgeRuntimeStore)) {
       throw new TypeError("The Runtime Review storage dependency is invalid");
@@ -13571,7 +12341,6 @@ export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
     Object.freeze(this);
   }
 
-  /** Requires an authentic facade carrying an explicit production execution owner. */
   static getExecutionOwner(value: unknown): KnowledgeExecutionOwner {
     const owner = requireRuntimeReviewStorageState(value).executionOwner;
     if (!owner) {
@@ -13581,12 +12350,10 @@ export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
     return owner;
   }
 
-  /** Reads one detached review snapshot. */
   read(bundleId: string): Promise<unknown> {
     return requireRuntimeReviewStorageState(this).runtime.readReview(bundleId);
   }
 
-  /** Atomically compares and replaces one review snapshot. */
   write(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -13603,10 +12370,8 @@ export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
 Object.freeze(KnowledgeRuntimeReviewStorage.prototype);
 Object.freeze(KnowledgeRuntimeReviewStorage);
 
-/** Hidden Runtime authority retained by one narrow atomic Reject facade. */
 const runtimeReviewRejectPortStates = new WeakMap<object, KnowledgeRuntimeStore>();
 
-/** Returns hidden state only for an authentic Runtime atomic Reject facade. */
 function requireRuntimeReviewRejectPortState(value: unknown): KnowledgeRuntimeStore {
   if (
     typeof value !== "object" ||
@@ -13620,9 +12385,7 @@ function requireRuntimeReviewRejectPortState(value: unknown): KnowledgeRuntimeSt
   return runtime;
 }
 
-/** Narrow Queue+Review mutation facade exposing only atomic literal rejection. */
 export class KnowledgeRuntimeReviewRejectPort {
-  /** Creates one Reject-only facade over the shared Runtime store. */
   constructor(runtime: KnowledgeRuntimeStore) {
     if (!(runtime instanceof KnowledgeRuntimeStore)) {
       throw new TypeError("The Runtime Review Reject dependency is invalid");
@@ -13631,7 +12394,6 @@ export class KnowledgeRuntimeReviewRejectPort {
     Object.freeze(this);
   }
 
-  /** Atomically rejects one exact pending Review or replays its exact final state. */
   rejectReviewAtomically(
     bundleId: string,
     command: unknown
@@ -13643,7 +12405,6 @@ export class KnowledgeRuntimeReviewRejectPort {
 Object.freeze(KnowledgeRuntimeReviewRejectPort.prototype);
 Object.freeze(KnowledgeRuntimeReviewRejectPort);
 
-/** Hidden canonical Runtime operations retained by one forward-proposal facade. */
 interface RuntimeForwardRevisionProposalPortState {
   readonly executionOwner: KnowledgeExecutionOwner;
   readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
@@ -13658,7 +12419,6 @@ interface RuntimeForwardRevisionProposalPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>>;
 }
 
-/** Hidden canonical one-envelope read retained by the forward Studio facade. */
 interface RuntimeForwardRevisionStudioPortState {
   readonly executionOwner?: KnowledgeExecutionOwner;
   readonly read: (bundleId: string) => Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>;
@@ -13668,7 +12428,6 @@ interface RuntimeForwardRevisionStudioPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>>;
 }
 
-/** Hidden canonical read retained by one validation-only facade. */
 interface RuntimeForwardRevisionValidationPortState {
   readonly executionOwner: KnowledgeExecutionOwner;
   readonly readAuthority: (
@@ -13676,7 +12435,6 @@ interface RuntimeForwardRevisionValidationPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null>;
 }
 
-/** Hidden canonical read and lifecycle retained by one forward Apply facade. */
 interface RuntimeForwardRevisionApplyPortState {
   readonly executionOwner: KnowledgeExecutionOwner;
   readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
@@ -13691,7 +12449,6 @@ interface RuntimeForwardRevisionApplyPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1> | undefined>;
 }
 
-/** Hidden canonical recovery operations retained without the originating workflow lease. */
 interface RuntimeForwardRevisionApplyRecoveryPortState {
   readonly runtime: KnowledgeRuntimeStore;
   readonly executionOwner: KnowledgeExecutionOwner;
@@ -13716,14 +12473,11 @@ interface RuntimeForwardRevisionApplyRecoveryPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined>;
 }
 
-/** Empty nominal carrier whose begin authority exists only in module-private state. */
 class ForwardRevisionApplyBeginAuthorization {
-  /** Creates one frozen carrier for a single genuine facade invocation. */
   private constructor() {
     Object.freeze(this);
   }
 
-  /** Mints an unpopulated carrier; callers cannot install its hidden authority. */
   static create(): ForwardRevisionApplyBeginAuthorization {
     return new ForwardRevisionApplyBeginAuthorization();
   }
@@ -13741,14 +12495,11 @@ const forwardRevisionApplyBeginAuthorizationStates = new WeakMap<
   Readonly<ForwardRevisionApplyBeginAuthorizationState>
 >();
 
-/** Empty nominal carrier whose transition authority exists only in module-private state. */
 class ForwardRevisionApplyTransitionAuthorization {
-  /** Creates one frozen carrier for a single genuine recovery-facade invocation. */
   private constructor() {
     Object.freeze(this);
   }
 
-  /** Mints an unpopulated carrier; callers cannot install its hidden authority. */
   static create(): ForwardRevisionApplyTransitionAuthorization {
     return new ForwardRevisionApplyTransitionAuthorization();
   }
@@ -13766,7 +12517,6 @@ const forwardRevisionApplyTransitionAuthorizationStates = new WeakMap<
   Readonly<ForwardRevisionApplyTransitionAuthorizationState>
 >();
 
-/** Consumes one live owner-bound begin authorization exactly once. */
 function requireForwardRevisionApplyBeginAuthorization(
   value: unknown
 ): Readonly<ForwardRevisionApplyBeginAuthorizationState> {
@@ -13813,7 +12563,6 @@ function requireForwardRevisionApplyBeginAuthorization(
   }
 }
 
-/** Consumes and re-proves one owner-bound post-journal authorization exactly once. */
 function requireForwardRevisionApplyTransitionAuthorization(
   value: unknown,
   expectedOperation: "advance" | "finalize" | "terminalize"
@@ -13848,7 +12597,6 @@ function requireForwardRevisionApplyTransitionAuthorization(
   }
 }
 
-/** Re-proves capability identity and its exact detached projection inside a Runtime CAS. */
 function assertForwardRevisionApplyTransitionAuthorizationCurrent(
   state: Readonly<ForwardRevisionApplyTransitionAuthorizationState>,
   expectedProjection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>,
@@ -13874,7 +12622,6 @@ function assertForwardRevisionApplyTransitionAuthorizationCurrent(
   }
 }
 
-/** Sanitized failures exposed by the genuine forward Apply facade. */
 export type KnowledgeForwardRevisionApplyPortErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -13890,9 +12637,7 @@ const forwardRevisionApplyErrorCodes = new WeakMap<
 >();
 const FORWARD_REVISION_APPLY_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionApplyPortError");
 
-/** Value-free genuine error returned by the Runtime forward Apply boundary. */
 export class KnowledgeForwardRevisionApplyPortError extends Error {
-  /** Creates one module-authentic sanitized failure. */
   constructor(token: symbol, code: KnowledgeForwardRevisionApplyPortErrorCode) {
     if (token !== FORWARD_REVISION_APPLY_ERROR_TOKEN) throw new TypeError();
     super("Forward revision Apply could not be completed");
@@ -13901,7 +12646,6 @@ export class KnowledgeForwardRevisionApplyPortError extends Error {
     Object.freeze(this);
   }
 
-  /** Returns a stable category only for genuine module-minted failures. */
   static inspect(value: unknown): KnowledgeForwardRevisionApplyPortErrorCode | undefined {
     return typeof value === "object" && value !== null
       ? forwardRevisionApplyErrorCodes.get(value)
@@ -13909,7 +12653,6 @@ export class KnowledgeForwardRevisionApplyPortError extends Error {
   }
 }
 
-/** Mints one sanitized forward Apply failure. */
 function createForwardRevisionApplyPortError(
   code: KnowledgeForwardRevisionApplyPortErrorCode
 ): KnowledgeForwardRevisionApplyPortError {
@@ -13919,19 +12662,16 @@ function createForwardRevisionApplyPortError(
 Object.freeze(KnowledgeForwardRevisionApplyPortError.prototype);
 Object.freeze(KnowledgeForwardRevisionApplyPortError);
 
-/** Exact request accepted only by the genuine decision facade. */
 export interface KnowledgeForwardRevisionDecisionRequest {
   readonly command: unknown;
   readonly validationCapability?: unknown;
 }
 
-/** Strict pending proposal projection used immediately before genuine validation. */
 export interface KnowledgeForwardRevisionPendingDecisionProjection {
   readonly proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>;
   readonly proposalDigest: string;
 }
 
-/** Closed strict admission used before validation or exact terminal replay. */
 export type KnowledgeForwardRevisionDecisionAdmission =
   | Readonly<{
       kind: "pending";
@@ -13943,7 +12683,6 @@ export type KnowledgeForwardRevisionDecisionAdmission =
       result: Readonly<KnowledgeForwardRevisionDecisionResult>;
     }>;
 
-/** Stable terminal result of one atomic forward decision or exact replay. */
 export interface KnowledgeForwardRevisionDecisionResult {
   readonly kind: "accepted" | "rejected";
   readonly outcome: "decided" | "already_decided";
@@ -13953,7 +12692,6 @@ export interface KnowledgeForwardRevisionDecisionResult {
   readonly decisionStoreRevision: number;
 }
 
-/** Sanitized failure categories exposed by the narrow decision facade. */
 export type KnowledgeForwardRevisionDecisionPortErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -13969,9 +12707,7 @@ const forwardRevisionDecisionErrorCodes = new WeakMap<
 >();
 const FORWARD_REVISION_DECISION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionDecisionPortError");
 
-/** Value-free genuine error returned by the Runtime decision boundary. */
 export class KnowledgeForwardRevisionDecisionPortError extends Error {
-  /** Creates one module-authentic sanitized failure. */
   constructor(token: symbol, code: KnowledgeForwardRevisionDecisionPortErrorCode) {
     if (token !== FORWARD_REVISION_DECISION_ERROR_TOKEN) throw new TypeError();
     super("Forward revision decision could not be completed");
@@ -13980,7 +12716,6 @@ export class KnowledgeForwardRevisionDecisionPortError extends Error {
     Object.freeze(this);
   }
 
-  /** Returns a stable category only for genuine module-minted failures. */
   static inspect(value: unknown): KnowledgeForwardRevisionDecisionPortErrorCode | undefined {
     return typeof value === "object" && value !== null
       ? forwardRevisionDecisionErrorCodes.get(value)
@@ -13988,7 +12723,6 @@ export class KnowledgeForwardRevisionDecisionPortError extends Error {
   }
 }
 
-/** Mints one sanitized failure without exposing error authenticity authority. */
 function createForwardRevisionDecisionPortError(
   code: KnowledgeForwardRevisionDecisionPortErrorCode
 ): KnowledgeForwardRevisionDecisionPortError {
@@ -13998,7 +12732,6 @@ function createForwardRevisionDecisionPortError(
 Object.freeze(KnowledgeForwardRevisionDecisionPortError.prototype);
 Object.freeze(KnowledgeForwardRevisionDecisionPortError);
 
-/** Hidden canonical operations and lifecycle authority retained by one decision facade. */
 interface RuntimeForwardRevisionDecisionPortState {
   readonly executionOwner: KnowledgeExecutionOwner;
   readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
@@ -14013,14 +12746,11 @@ interface RuntimeForwardRevisionDecisionPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionDecisionResult> | undefined>;
 }
 
-/** Opaque process-local authorization injected only by a genuine decision facade. */
 class ForwardRevisionDecisionMutationAuthorization {
-  /** Construction is nominally private and authenticated again by hidden WeakMap state. */
   private constructor() {
     Object.freeze(this);
   }
 
-  /** Creates one empty carrier whose authority lives only in module-private state. */
   static create(): ForwardRevisionDecisionMutationAuthorization {
     return new ForwardRevisionDecisionMutationAuthorization();
   }
@@ -14039,7 +12769,6 @@ const forwardRevisionDecisionMutationAuthorizationStates = new WeakMap<
   Readonly<ForwardRevisionDecisionMutationAuthorizationState>
 >();
 
-/** Requires a one-shot live authorization created by the exact facade invocation. */
 function requireForwardRevisionDecisionMutationAuthorization(
   value: unknown
 ): Readonly<ForwardRevisionDecisionMutationAuthorizationState> {
@@ -14136,7 +12865,6 @@ const FORWARD_REVISION_RUNTIME_STATE_KEYS = [
 ] as const;
 type RuntimeForwardRevisionPinnedMethod = (...args: never[]) => unknown;
 
-/** Captures every Runtime method reachable from the forward publication boundary. */
 function captureRuntimeForwardRevisionPublicationMethods(): ReadonlyMap<
   string,
   RuntimeForwardRevisionPinnedMethod
@@ -14218,13 +12946,11 @@ const runtimeForwardRevisionDecisionConfirmMethod = runtimeForwardRevisionPublic
   "confirmForwardRevisionDecision"
 ) as KnowledgeRuntimeStore["confirmForwardRevisionDecision"];
 
-/** Reads one own data field without invoking a possibly forged accessor. */
 function readRuntimeOwnDataField(value: object, name: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, name);
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
 }
 
-/** Proves one exact base Runtime still matches the state minted by its constructor. */
 function requireAuthenticForwardRevisionPublicationRuntimeStore(
   runtime: KnowledgeRuntimeStore
 ): Readonly<AuthenticForwardRevisionPublicationRuntimeStoreState> {
@@ -14257,7 +12983,6 @@ function requireAuthenticForwardRevisionPublicationRuntimeStore(
   }
 }
 
-/** Pins the canonical call graph on one exact Runtime before retaining it as authority. */
 function sealForwardRevisionPublicationRuntimeStore(runtime: KnowledgeRuntimeStore): void {
   requireAuthenticForwardRevisionPublicationRuntimeStore(runtime);
   try {
@@ -14275,7 +13000,6 @@ function sealForwardRevisionPublicationRuntimeStore(runtime: KnowledgeRuntimeSto
   }
 }
 
-/** Returns hidden read state only for an authentic forward Studio facade. */
 function requireRuntimeForwardRevisionStudioPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionStudioPortState> {
@@ -14291,14 +13015,7 @@ function requireRuntimeForwardRevisionStudioPortState(
   return state;
 }
 
-/** Genuine read-only facade exposing only the one-envelope forward Studio projection. */
 export class KnowledgeRuntimeForwardRevisionStudioPort {
-  /**
-   * Captures the pinned canonical read from one exact base Runtime receiver.
-   *
-   * Startup recovery may construct an unowned read facade. Product generations
-   * must supply both the exact Runtime proof facade and its paired workflow lease.
-   */
   constructor(
     runtime: KnowledgeRuntimeStore,
     proofPort?: KnowledgeRuntimeIngestExecutionProofPort,
@@ -14344,12 +13061,10 @@ export class KnowledgeRuntimeForwardRevisionStudioPort {
     }
   }
 
-  /** Requires one exact-prototype process-local read facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionStudioPort {
     requireRuntimeForwardRevisionStudioPortState(value);
   }
 
-  /** Reports whether this exact product-bound facade belongs to one execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionStudioPortState(value);
@@ -14360,14 +13075,12 @@ export class KnowledgeRuntimeForwardRevisionStudioPort {
     }
   }
 
-  /** Reads one strict bounded forward Studio projection from one Runtime envelope. */
   readForwardRevisionStudioBundle(
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>> {
     return requireRuntimeForwardRevisionStudioPortState(this).read(bundleId);
   }
 
-  /** Atomically terminalizes one exact accepted-ready record without starting Apply. */
   abandonForwardRevisionAcceptedReady(
     acceptedIdentity: unknown,
     expectedRuntimeRevision: number
@@ -14382,7 +13095,6 @@ export class KnowledgeRuntimeForwardRevisionStudioPort {
 Object.freeze(KnowledgeRuntimeForwardRevisionStudioPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionStudioPort);
 
-/** Returns the hidden publisher only for an authentic narrow facade. */
 function requireRuntimeForwardRevisionPublicationPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionProposalPortState> {
@@ -14401,7 +13113,6 @@ function requireRuntimeForwardRevisionPublicationPortState(
   return state;
 }
 
-/** Requires the proposal facade's exact workflow generation to remain current. */
 function assertRuntimeForwardRevisionPublicationPortCurrent(
   state: Readonly<RuntimeForwardRevisionProposalPortState>
 ): void {
@@ -14420,9 +13131,7 @@ function assertRuntimeForwardRevisionPublicationPortCurrent(
   }
 }
 
-/** Narrow authentic facade for forward proposal proof, Review read, and publication. */
 export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
-  /** Captures one canonical Runtime mutation capability for an exact production generation. */
   constructor(
     runtime: KnowledgeRuntimeStore,
     proofPort: KnowledgeRuntimeIngestExecutionProofPort,
@@ -14463,14 +13172,12 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     }
   }
 
-  /** Requires one authentic process-local publication facade. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     requireRuntimeForwardRevisionPublicationPortState(value);
   }
 
-  /** Reports whether this exact mutation facade belongs to one live execution owner. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionPublicationPortState(value);
@@ -14487,7 +13194,6 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     }
   }
 
-  /** Reads strict read-only proposal proof from one Runtime envelope. */
   async readForwardRevisionProposalAuthority(
     value: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionProposalAuthorityV1> | null> {
@@ -14498,7 +13204,6 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     return authority;
   }
 
-  /** Reads the dedicated forward Review namespace through the pinned Runtime method. */
   async readForwardRevisionReview(
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionReviewSnapshotV2>> {
@@ -14509,7 +13214,6 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     return review;
   }
 
-  /** Atomically publishes or exactly replays one pending forward proposal. */
   async publishForwardRevisionProposalAtomically(
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ): Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>> {
@@ -14518,7 +13222,6 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     return state.publish(value);
   }
 
-  /** Backward-compatible alias for the exact atomic publication operation. */
   async publish(
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ): Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>> {
@@ -14531,7 +13234,6 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
 Object.freeze(KnowledgeRuntimeForwardRevisionProposalPublicationPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionProposalPublicationPort);
 
-/** Returns hidden state only for an authentic validation-only Runtime facade. */
 function requireRuntimeForwardRevisionValidationPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionValidationPortState> {
@@ -14547,9 +13249,7 @@ function requireRuntimeForwardRevisionValidationPortState(
   return state;
 }
 
-/** Genuine narrow facade exposing only the complete Runtime validation-authority read. */
 export class KnowledgeRuntimeForwardRevisionValidationPort {
-  /** Captures one canonical read from an exact Runtime/Queue workflow lifecycle. */
   constructor(runtime: KnowledgeRuntimeStore, proofPort: KnowledgeRuntimeIngestExecutionProofPort) {
     const proofState = requireRuntimeIngestExecutionProofPortState(proofPort);
     if (
@@ -14570,12 +13270,10 @@ export class KnowledgeRuntimeForwardRevisionValidationPort {
     Object.freeze(this);
   }
 
-  /** Requires one exact-prototype process-local genuine validation facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionValidationPort {
     requireRuntimeForwardRevisionValidationPortState(value);
   }
 
-  /** Reports whether this exact Runtime facade belongs to one opaque execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionValidationPortState(value);
@@ -14586,7 +13284,6 @@ export class KnowledgeRuntimeForwardRevisionValidationPort {
     }
   }
 
-  /** Reads complete validation proof from one exact current Runtime envelope. */
   readForwardRevisionValidationAuthority(
     value: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null> {
@@ -14597,7 +13294,6 @@ export class KnowledgeRuntimeForwardRevisionValidationPort {
 Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort);
 
-/** Returns hidden state only for one genuine lifecycle-bound forward Apply facade. */
 function requireRuntimeForwardRevisionApplyPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionApplyPortState> {
@@ -14617,9 +13313,7 @@ function requireRuntimeForwardRevisionApplyPortState(
   }
 }
 
-/** Genuine lifecycle-bound facade for fresh accepted forward Apply authority reads. */
 export class KnowledgeRuntimeForwardRevisionApplyPort {
-  /** Captures one canonical Runtime read for an exact production workflow generation. */
   constructor(
     runtime: KnowledgeRuntimeStore,
     proofPort: KnowledgeRuntimeIngestExecutionProofPort,
@@ -14661,13 +13355,11 @@ export class KnowledgeRuntimeForwardRevisionApplyPort {
     }
   }
 
-  /** Requires one live exact-prototype process-local Apply facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionApplyPort {
     const state = requireRuntimeForwardRevisionApplyPortState(value);
     assertForwardRevisionApplyCurrent(state, new AbortController().signal);
   }
 
-  /** Reports whether this facade belongs to one exact current execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionApplyPortState(value);
@@ -14684,7 +13376,6 @@ export class KnowledgeRuntimeForwardRevisionApplyPort {
     }
   }
 
-  /** Reads one exact accepted decision's current forward Apply prestate. */
   async readAuthority(
     queryValue: unknown,
     signal: AbortSignal
@@ -14702,7 +13393,6 @@ export class KnowledgeRuntimeForwardRevisionApplyPort {
     return authority;
   }
 
-  /** Atomically begins the exact prepared journal carried by one fresh genuine capability. */
   async begin(
     capabilityValue: unknown,
     signal: AbortSignal
@@ -14744,7 +13434,6 @@ export class KnowledgeRuntimeForwardRevisionApplyPort {
   }
 }
 
-/** Re-proves signal, authentic lease, and exact owner around Apply awaits. */
 function assertForwardRevisionApplyCurrent(
   state: Readonly<RuntimeForwardRevisionApplyPortState>,
   signal: AbortSignal
@@ -14768,7 +13457,6 @@ function assertForwardRevisionApplyCurrent(
 Object.freeze(KnowledgeRuntimeForwardRevisionApplyPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionApplyPort);
 
-/** Returns hidden state only for one genuine owner-bound forward recovery facade. */
 function requireRuntimeForwardRevisionApplyRecoveryPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionApplyRecoveryPortState> {
@@ -14788,7 +13476,6 @@ function requireRuntimeForwardRevisionApplyRecoveryPortState(
   }
 }
 
-/** Checks only caller cancellation; durable recovery deliberately ignores lease revocation. */
 function assertForwardRevisionApplyRecoveryReadSignal(signal: AbortSignal): void {
   try {
     if (typeof signal !== "object" || signal === null || signal.aborted) throw new TypeError();
@@ -14797,9 +13484,7 @@ function assertForwardRevisionApplyRecoveryReadSignal(signal: AbortSignal): void
   }
 }
 
-/** Genuine recovery facade for converging one already-durable forward Apply journal. */
 export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
-  /** Authenticates one live paired construction and then deliberately drops the lease. */
   constructor(
     runtime: KnowledgeRuntimeStore,
     proofPort: KnowledgeRuntimeIngestExecutionProofPort,
@@ -14858,12 +13543,10 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     }
   }
 
-  /** Requires one exact-prototype process-local recovery facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     requireRuntimeForwardRevisionApplyRecoveryPortState(value);
   }
 
-  /** Reports whether this recovery facade belongs to one exact execution owner. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionApplyRecoveryPortState(value);
@@ -14874,7 +13557,6 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     }
   }
 
-  /** Reports whether this recovery facade is bound to one exact Runtime instance. */
   static matchesRuntime(value: unknown, runtime: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionApplyRecoveryPortState(value);
@@ -14884,7 +13566,6 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     }
   }
 
-  /** Reads the active durable journal while respecting only this read's cancellation signal. */
   async readActive(
     signal: AbortSignal
   ): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1> | null> {
@@ -14895,7 +13576,6 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     return active;
   }
 
-  /** Atomically advances an active journal using one genuine physical-observation proof. */
   async advance(
     capabilityValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1>> {
@@ -14933,13 +13613,13 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
         if (confirmed) return confirmed;
       } catch {
         // The original sanitized result remains authoritative when confirmation cannot read.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       if (KnowledgeForwardRevisionApplyPortError.inspect(error)) throw error;
       throw createForwardRevisionApplyPortError("commit_uncertain");
     }
   }
 
-  /** Atomically writes overlay plus ledger and clears one exactly committed journal. */
   async finalize(
     capabilityValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord>> {
@@ -14977,13 +13657,13 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
         if (confirmed) return confirmed;
       } catch {
         // The original sanitized result remains authoritative when confirmation cannot read.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       if (KnowledgeForwardRevisionApplyPortError.inspect(error)) throw error;
       throw createForwardRevisionApplyPortError("commit_uncertain");
     }
   }
 
-  /** Atomically closes one sticky journal without mutating Wiki bytes. */
   async terminalize(
     capabilityValue: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>> {
@@ -15021,6 +13701,7 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
         if (confirmed) return confirmed;
       } catch {
         // The original sanitized result remains authoritative when confirmation cannot read.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       if (KnowledgeForwardRevisionApplyPortError.inspect(error)) throw error;
       throw createForwardRevisionApplyPortError("commit_uncertain");
@@ -15031,7 +13712,6 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
 Object.freeze(KnowledgeRuntimeForwardRevisionApplyRecoveryPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionApplyRecoveryPort);
 
-/** Returns hidden authority only for one exact-prototype genuine decision facade. */
 function requireRuntimeForwardRevisionDecisionPortState(
   value: unknown
 ): Readonly<RuntimeForwardRevisionDecisionPortState> {
@@ -15053,9 +13733,7 @@ function requireRuntimeForwardRevisionDecisionPortState(
   return state;
 }
 
-/** Genuine lifecycle-bound facade for pending reads and atomic terminal decisions. */
 export class KnowledgeRuntimeForwardRevisionDecisionPort {
-  /** Captures canonical Runtime operations for one exact production workflow generation. */
   constructor(
     runtime: KnowledgeRuntimeStore,
     proofPort: KnowledgeRuntimeIngestExecutionProofPort,
@@ -15096,7 +13774,6 @@ export class KnowledgeRuntimeForwardRevisionDecisionPort {
     }
   }
 
-  /** Requires one live exact-prototype process-local decision facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionDecisionPort {
     const state = requireRuntimeForwardRevisionDecisionPortState(value);
     try {
@@ -15106,7 +13783,6 @@ export class KnowledgeRuntimeForwardRevisionDecisionPort {
     }
   }
 
-  /** Reports whether this facade belongs to one exact current execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireRuntimeForwardRevisionDecisionPortState(value);
@@ -15123,7 +13799,6 @@ export class KnowledgeRuntimeForwardRevisionDecisionPort {
     }
   }
 
-  /** Reads one strict current pending proposal for immediate validation. */
   async readPending(
     commandValue: unknown,
     signal: AbortSignal
@@ -15141,7 +13816,6 @@ export class KnowledgeRuntimeForwardRevisionDecisionPort {
     return pending;
   }
 
-  /** Atomically accepts or rejects one exact pending proposal, with exact replay recovery. */
   async decide(
     requestValue: unknown,
     signal: AbortSignal
@@ -15203,7 +13877,6 @@ export class KnowledgeRuntimeForwardRevisionDecisionPort {
   }
 }
 
-/** Captures the exact two-key decision request without invoking accessors. */
 function snapshotForwardRevisionDecisionRequest(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionDecisionRequest> {
@@ -15229,7 +13902,6 @@ function snapshotForwardRevisionDecisionRequest(
   });
 }
 
-/** Re-proves signal, authentic lease, and exact owner before and after each await. */
 function assertForwardRevisionDecisionCurrent(
   state: Readonly<RuntimeForwardRevisionDecisionPortState>,
   signal: AbortSignal
@@ -15253,17 +13925,13 @@ function assertForwardRevisionDecisionCurrent(
 Object.freeze(KnowledgeRuntimeForwardRevisionDecisionPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionDecisionPort);
 
-/** SourceManifestStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {
-  /** Creates a manifest facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Reads one detached Source Manifest. */
   read(bundleId: string): Promise<unknown> {
     return this.runtime.readManifest(bundleId);
   }
 
-  /** Atomically compares and replaces one Source Manifest. */
   write(
     bundleId: string,
     manifest: SourceManifest,
@@ -15273,17 +13941,9 @@ export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {
   }
 }
 
-/** Read-only transaction preflight backed by the shared runtime envelope. */
 export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionAuthorityPort {
-  /** Creates the authority facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /**
-   * Re-proves one exact apply identity without accessing Wiki files.
-   *
-   * @param request - Detached ordinary Source Apply identity
-   * @returns Frozen logical-time floor owned by exact touched Forward heads
-   */
   verify(
     request: ChangeSetTransactionAuthorityRequest
   ): Promise<Readonly<ChangeSetTransactionAuthorityProof>> {
@@ -15291,19 +13951,15 @@ export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionA
   }
 }
 
-/** No-journal recovery state facade backed by the shared atomic runtime envelope. */
 export class KnowledgeRuntimeNoJournalApplyRecoveryPort
   implements NoJournalApplyRecoveryStatePort, NoJournalApplyRecoverySnapshotPort
 {
-  /** Creates a no-journal recovery facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Classifies one accepted Review identity from one atomic runtime snapshot. */
   classify(identity: AcceptedReviewStartupIdentity): Promise<NoJournalApplyRecoveryClassification> {
     return this.runtime.classifyNoJournalApplyRecovery(identity);
   }
 
-  /** Loads every accepted classification from one exact runtime-envelope revision. */
   loadSnapshot(
     bundleId: string,
     expectedReviewRevision: number
@@ -15311,7 +13967,6 @@ export class KnowledgeRuntimeNoJournalApplyRecoveryPort
     return this.runtime.loadNoJournalApplyRecoverySnapshot(bundleId, expectedReviewRevision);
   }
 
-  /** Reloads and fully re-proves one continuation without observing Wiki files. */
   loadContinueInput(
     reference: NoJournalApplyRecoveryReference,
     bundle: unknown
@@ -15319,7 +13974,6 @@ export class KnowledgeRuntimeNoJournalApplyRecoveryPort
     return this.runtime.loadNoJournalApplyContinueInput(reference, bundle);
   }
 
-  /** Atomically records one exact pre-journal abandonment or replays its receipt. */
   abandon(
     reference: NoJournalApplyRecoveryReference,
     abandonedAt: number
@@ -15328,23 +13982,17 @@ export class KnowledgeRuntimeNoJournalApplyRecoveryPort
   }
 }
 
-/** Conditional startup release facade backed by the shared atomic runtime envelope. */
 export class KnowledgeRuntimeStartupReleasePort implements KnowledgeStartupReleasePort {
-  /** Creates a startup release facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Re-proves and conditionally releases one exact startup-recovery observation. */
   release(request: KnowledgeStartupReleaseRequest): Promise<KnowledgeStartupReleaseResult> {
     return this.runtime.releaseStartupRecovery(request);
   }
 }
 
-/** ApplyCommitManifestPort facade backed by the shared atomic runtime envelope. */
 export class KnowledgeRuntimeApplyCommitManifestPort implements ApplyCommitManifestPort {
-  /** Creates an exact Manifest/ledger facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Atomically records one exact committed transaction and final source projection. */
   recordCommitted(
     journal: CommittedChangeSetTransactionJournal,
     receipt: TransactionCommitReceipt
@@ -15353,17 +14001,13 @@ export class KnowledgeRuntimeApplyCommitManifestPort implements ApplyCommitManif
   }
 }
 
-/** TransactionStorage facade backed by one shared Vault-global atomic slot. */
 export class KnowledgeRuntimeTransactionStorage implements TransactionStorage {
-  /** Creates a transaction facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Reads the detached active transaction journal. */
   readActive(): Promise<unknown> {
     return this.runtime.readActiveTransaction();
   }
 
-  /** Atomically compares and replaces the active transaction journal. */
   writeActive(
     journal: ChangeSetTransactionJournal,
     expectedToken: TransactionStorageToken | null
@@ -15371,45 +14015,35 @@ export class KnowledgeRuntimeTransactionStorage implements TransactionStorage {
     return this.runtime.writeActiveTransaction(journal, expectedToken);
   }
 
-  /** Atomically compares and clears the active transaction journal. */
   clearActive(expectedToken: TransactionStorageToken): Promise<void> {
     return this.runtime.clearActiveTransaction(expectedToken);
   }
 }
 
-/** Input-revision allocator facade backed by the shared atomic envelope. */
 export class KnowledgeRuntimeInputRevisionAllocator implements SourceInputRevisionAllocator {
-  /** Creates an allocator facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Allocates one strictly newer source observation revision. */
   allocate(request: AllocateSourceInputRevisionRequest): Promise<SourceInputRevisionAllocation> {
     return this.runtime.allocateInputRevision(request);
   }
 }
 
-/** Source-observation binding facade backed by the shared atomic envelope. */
 export class KnowledgeRuntimeInputObservationBinder implements SourceInputObservationBinder {
-  /** Creates a binding facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Binds one opaque allocation token to exact source and pipeline hashes. */
   bind(request: BindSourceInputObservationRequest): Promise<BindSourceInputObservationResult> {
     return this.runtime.bindInputObservation(request);
   }
 
-  /** Reconciles one observation after Queue enqueue or an uncertain result. */
   settle(observationToken: string): Promise<SourceInputObservationSettlement> {
     return this.runtime.settleInputObservation(observationToken);
   }
 
-  /** Loads pending allocations and bound observations for restart recovery. */
   loadRecoveryWork(bundleId: string): Promise<SourceInputObservationRecoveryWork[]> {
     return this.runtime.loadInputObservationRecoveryWork(bundleId);
   }
 }
 
-/** Hidden captured capability retained by one Runtime execution-proof facade. */
 interface KnowledgeRuntimeIngestExecutionProofPortState {
   runtime: KnowledgeRuntimeStore;
   queueStorage: KnowledgeRuntimeQueueStorage;
@@ -15425,7 +14059,6 @@ const runtimeIngestExecutionProofPortStates = new WeakMap<
   KnowledgeRuntimeIngestExecutionProofPortState
 >();
 
-/** Captures the canonical Runtime proof data method during module initialization. */
 function captureRuntimeIngestExecutionProofMethod(): KnowledgeRuntimeStore["proveIngestExecution"] {
   const descriptor = Object.getOwnPropertyDescriptor(
     KnowledgeRuntimeStore.prototype,
@@ -15439,12 +14072,6 @@ function captureRuntimeIngestExecutionProofMethod(): KnowledgeRuntimeStore["prov
 
 const runtimeIngestExecutionProofMethod = captureRuntimeIngestExecutionProofMethod();
 
-/**
- * Returns the process-local captured capability for one authentic facade.
- *
- * @param value - Candidate Runtime execution-proof facade
- * @returns Hidden proof capability
- */
 function requireRuntimeIngestExecutionProofPortState(
   value: unknown
 ): KnowledgeRuntimeIngestExecutionProofPortState {
@@ -15458,15 +14085,7 @@ function requireRuntimeIngestExecutionProofPortState(
   return state;
 }
 
-/**
- * Narrow read-only execution-proof facade backed by one shared Runtime envelope.
- *
- * The Runtime receiver and its original proof method are retained only inside a
- * process-local WeakMap closure. The public object therefore exposes neither a
- * durable Runtime handle nor an own property that can be copied as authority.
- */
 export class KnowledgeRuntimeIngestExecutionProofPort implements KnowledgeIngestExecutionProofPort {
-  /** Captures the Runtime proof method and exact Queue facade without exposing either receiver. */
   constructor(runtime: KnowledgeRuntimeStore, queueStorage: KnowledgeRuntimeQueueStorage) {
     if (!(runtime instanceof KnowledgeRuntimeStore)) {
       throw new TypeError("The Runtime ingest execution-proof dependency is invalid");
@@ -15488,12 +14107,10 @@ export class KnowledgeRuntimeIngestExecutionProofPort implements KnowledgeIngest
     Object.freeze(this);
   }
 
-  /** Requires an authentic process-local Runtime proof facade. */
   static assert(value: unknown): asserts value is KnowledgeRuntimeIngestExecutionProofPort {
     requireRuntimeIngestExecutionProofPortState(value);
   }
 
-  /** Requires one Queue claim to come from this facade's exact Runtime QueueStorage instance. */
   static assertClaimOwner(
     value: KnowledgeRuntimeIngestExecutionProofPort,
     claim: IngestExecutionClaim
@@ -15504,14 +14121,12 @@ export class KnowledgeRuntimeIngestExecutionProofPort implements KnowledgeIngest
     }
   }
 
-  /** Returns the opaque App/Vault/workflow lifecycle identity paired with this proof facade. */
   static getExecutionOwner(
     value: KnowledgeRuntimeIngestExecutionProofPort
   ): KnowledgeExecutionOwner {
     return requireRuntimeIngestExecutionProofPortState(value).executionOwner;
   }
 
-  /** Derives one proof from a single atomic Runtime-envelope transform. */
   prove(
     request: Readonly<KnowledgeIngestExecutionProofRequest>,
     signal: AbortSignal

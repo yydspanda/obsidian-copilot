@@ -85,7 +85,6 @@ interface Deferred<T> {
   resolve(value: T): void;
 }
 
-/** Creates the project-owned Bundle used by every authentic lease attempt. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -98,7 +97,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: "project-personal", config };
 }
 
-/** Creates one durable source Manifest for the real Runtime test harness. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -115,7 +113,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates the parser profile shared by workflow planning and source parsing. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -125,7 +122,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates one complete secret-free profile accepted by the private model adapter. */
 function createPipelineProfile(model = MODEL): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -160,12 +156,10 @@ function createPipelineProfile(model = MODEL): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates one exact source or schema read result with detached bytes. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
 
-/** Creates an externally controlled promise for in-flight invalidation tests. */
 function createDeferred<T>(): Deferred<T> {
   let resolve: (value: T) => void = () => undefined;
   const promise = new Promise<T>((fulfill) => {
@@ -174,7 +168,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Executes a callback inside one real Runtime-backed Queue claim and preparation. */
 async function runAuthorizedLeaseAttempt(
   profile: KnowledgeBundlePipelineProfile,
   handler: (value: AuthorizedLeaseHarnessContext) => Promise<void>,
@@ -251,7 +244,6 @@ async function runAuthorizedLeaseAttempt(
   expect(result).toMatchObject({ kind: "executed", status: "completed" });
 }
 
-/** Creates deterministic read-only target and candidate-validation dependencies. */
 function createCompileDependencies(): CompileDependencyHarness {
   const resolvedSignals: AbortSignal[] = [];
   const validatedSignals: AbortSignal[] = [];
@@ -278,7 +270,6 @@ function createCompileDependencies(): CompileDependencyHarness {
   return { dependencies, resolvedSignals, validatedSignals, validationInputs };
 }
 
-/** Builds and consumes one exact Queue-bound production compile attempt. */
 async function compileAuthorizedAttempt(
   lease: KnowledgeProductionModelRouteLease,
   preparation: KnowledgeAuthorizedSourcePreparation,
@@ -290,12 +281,10 @@ async function compileAuthorizedAttempt(
   return lease.compile(attempt);
 }
 
-/** Supplies inert output where invocation is prohibited by the test. */
 function createUnusedWireOutput(): string {
   return "{}";
 }
 
-/** Creates one valid second-stage write result for every approved target. */
 function createGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
     version: 1,
@@ -309,7 +298,6 @@ function createGenerationWireOutput(request: CompilerGenerationRequest): string 
   });
 }
 
-/** Creates one profile-bound private route owner and its close-incapable lease. */
 function createLease(
   profile: KnowledgeBundlePipelineProfile,
   invoke: KnowledgePrivateModelInvoke,
@@ -326,7 +314,6 @@ function createLease(
   return { owner, lease: owner.getLease() };
 }
 
-/** Captures an expected asynchronous rejection without retaining it in production state. */
 async function captureFailure(action: () => Promise<unknown>): Promise<unknown> {
   let caught: unknown;
   try {

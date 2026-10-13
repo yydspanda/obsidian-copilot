@@ -17,7 +17,6 @@ import type {
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
 
-/** Commands exposed after one production worker generation is safely released. */
 export const KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities> =
   Object.freeze({
     pauseBundle: true,
@@ -30,10 +29,8 @@ export const KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES: Readonly<KnowledgeSt
     recoveryAbandon: false,
   });
 
-/** Value-free listener used only to request a fresh durable Studio read. */
 type KnowledgeStudioCommandHintListener = () => void;
 
-/** Dependencies retained privately by one exact command generation. */
 export interface KnowledgeStudioRuntimeCommandAdapterInput {
   queue: IngestQueue;
   reviewReject: KnowledgeRuntimeReviewRejectPort;
@@ -46,7 +43,6 @@ export interface KnowledgeStudioRuntimeCommandAdapterInput {
   onGenerationRefreshRequired?: () => void;
 }
 
-/** Hidden mutation authority that cannot be recovered by reflecting over the adapter. */
 interface KnowledgeStudioRuntimeCommandAdapterState {
   queue: IngestQueue;
   reviewReject: KnowledgeRuntimeReviewRejectPort;
@@ -62,12 +58,10 @@ interface KnowledgeStudioRuntimeCommandAdapterState {
 
 const commandAdapterStates = new WeakMap<object, KnowledgeStudioRuntimeCommandAdapterState>();
 
-/** Creates the platform-standard cancellation used for stale command generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Returns hidden state only for an authentic adapter instance. */
 function requireCommandAdapterState(value: unknown): KnowledgeStudioRuntimeCommandAdapterState {
   if (
     typeof value !== "object" ||
@@ -81,28 +75,24 @@ function requireCommandAdapterState(value: unknown): KnowledgeStudioRuntimeComma
   return state;
 }
 
-/** Requires a configured Bundle without exposing the captured allowlist. */
 function assertBundle(state: KnowledgeStudioRuntimeCommandAdapterState, bundleId: string): void {
   if (typeof bundleId !== "string" || !state.bundleIds.has(bundleId)) {
     throw createAbortError();
   }
 }
 
-/** Requires an exact non-negative Queue revision at the UI mutation boundary. */
 function assertQueueRevision(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError("expectedQueueRevision must be a non-negative safe integer");
   }
 }
 
-/** Requires one non-empty opaque Queue job id. */
 function assertJobId(jobId: string): void {
   if (typeof jobId !== "string" || jobId.trim().length === 0) {
     throw new TypeError("jobId must be a non-empty string");
   }
 }
 
-/** Proves lifecycle and caller cancellation on both sides of an awaited mutation. */
 function assertInvocation(
   state: KnowledgeStudioRuntimeCommandAdapterState,
   bundleId: string,
@@ -114,7 +104,6 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Publishes a best-effort reload hint without carrying durable state. */
 function publishCommandHint(
   state: KnowledgeStudioRuntimeCommandAdapterState,
   bundleId: string
@@ -124,20 +113,20 @@ function publishCommandHint(
       listener();
     } catch {
       // Reload hints are non-authoritative and cannot change command success.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 }
 
-/** Requests Review worker attention without changing a durable command result. */
 function notifyReviewWorkAvailable(state: KnowledgeStudioRuntimeCommandAdapterState): void {
   try {
     state.notifyReviewWorkAvailable?.();
   } catch {
     // Worker notifications are non-authoritative and may be retried by durable observation.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Retains one command until its already-entered atomic mutation settles. */
 function retainCommandDrain<T>(
   state: KnowledgeStudioRuntimeCommandAdapterState,
   operation: Promise<T>
@@ -153,7 +142,6 @@ function retainCommandDrain<T>(
   return operation;
 }
 
-/** Creates one bounded safe diagnostic for a non-literal Review command. */
 function createRejectOnlyDiagnostic() {
   return {
     code: "knowledge_review_reject_only",
@@ -163,16 +151,7 @@ function createRejectOnlyDiagnostic() {
   };
 }
 
-/**
- * Generation-owned mutation adapter for exact Activity and Review commands.
- *
- * Queue, Runtime, worker, and lifecycle authority remain hidden in a WeakMap.
- * React receives only the strict Review decision interface; optional accepted
- * content crosses the narrow reviewed-apply port, while no model, Vault,
- * transaction, or direct storage method crosses the boundary.
- */
 export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioCommandPort {
-  /** Captures the exact production Queue and atomic Reject facade for one generation. */
   constructor(input: KnowledgeStudioRuntimeCommandAdapterInput) {
     if (
       typeof input !== "object" ||
@@ -223,12 +202,10 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     Object.freeze(this);
   }
 
-  /** Proves an adapter was constructed by this module without revealing its state. */
   static assert(value: unknown): asserts value is KnowledgeStudioRuntimeCommandAdapter {
     requireCommandAdapterState(value);
   }
 
-  /** Returns the exact immutable capability set implemented by this command generation. */
   getCapabilities(): Readonly<KnowledgeStudioCommandCapabilities> {
     const state = requireCommandAdapterState(this);
     return state.reviewApply || state.reanalyzeCompletedSource || state.onGenerationRefreshRequired
@@ -241,7 +218,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       : KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES;
   }
 
-  /** Subscribes to local value-free command completion hints for one allowed Bundle. */
   subscribe(bundleId: string, listener: KnowledgeStudioCommandHintListener): () => void {
     const state = requireCommandAdapterState(this);
     assertBundle(state, bundleId);
@@ -259,12 +235,10 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     };
   }
 
-  /** Executes an exact revision-bound Bundle pause. */
   pauseBundle(bundleId: string, expectedQueueRevision: number, signal: AbortSignal): Promise<void> {
     return this.executeActivity({ kind: "pause_bundle", bundleId, expectedQueueRevision }, signal);
   }
 
-  /** Executes an exact revision-bound Bundle resume. */
   resumeBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -273,7 +247,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     return this.executeActivity({ kind: "resume_bundle", bundleId, expectedQueueRevision }, signal);
   }
 
-  /** Executes an exact revision-bound job cancellation. */
   cancelJob(
     bundleId: string,
     jobId: string,
@@ -287,7 +260,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     );
   }
 
-  /** Executes an exact revision-bound failed-job retry. */
   retryJob(
     bundleId: string,
     jobId: string,
@@ -301,13 +273,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     );
   }
 
-  /**
-   * Queues one explicitly requested completed-input replay without resuming the Bundle.
-   * @param bundleId - Bundle selected by the user
-   * @param jobId - Exact completed Activity row selected for reanalysis
-   * @param expectedQueueRevision - Queue revision the user inspected before confirming
-   * @param signal - Cancellation owned by the current Studio action
-   */
   async reanalyzeJob(
     bundleId: string,
     jobId: string,
@@ -332,13 +297,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     return retainCommandDrain(state, operation);
   }
 
-  /**
-   * Executes one inspected pending job without granting permission to drain the Bundle.
-   * @param bundleId - Selected Bundle
-   * @param jobId - Exact queued Activity row confirmed by the user
-   * @param expectedQueueRevision - Queue revision inspected before confirmation
-   * @param signal - View cancellation checked before execution starts; the Queue owns entered work
-   */
   async runSelectedJob(
     bundleId: string,
     jobId: string,
@@ -363,7 +321,8 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
         try {
           state.onGenerationRefreshRequired();
         } catch {
-          /* Notification cannot change durable truth. */
+          // Notification cannot change durable truth.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
         throw error;
       } finally {
@@ -377,7 +336,8 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
         try {
           state.onGenerationRefreshRequired();
         } catch {
-          /* A committed result remains successful. */
+          // A committed result remains successful.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
       // Backoff, failure and unavailable work are not a completed analysis and must not show success.
@@ -393,7 +353,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     return retainCommandDrain(state, operation);
   }
 
-  /** Rejects a whole proposal or delegates selected acceptance to the narrow apply owner. */
   submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -435,7 +394,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     return retainCommandDrain(state, operation);
   }
 
-  /** Rejects recovery continuation because the released workflow owns no startup recovery. */
   async continueRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -445,7 +403,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     throw createAbortError();
   }
 
-  /** Rejects recovery abandonment because the released workflow owns no startup recovery. */
   async abandonRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -455,7 +412,6 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
     throw createAbortError();
   }
 
-  /** Executes one exact Queue command and publishes only after durable confirmation. */
   private executeActivity(command: IngestQueueActivityCommand, signal: AbortSignal): Promise<void> {
     const state = requireCommandAdapterState(this);
     assertQueueRevision(command.expectedQueueRevision);

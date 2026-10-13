@@ -49,7 +49,6 @@ interface HandoffHarness extends KnowledgeSourceObservationRecoveryHandoffPort {
   >;
 }
 
-/** Creates one externally settled Promise for lifecycle-race tests. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -58,7 +57,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Flushes bounded Promise turns until a synchronous predicate becomes true. */
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (predicate()) return;
@@ -67,7 +65,6 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   throw new Error("Timed out waiting for test condition");
 }
 
-/** Creates the generic parser shared by strict watch-plan fixtures. */
 function createParser(): KnowledgeSourceParserProfile {
   return {
     id: "markdown",
@@ -77,7 +74,6 @@ function createParser(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates one complete secret-free Bundle pipeline profile. */
 function createPipeline(bundleId: string): KnowledgeBundlePipelineProfile {
   return {
     version: KNOWLEDGE_PIPELINE_PROFILE_VERSION,
@@ -95,7 +91,6 @@ function createPipeline(bundleId: string): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Builds an opaque production watch plan for the supplied registered sources. */
 function createWatchPlan(fixtures: readonly SourceFixture[]): KnowledgeSourceWatchPlan {
   const byBundle = new Map<string, SourceFixture[]>();
   for (const fixture of fixtures) {
@@ -133,7 +128,6 @@ function createWatchPlan(fixtures: readonly SourceFixture[]): KnowledgeSourceWat
   );
 }
 
-/** Returns one exact registered source from a test plan. */
 function requireSource(
   plan: KnowledgeSourceWatchPlan,
   bundleId = "personal",
@@ -146,7 +140,6 @@ function requireSource(
   return source;
 }
 
-/** Creates one exact pending bound observation for a registered source. */
 function createBoundObservation(
   source: Readonly<WatchedKnowledgeSource>,
   inputRevision = 1,
@@ -163,12 +156,10 @@ function createBoundObservation(
   };
 }
 
-/** Wraps one bound observation in the durable recovery-work envelope. */
 function boundWork(observation: BoundSourceInputObservation): SourceInputObservationRecoveryWork {
   return { kind: "bound", observation };
 }
 
-/** Creates one allocated capture that must be left for the authoritative crawl. */
 function allocatedWork(
   source: Readonly<WatchedKnowledgeSource>,
   inputRevision = 1
@@ -185,7 +176,6 @@ function allocatedWork(
   };
 }
 
-/** Creates a strict committed settlement for one exact observation. */
 function committed(
   observation: BoundSourceInputObservation,
   queueRevision = observation.inputRevision
@@ -193,7 +183,6 @@ function committed(
   return { kind: "committed", observation, queueRevision };
 }
 
-/** Creates a handoff whose load and commit behaviors remain observable. */
 function createHandoff(
   work: SourceInputObservationRecoveryWork[] = [],
   commitImplementation: (
@@ -208,7 +197,6 @@ function createHandoff(
   };
 }
 
-/** Creates an exact-reader success for locally verified bytes. */
 function createArtifact(sourcePath: string, bytes = FIRST_BYTES) {
   return {
     sourcePath,
@@ -217,7 +205,6 @@ function createArtifact(sourcePath: string, bytes = FIRST_BYTES) {
   };
 }
 
-/** Asserts one stable sanitized startup failure. */
 async function expectFailure(
   promise: Promise<unknown>,
   code: KnowledgeSourceObservationStartupFailureCode

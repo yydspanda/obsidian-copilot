@@ -26,12 +26,10 @@ import {
 const BEFORE = "alpha\r\nold  \r\nkeep\r\n中文旧\r\n";
 const AFTER = "alpha\r\nnew\r\nkeep\r\n中文新\r\n";
 
-/** Creates a detached JSON-compatible test value. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Creates one valid proposed ChangeSet around caller-supplied changes. */
 function createProposal(
   changes: KnowledgeFileChange[],
   citations: ClaimCitation[] = []
@@ -49,7 +47,6 @@ function createProposal(
   };
 }
 
-/** Creates a valid exact update operation. */
 function createUpdate(
   overrides: Partial<Extract<KnowledgeFileChange, { operation: "update" }>> = {}
 ): Extract<KnowledgeFileChange, { operation: "update" }> {
@@ -66,7 +63,6 @@ function createUpdate(
   };
 }
 
-/** Creates a valid exact create operation. */
 function createCreate(
   overrides: Partial<Extract<KnowledgeFileChange, { operation: "create" }>> = {}
 ): Extract<KnowledgeFileChange, { operation: "create" }> {
@@ -84,7 +80,6 @@ function createCreate(
   };
 }
 
-/** Creates a valid exact delete operation. */
 function createDelete(
   overrides: Partial<Extract<KnowledgeFileChange, { operation: "delete" }>> = {}
 ): Extract<KnowledgeFileChange, { operation: "delete" }> {
@@ -99,7 +94,6 @@ function createDelete(
   };
 }
 
-/** Creates exact observations for every change in one proposal. */
 function createObservations(proposal: KnowledgeChangeSet): KnowledgeReviewTargetObservation[] {
   return proposal.changes.map((change) =>
     change.operation === "create"
@@ -108,7 +102,6 @@ function createObservations(proposal: KnowledgeChangeSet): KnowledgeReviewTarget
   );
 }
 
-/** Creates a command bound to one plan and explicit file decisions. */
 function createCommand(
   plan: KnowledgeReviewPlan,
   decisions: KnowledgeReviewFileDecision[]
@@ -121,7 +114,6 @@ function createCommand(
   };
 }
 
-/** Reads stable diagnostic codes from a typed review decision rejection. */
 function decisionErrorCodes(error: unknown): string[] {
   expect(error).toBeInstanceOf(KnowledgeReviewDecisionError);
   return error instanceof KnowledgeReviewDecisionError
@@ -129,12 +121,10 @@ function decisionErrorCodes(error: unknown): string[] {
     : [];
 }
 
-/** Scriptable deterministic validator used by service tests. */
 class FakeReviewValidator implements KnowledgeReviewCandidateValidator {
   public calls = 0;
   public inputs: KnowledgeReviewCandidateValidationInput[] = [];
 
-  /** Creates a validator around one explicit result handler. */
   constructor(
     private readonly handler: (
       input: KnowledgeReviewCandidateValidationInput,
@@ -142,7 +132,6 @@ class FakeReviewValidator implements KnowledgeReviewCandidateValidator {
     ) => Promise<unknown>
   ) {}
 
-  /** Records and delegates one deterministic candidate validation. */
   async validate(
     input: KnowledgeReviewCandidateValidationInput,
     signal: AbortSignal
@@ -153,7 +142,6 @@ class FakeReviewValidator implements KnowledgeReviewCandidateValidator {
   }
 }
 
-/** Creates an affirmative deterministic validator payload. */
 async function validCandidate(): Promise<unknown> {
   return {
     validation: { okfValid: true, citationsValid: true, linksValid: true },
@@ -629,7 +617,7 @@ describe("compileKnowledgeReviewSelection", () => {
   it("bounds the final exact and mixed selected candidate before validation", () => {
     const chunk = "x".repeat(KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile);
     const chunkHash = createFileContentHash(chunk);
-    /** Creates one large create operation without redundantly hashing shared test text. */
+
     const largeCreate = (id: string): KnowledgeFileChange =>
       createCreate({
         id,

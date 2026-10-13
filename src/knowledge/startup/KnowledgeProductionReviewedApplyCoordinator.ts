@@ -61,7 +61,6 @@ import {
   loadKnowledgeStudioReviewContext,
 } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 
-/** Dependencies captured by one exact released production workflow generation. */
 export interface KnowledgeProductionReviewedApplyCoordinatorInput {
   runtime: KnowledgeRuntimeStore;
   queue: IngestQueue;
@@ -74,7 +73,6 @@ export interface KnowledgeProductionReviewedApplyCoordinatorInput {
   onGenerationRefreshRequired(): void;
 }
 
-/** Hidden state retained by an authentic reviewed-apply coordinator. */
 interface KnowledgeProductionReviewedApplyCoordinatorState {
   runtime: KnowledgeRuntimeStore;
   queue: IngestQueue;
@@ -91,12 +89,10 @@ interface KnowledgeProductionReviewedApplyCoordinatorState {
 
 const coordinatorStates = new WeakMap<object, KnowledgeProductionReviewedApplyCoordinatorState>();
 
-/** Creates the platform-standard cancellation used for stale production generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Returns hidden state only for an authentic coordinator instance. */
 function requireCoordinatorState(value: unknown): KnowledgeProductionReviewedApplyCoordinatorState {
   if (
     typeof value !== "object" ||
@@ -110,7 +106,6 @@ function requireCoordinatorState(value: unknown): KnowledgeProductionReviewedApp
   return state;
 }
 
-/** Captures a detached, validated Bundle map for one generation. */
 function snapshotBundles(
   bundles: readonly KnowledgeBundleConfig[]
 ): ReadonlyMap<string, KnowledgeBundleConfig> {
@@ -123,7 +118,6 @@ function snapshotBundles(
   return result;
 }
 
-/** Proves caller cancellation and workflow ownership before a durable boundary. */
 function assertInvocation(
   state: KnowledgeProductionReviewedApplyCoordinatorState,
   signal?: AbortSignal
@@ -133,7 +127,6 @@ function assertInvocation(
   if (signal?.aborted) throw createAbortError();
 }
 
-/** Converts one immutable accepted record into the Queue's strict receipt. */
 function createAcceptedReceipt(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
@@ -151,7 +144,6 @@ function createAcceptedReceipt(
   };
 }
 
-/** Projects a durable Queue claim onto the execution plan's strict read-only input. */
 function createSourceParseJob(
   bundleId: string,
   claim: Pick<
@@ -168,7 +160,6 @@ function createSourceParseJob(
   };
 }
 
-/** Compares one terminal accepted record with the exact decision being confirmed. */
 function acceptedRecordMatches(
   record: AcceptedChangeSetReviewRecord,
   pending: PendingChangeSetReviewRecord,
@@ -184,7 +175,6 @@ function acceptedRecordMatches(
   );
 }
 
-/** Creates a strict literal Reject command after selection produced no file changes. */
 function createLiteralRejectCommand(
   pending: PendingChangeSetReviewRecord,
   command: KnowledgeReviewCommand
@@ -200,7 +190,6 @@ function createLiteralRejectCommand(
   };
 }
 
-/** Maps deterministic Review identity failures to an optimistic stale result. */
 function isStaleReviewError(error: unknown): boolean {
   return (
     error instanceof KnowledgeStudioRuntimeReadError ||
@@ -214,18 +203,15 @@ function isStaleReviewError(error: unknown): boolean {
   );
 }
 
-/** Requests a full lifecycle refresh without changing the durable operation outcome. */
 function requestGenerationRefresh(state: KnowledgeProductionReviewedApplyCoordinatorState): void {
   try {
     state.onGenerationRefreshRequired();
   } catch {
     // Durable truth remains recoverable even if lifecycle notification fails.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Persists acceptance and confirms an ambiguous storage failure by exact reread.
- */
 async function acceptWithConfirmation(
   state: KnowledgeProductionReviewedApplyCoordinatorState,
   bundleId: string,
@@ -258,7 +244,6 @@ async function acceptWithConfirmation(
   }
 }
 
-/** Builds an exact transaction input from the accepted record and new Queue claim. */
 function createTransactionInput(
   bundle: KnowledgeBundleConfig,
   accepted: AcceptedChangeSetReviewRecord,
@@ -281,15 +266,7 @@ function createTransactionInput(
   };
 }
 
-/**
- * Generation-owned explicit Review Accept → transaction Apply coordinator.
- *
- * Caller cancellation is honored until acceptance becomes durable. From that
- * point forward, the retained operation either reaches a crash-safe boundary or
- * leaves Runtime evidence for explicit recovery; it never fabricates rollback.
- */
 export class KnowledgeProductionReviewedApplyCoordinator {
-  /** Captures only exact production dependencies for one released generation. */
   constructor(input: KnowledgeProductionReviewedApplyCoordinatorInput) {
     if (
       !(input.runtime instanceof KnowledgeRuntimeStore) ||
@@ -320,12 +297,10 @@ export class KnowledgeProductionReviewedApplyCoordinator {
     Object.freeze(this);
   }
 
-  /** Proves a coordinator was constructed by this module without exposing its state. */
   static assert(value: unknown): asserts value is KnowledgeProductionReviewedApplyCoordinator {
     requireCoordinatorState(value);
   }
 
-  /** Serializes and executes one explicit selected Review apply. */
   submit(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -343,7 +318,6 @@ export class KnowledgeProductionReviewedApplyCoordinator {
     return operation;
   }
 
-  /** Runs one complete preflight, durable acceptance, transaction, and finalization. */
   private async execute(
     state: KnowledgeProductionReviewedApplyCoordinatorState,
     bundleId: string,
@@ -410,8 +384,6 @@ export class KnowledgeProductionReviewedApplyCoordinator {
         throw new ChangeSetValidationError(manifestValidation.diagnostics);
       }
 
-      // Revalidate target bytes, citations, projection, and adapter-specific
-      // create prerequisites before the Review becomes durably accepted.
       await new ChangeSetValidator(
         state.fileStore,
         new KnowledgeProductionSourceArtifactResolver(reviewPreparation.artifacts),
@@ -428,7 +400,6 @@ export class KnowledgeProductionReviewedApplyCoordinator {
       );
       acceptedDurably = true;
 
-      // UI cancellation no longer owns the durable action after acceptance.
       assertInvocation(state);
       let applying;
       try {
@@ -463,7 +434,6 @@ export class KnowledgeProductionReviewedApplyCoordinator {
       });
       const transactionInput = createTransactionInput(bundle, accepted, applying);
 
-      // Once apply enters, lifecycle invalidation may not interrupt journal/finalization.
       let receipt;
       try {
         receipt = await transaction.apply(transactionInput);

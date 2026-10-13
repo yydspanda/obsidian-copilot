@@ -9,14 +9,12 @@ type StartupStateWithoutGeneration<T> = T extends KnowledgePluginStartupState
   ? Omit<T, "generation">
   : never;
 
-/** Creates one typed startup observation for projector tests. */
 function createStartupState(
   state: StartupStateWithoutGeneration<KnowledgePluginStartupState>
 ): KnowledgePluginStartupState {
   return { generation: 7, ...state };
 }
 
-/** Creates the least-data edge context with a configurable ordinary Chat lane. */
 function createContext(
   projectCount = 1,
   reason: KnowledgeSetupReadinessContext["chatModel"]["reason"] = "configured"

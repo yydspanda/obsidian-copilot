@@ -15,14 +15,12 @@ type StartupStateWithoutGeneration<T> = T extends KnowledgePluginStartupState
   ? Omit<T, "generation">
   : never;
 
-/** Creates one safe startup state with an explicit generation. */
 function createState(
   state: StartupStateWithoutGeneration<KnowledgePluginStartupState>
 ): KnowledgePluginStartupState {
   return { generation: 1, ...state };
 }
 
-/** Creates one exact read-ready state accepted by the staged-delegate boundary. */
 function createReadReadyState(
   bundleIds: readonly string[]
 ): Extract<KnowledgePluginStartupState, { status: "workflow_read_ready" }> {

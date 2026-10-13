@@ -12,7 +12,6 @@ const MAX_TARGET_REQUESTS = 10_000;
 const MAX_LOADED_ENTRIES = 1_000_000;
 const RESOLVER_ERROR_TOKEN = Symbol("ObsidianKnowledgeCompilerTargetResolverError.constructor");
 
-/** Stable value-free failure categories for the production target read boundary. */
 export type ObsidianKnowledgeCompilerTargetResolverErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -25,27 +24,16 @@ export type ObsidianKnowledgeCompilerTargetResolverErrorCode =
   | "vault_unavailable"
   | "aborted";
 
-/** Read-before-content limits for one sequential target visit. */
 export interface ObsidianKnowledgeCompilerTargetVisitOptions {
   maxFileBytes: number;
 }
 
-/** Callback that consumes one exact observation before the next target is read. */
 export type ObsidianKnowledgeCompilerTargetVisitor = (
   observation: Readonly<CompilerTargetObservation>,
   fileByteSize: number | undefined
 ) => void | Promise<void>;
 
-/** Bounded sequential read port used by production output freshness verification. */
 export interface ObsidianKnowledgeCompilerTargetVisitPort {
-  /**
-   * Visits authorized targets one at a time without retaining prior file content.
-   *
-   * @param targets - Strict authorized target requests
-   * @param signal - Cancellation signal for the captured workflow generation
-   * @param options - Pre-read byte hard limit for every file
-   * @param visitor - Consumer invoked and awaited before the next target read
-   */
   visit(
     targets: readonly CompilerTargetRequest[],
     signal: AbortSignal,
@@ -56,16 +44,13 @@ export interface ObsidianKnowledgeCompilerTargetVisitPort {
 
 const resolverErrorCodes = new WeakMap<object, ObsidianKnowledgeCompilerTargetResolverErrorCode>();
 
-/** Creates one authentic sanitized resolver failure without retaining an input or cause. */
 function createResolverError(
   code: ObsidianKnowledgeCompilerTargetResolverErrorCode
 ): ObsidianKnowledgeCompilerTargetResolverError {
   return new ObsidianKnowledgeCompilerTargetResolverError(RESOLVER_ERROR_TOKEN, code);
 }
 
-/** Sanitized target-resolution failure containing no path, file content, Vault error, or cause. */
 export class ObsidianKnowledgeCompilerTargetResolverError extends Error {
-  /** Creates an error only for this module's private failure factory. */
   constructor(token: symbol, code: ObsidianKnowledgeCompilerTargetResolverErrorCode) {
     super("The Obsidian knowledge compiler target resolver failed");
     if (token !== RESOLVER_ERROR_TOKEN) {
@@ -76,13 +61,11 @@ export class ObsidianKnowledgeCompilerTargetResolverError extends Error {
     Object.freeze(this);
   }
 
-  /** Reads the stable code only from a module-minted resolver error. */
   static inspect(value: unknown): ObsidianKnowledgeCompilerTargetResolverErrorCode | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     return resolverErrorCodes.get(value);
   }
 
-  /** Returns the stable value-free failure code retained in hidden module state. */
   get code(): ObsidianKnowledgeCompilerTargetResolverErrorCode {
     const code = ObsidianKnowledgeCompilerTargetResolverError.inspect(this);
     if (!code) {
@@ -113,7 +96,6 @@ interface LoadedTargetIndex {
   byWindowsPathKey: ReadonlyMap<string, readonly LoadedTargetEntry[]>;
 }
 
-/** Strict adapter stat material retained only around one exact content read. */
 interface AdapterStatSnapshot {
   type: "file" | "folder";
   ctime: number;
@@ -121,15 +103,12 @@ interface AdapterStatSnapshot {
   size: number;
 }
 
-/** One sequentially resolved target and its optional pre-read byte size. */
 interface VisitedTarget {
   observation: Readonly<CompilerTargetObservation>;
   fileByteSize?: number;
 }
 
-/** Private wrapper that keeps visitor failures separate from Vault failures. */
 class TargetVisitorFailure extends Error {
-  /** Captures one callback failure only until the public visit boundary rethrows it. */
   constructor(public readonly error: unknown) {
     super("The bounded target visitor failed");
     this.name = "TargetVisitorFailure";
@@ -140,7 +119,6 @@ type UnknownDataMethod = (this: unknown, ...args: unknown[]) => unknown;
 
 const resolverStates = new WeakMap<object, Readonly<CapturedResolverDependencies>>();
 
-/** Returns hidden state only for one exact module-constructed resolver instance. */
 function requireResolverState(value: unknown): Readonly<CapturedResolverDependencies> {
   if (
     typeof value !== "object" ||
@@ -154,17 +132,14 @@ function requireResolverState(value: unknown): Readonly<CapturedResolverDependen
   return state;
 }
 
-/** Compares text by code unit so target order never depends on the host locale. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Stops target work with a sanitized cancellation when the exact signal is aborted. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw createResolverError("aborted");
 }
 
-/** Finds one callable data method without invoking an accessor on the owner chain. */
 function findDataMethod(value: unknown, key: string): UnknownDataMethod | undefined {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     return undefined;
@@ -187,7 +162,6 @@ function findDataMethod(value: unknown, key: string): UnknownDataMethod | undefi
   return undefined;
 }
 
-/** Captures one synchronous no-argument method with its exact receiver. */
 function captureNoArgumentMethod(value: unknown, key: string): () => unknown {
   const method = findDataMethod(value, key);
   if (!method) throw createResolverError("dependency_invalid");
@@ -197,7 +171,6 @@ function captureNoArgumentMethod(value: unknown, key: string): () => unknown {
   };
 }
 
-/** Captures one asynchronous path method with its exact receiver. */
 function capturePathMethod(value: unknown, key: string): (path: string) => Promise<unknown> {
   const method = findDataMethod(value, key);
   if (!method) throw createResolverError("dependency_invalid");
@@ -207,7 +180,6 @@ function capturePathMethod(value: unknown, key: string): (path: string) => Promi
   };
 }
 
-/** Captures one exact App, Vault, adapter, and immutable method receiver set. */
 function captureDependencies(app: App): Readonly<CapturedResolverDependencies> {
   try {
     if (typeof app !== "object" || app === null) {
@@ -237,7 +209,6 @@ function captureDependencies(app: App): Readonly<CapturedResolverDependencies> {
   }
 }
 
-/** Re-proves that the captured App still owns the same exact Vault and adapter. */
 function assertOwnerCurrent(state: Readonly<CapturedResolverDependencies>): void {
   try {
     if (
@@ -259,7 +230,6 @@ function assertOwnerCurrent(state: Readonly<CapturedResolverDependencies>): void
   }
 }
 
-/** Reads one enumerable data property without evaluating an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw createResolverError("request_invalid");
@@ -276,7 +246,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Checks an exact own string-key set without consulting property values. */
 function hasExactOwnKeys(value: unknown, expected: readonly string[]): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -292,12 +261,10 @@ function hasExactOwnKeys(value: unknown, expected: readonly string[]): boolean {
   }
 }
 
-/** Checks a canonical non-empty identifier without changing its identity. */
 function isCanonicalIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/** Strictly snapshots one compiler target request through data descriptors only. */
 function snapshotTargetRequest(value: unknown): Readonly<CompilerTargetRequest> {
   if (!hasExactOwnKeys(value, ["targetId", "path", "intent", "access"])) {
     throw createResolverError("request_invalid");
@@ -319,7 +286,6 @@ function snapshotTargetRequest(value: unknown): Readonly<CompilerTargetRequest> 
   return Object.freeze({ targetId, path: parsedPath.path, intent, access });
 }
 
-/** Strictly snapshots a bounded dense request array without iterator or accessor hooks. */
 function snapshotTargetRequests(value: unknown): readonly Readonly<CompilerTargetRequest>[] {
   if (!Array.isArray(value)) throw createResolverError("request_invalid");
   let length: number;
@@ -368,7 +334,6 @@ function snapshotTargetRequests(value: unknown): readonly Readonly<CompilerTarge
   return Object.freeze(requests);
 }
 
-/** Strictly snapshots the one bounded-visit resource option. */
 function snapshotVisitOptions(
   value: unknown
 ): Readonly<ObsidianKnowledgeCompilerTargetVisitOptions> {
@@ -382,7 +347,6 @@ function snapshotVisitOptions(
   return Object.freeze({ maxFileBytes: maxFileBytes as number });
 }
 
-/** Reads a loaded node path as an own enumerable data property. */
 function readLoadedPath(node: TFile | TFolder): string {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(node, "path");
@@ -399,7 +363,6 @@ function readLoadedPath(node: TFile | TFolder): string {
   }
 }
 
-/** Captures a bounded Windows-keyed index from the exact loaded Vault generation. */
 function captureLoadedIndex(state: Readonly<CapturedResolverDependencies>): LoadedTargetIndex {
   assertOwnerCurrent(state);
   let raw: unknown;
@@ -469,7 +432,6 @@ function captureLoadedIndex(state: Readonly<CapturedResolverDependencies>): Load
   return Object.freeze({ byWindowsPathKey });
 }
 
-/** Returns one unambiguous loaded entry or a sanitized Windows-collision failure. */
 function findLoadedEntry(
   index: LoadedTargetIndex,
   windowsPathKey: string
@@ -480,7 +442,6 @@ function findLoadedEntry(
   return entries[0];
 }
 
-/** Requires a post-I/O loaded index to retain the exact target node and canonical path. */
 function assertLoadedEntryCurrent(
   state: Readonly<CapturedResolverDependencies>,
   expected: LoadedTargetEntry
@@ -496,7 +457,6 @@ function assertLoadedEntryCurrent(
   }
 }
 
-/** Reads one required non-negative safe-integer adapter stat field. */
 function readAdapterStatInteger(value: unknown, key: "ctime" | "mtime" | "size"): number {
   if (typeof value !== "object" || value === null) {
     throw createResolverError("adapter_payload_invalid");
@@ -519,7 +479,6 @@ function readAdapterStatInteger(value: unknown, key: "ctime" | "mtime" | "size")
   }
 }
 
-/** Strictly detaches required adapter stat fields while tolerating platform extensions. */
 function snapshotAdapterStat(value: unknown): Readonly<AdapterStatSnapshot> | null {
   if (value === null) return null;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -547,7 +506,6 @@ function snapshotAdapterStat(value: unknown): Readonly<AdapterStatSnapshot> | nu
   });
 }
 
-/** Reads one full adapter stat snapshot under owner and cancellation checks. */
 async function readStatSnapshot(
   state: Readonly<CapturedResolverDependencies>,
   path: string,
@@ -567,7 +525,6 @@ async function readStatSnapshot(
   return snapshotAdapterStat(raw);
 }
 
-/** Reports whether two full stat snapshots describe the same exact file generation. */
 function sameAdapterStat(
   left: Readonly<AdapterStatSnapshot>,
   right: Readonly<AdapterStatSnapshot>
@@ -580,7 +537,6 @@ function sameAdapterStat(
   );
 }
 
-/** Re-proves every requested loaded identity with one final whole-Vault index. */
 function assertBatchLoadedIndexCurrent(
   state: Readonly<CapturedResolverDependencies>,
   initial: LoadedTargetIndex,
@@ -601,7 +557,6 @@ function assertBatchLoadedIndexCurrent(
   }
 }
 
-/** Reads and validates only the adapter stat discriminator needed by this boundary. */
 async function readStatType(
   state: Readonly<CapturedResolverDependencies>,
   path: string,
@@ -639,7 +594,6 @@ async function readStatType(
   return type;
 }
 
-/** Resolves one absent loaded key only after the adapter and a second index agree. */
 async function resolveUnloadedTarget(
   state: Readonly<CapturedResolverDependencies>,
   request: Readonly<CompilerTargetRequest>,
@@ -655,7 +609,6 @@ async function resolveUnloadedTarget(
   return Object.freeze({ targetId: request.targetId, kind: "missing", windowsPathKey });
 }
 
-/** Resolves one authorized loaded directory after adapter and index reproof. */
 async function resolveAuthorizedDirectory(
   state: Readonly<CapturedResolverDependencies>,
   request: Readonly<CompilerTargetRequest>,
@@ -669,7 +622,6 @@ async function resolveAuthorizedDirectory(
   return Object.freeze({ targetId: request.targetId, kind: "directory", path: entry.path });
 }
 
-/** Reads one authorized canonical file and rejects any index/stat owner drift around it. */
 async function resolveAuthorizedFile(
   state: Readonly<CapturedResolverDependencies>,
   request: Readonly<CompilerTargetRequest>,
@@ -702,7 +654,6 @@ async function resolveAuthorizedFile(
   });
 }
 
-/** Resolves one strict request without disclosing content to a create-only target. */
 async function resolveTarget(
   state: Readonly<CapturedResolverDependencies>,
   index: LoadedTargetIndex,
@@ -722,7 +673,6 @@ async function resolveTarget(
   return resolveAuthorizedFile(state, request, entry, signal);
 }
 
-/** Resolves one target for sequential visitation without retaining prior content. */
 async function resolveVisitedTarget(
   state: Readonly<CapturedResolverDependencies>,
   index: LoadedTargetIndex,
@@ -796,11 +746,9 @@ async function resolveVisitedTarget(
   });
 }
 
-/** Read-only Obsidian adapter for exact compiler target observations. */
 export class ObsidianKnowledgeCompilerTargetResolver
   implements CompilerTargetResolver, ObsidianKnowledgeCompilerTargetVisitPort
 {
-  /** Captures the exact App, Vault, adapter, and method receivers for this lifecycle. */
   constructor(app: App, executionOwner?: KnowledgeExecutionOwner) {
     const captured = captureDependencies(app);
     if (executionOwner !== undefined) {
@@ -826,12 +774,10 @@ export class ObsidianKnowledgeCompilerTargetResolver
     Object.freeze(this);
   }
 
-  /** Requires one exact-prototype module-constructed bounded Vault target reader. */
   static assert(value: unknown): asserts value is ObsidianKnowledgeCompilerTargetResolver {
     requireResolverState(value);
   }
 
-  /** Reports whether this genuine resolver belongs to one exact opaque execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireResolverState(value);
@@ -851,7 +797,6 @@ export class ObsidianKnowledgeCompilerTargetResolver
     }
   }
 
-  /** Resolves a strict target batch without mutating the Vault or reading unapproved content. */
   async resolve(targets: readonly CompilerTargetRequest[], signal: AbortSignal): Promise<unknown> {
     const state = requireResolverState(this);
     try {
@@ -875,7 +820,6 @@ export class ObsidianKnowledgeCompilerTargetResolver
     }
   }
 
-  /** Visits one bounded target at a time and releases its content before continuing. */
   async visit(
     targets: readonly CompilerTargetRequest[],
     signal: AbortSignal,

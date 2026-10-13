@@ -10,10 +10,8 @@ import type {
 } from "@/knowledge/model/types";
 import { validateKnowledgeIngestJob } from "@/knowledge/model/validation";
 
-/** Current version of the persisted ingest queue snapshot. */
 export const INGEST_QUEUE_VERSION = 5 as const;
 
-/** Durable reason that prevents a Bundle queue from claiming more work. */
 export type IngestQueuePauseReason =
   | "user"
   | "rate_limit"
@@ -21,7 +19,6 @@ export type IngestQueuePauseReason =
   | "recovery_required"
   | "commit_pending_ack";
 
-/** Durable execution gate shared by every job in one Bundle queue. */
 export type IngestQueueControl =
   | { status: "running" }
   | {
@@ -32,25 +29,17 @@ export type IngestQueueControl =
       resumeAt?: number;
     };
 
-/**
- * Latest source observation retained while older work is still in flight.
- *
- * Content and pipeline identity may deliberately match the active job when a
- * strictly newer observation has proven generated-output drift. The newer
- * input revision then preserves one repair execution without parallel work.
- */
 export interface IngestRerunRequest {
   jobId: string;
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
-  /** Latest durable per-source observation revision retained for the rerun. */
+
   inputRevision: number;
   requestedAt: number;
   updatedAt: number;
 }
 
-/** Latest durable source observation used to reject out-of-order watcher delivery. */
 export interface IngestSourceHighWatermark {
   sourceId: string;
   sourceContentHash: string;
@@ -59,7 +48,6 @@ export interface IngestSourceHighWatermark {
   observedAt: number;
 }
 
-/** Immutable queue-job identity shared by interrupted and committed apply markers. */
 export interface IngestApplyJobClaim {
   jobId: string;
   sourceId: string;
@@ -70,13 +58,11 @@ export interface IngestApplyJobClaim {
   startedAt: number;
 }
 
-/** Exact reviewed ChangeSet payload accepted by the user before file application. */
 export interface IngestReviewedChangeSetIdentity {
   changeSetId: string;
   changeSetDigest: string;
 }
 
-/** Exact durable Review Store decision that authorized one apply claim. */
 export interface IngestAcceptedReviewIdentity {
   proposalDigest: string;
   recordRevision: 1;
@@ -84,20 +70,17 @@ export interface IngestAcceptedReviewIdentity {
   acceptedAt: number;
 }
 
-/** Explicit fail-closed provenance for a reviewed apply claim migrated without full authority. */
 export interface IngestLegacyReviewIdentity {
   kind: "legacy_unverified";
   migratedFromVersion: 2 | 3;
 }
 
-/** Exact active or interrupted applying claim, optionally bound to reviewed content. */
 export interface IngestApplyClaimMarker extends IngestApplyJobClaim {
   reviewedChangeSet?: IngestReviewedChangeSetIdentity;
   acceptedReview?: IngestAcceptedReviewIdentity;
   legacyReview?: IngestLegacyReviewIdentity;
 }
 
-/** Durable hand-off proving that file commit finished before queue acknowledgement. */
 export interface IngestApplyCommitMarker extends IngestApplyJobClaim {
   transactionId: string;
   changeSetId: string;
@@ -106,7 +89,6 @@ export interface IngestApplyCommitMarker extends IngestApplyJobClaim {
   committedAt: number;
 }
 
-/** Durable proof that one accepted apply was explicitly abandoned before journaling. */
 export interface IngestApplyAbandonment extends IngestApplyJobClaim {
   changeSetId: string;
   changeSetDigest: string;
@@ -117,7 +99,6 @@ export interface IngestApplyAbandonment extends IngestApplyJobClaim {
   abandonedAt: number;
 }
 
-/** Durable proof that one exact review proposal was explicitly rejected. */
 export interface IngestReviewRejection {
   jobId: string;
   changeSetId: string;
@@ -127,7 +108,6 @@ export interface IngestReviewRejection {
   rejectedAt: number;
 }
 
-/** Durable pending Review Store record anchored before a queue waits for user input. */
 export interface IngestDurablePendingReview {
   kind: "durable";
   jobId: string;
@@ -137,7 +117,6 @@ export interface IngestDurablePendingReview {
   recordedAt: number;
 }
 
-/** Explicit fail-closed marker for a pre-v3 awaiting-review job without an anchor. */
 export interface IngestLegacyPendingReview {
   kind: "legacy_unverified";
   jobId: string;
@@ -145,10 +124,8 @@ export interface IngestLegacyPendingReview {
   migratedFromVersion: 1 | 2;
 }
 
-/** Exact pending-review ownership retained by the queue. */
 export type IngestPendingReview = IngestDurablePendingReview | IngestLegacyPendingReview;
 
-/** Complete versioned queue state persisted independently for one Bundle. */
 export interface IngestQueueSnapshot {
   version: typeof INGEST_QUEUE_VERSION;
   bundleId: string;
@@ -164,35 +141,22 @@ export interface IngestQueueSnapshot {
   applyCommit?: IngestApplyCommitMarker;
 }
 
-/** Narrow out-of-band capability authorizing one source-watermark advance. */
 export interface QueueSourceObservationWriteAuthority {
   kind: "source_observation";
   observationToken: string;
 }
 
-/** Exact compiler proof authorizing an atomic no-change Queue/Manifest commit. */
 export interface QueueNoChangesCommitWriteAuthority {
   kind: "no_changes_commit";
   plan: NoChangesManifestCommitPlan;
   planDigest: string;
 }
 
-/** Out-of-band authority interpreted only by the owning persistence adapter. */
 export type QueueWriteAuthority =
   | QueueSourceObservationWriteAuthority
   | QueueNoChangesCommitWriteAuthority;
 
-/**
- * Signals that queue state changed after a read and before its full snapshot write.
- */
 export class IngestQueueRevisionConflictError extends Error {
-  /**
-   * Creates an optimistic queue write conflict.
-   *
-   * @param bundleId - Bundle whose queue changed concurrently
-   * @param expectedRevision - Revision observed before the write, or null for create
-   * @param actualRevision - Optional revision observed by the storage adapter
-   */
   constructor(
     public readonly bundleId: string,
     public readonly expectedRevision: number | null,
@@ -208,26 +172,9 @@ export class IngestQueueRevisionConflictError extends Error {
   }
 }
 
-/** Persistence port for complete versioned queue snapshots. */
 export interface QueueStorage {
-  /**
-   * Reads unknown persisted JSON for one Bundle.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Unknown JSON, or null when no queue has been persisted
-   */
   read(bundleId: string): Promise<unknown>;
 
-  /**
-   * Writes a complete validated snapshot with optimistic revision checking.
-   * The comparison and full-snapshot replacement MUST be one atomic adapter
-   * operation; a read-then-write sequence without an exclusive lock is invalid.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param snapshot - Complete next queue revision
-   * @param expectedRevision - Previously observed revision, or null for create
-   * @param authority - Optional adapter-private authority for a source observation
-   */
   write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -243,10 +190,8 @@ const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const nonNegativeIntegerSchema = z.number().int().safe().nonnegative();
 const positiveIntegerSchema = z.number().int().safe().positive();
 
-/** Pause reasons accepted by the read-only version-1 migration schema. */
 type LegacyIngestQueuePauseReason = Exclude<IngestQueuePauseReason, "commit_pending_ack">;
 
-/** Version-1 queue control retained exclusively for strict read migration. */
 type LegacyIngestQueueControl =
   | { status: "running" }
   | {
@@ -257,7 +202,6 @@ type LegacyIngestQueueControl =
       resumeAt?: number;
     };
 
-/** Complete legacy snapshot accepted only by the version-1 read migration. */
 interface LegacyIngestQueueSnapshotV1 {
   version: 1;
   bundleId: string;
@@ -267,12 +211,10 @@ interface LegacyIngestQueueSnapshotV1 {
   reruns: IngestRerunRequest[];
 }
 
-/** Version-2 apply claim before durable accepted-review identity was retained. */
 interface LegacyIngestApplyClaimMarker extends IngestApplyJobClaim {
   reviewedChangeSet?: IngestReviewedChangeSetIdentity;
 }
 
-/** Complete version-2 snapshot accepted only by the strict read migration. */
 interface LegacyIngestQueueSnapshotV2 {
   version: 2;
   bundleId: string;
@@ -285,21 +227,18 @@ interface LegacyIngestQueueSnapshotV2 {
   applyCommit?: IngestApplyCommitMarker;
 }
 
-/** Version-3 accepted review identity before final Manifest intent was retained. */
 interface LegacyIngestAcceptedReviewIdentityV3 {
   proposalDigest: string;
   recordRevision: 1;
   acceptedAt: number;
 }
 
-/** Version-3 apply claim before the final Manifest intent digest was retained. */
 interface LegacyIngestApplyClaimMarkerV3 extends IngestApplyJobClaim {
   reviewedChangeSet?: IngestReviewedChangeSetIdentity;
   acceptedReview?: LegacyIngestAcceptedReviewIdentityV3;
   legacyReview?: IngestLegacyReviewIdentity;
 }
 
-/** Complete version-3 snapshot accepted only by the strict read migration. */
 interface LegacyIngestQueueSnapshotV3 {
   version: 3;
   bundleId: string;
@@ -314,7 +253,6 @@ interface LegacyIngestQueueSnapshotV3 {
   applyCommit?: IngestApplyCommitMarker;
 }
 
-/** Complete version-4 snapshot before durable apply-abandonment history was retained. */
 interface LegacyIngestQueueSnapshotV4 {
   version: 4;
   bundleId: string;
@@ -502,7 +440,6 @@ const pendingReviewSchema: z.ZodType<IngestPendingReview> = z.discriminatedUnion
     .strict(),
 ]);
 
-/** Strict read-only schema for a version-1 queue snapshot. */
 const legacyIngestQueueSnapshotSchema: z.ZodType<LegacyIngestQueueSnapshotV1> = z
   .object({
     version: z.literal(1),
@@ -514,7 +451,6 @@ const legacyIngestQueueSnapshotSchema: z.ZodType<LegacyIngestQueueSnapshotV1> = 
   })
   .strict();
 
-/** Strict read-only schema for a version-2 queue snapshot. */
 const legacyIngestQueueSnapshotV2Schema: z.ZodType<LegacyIngestQueueSnapshotV2> = z
   .object({
     version: z.literal(2),
@@ -529,7 +465,6 @@ const legacyIngestQueueSnapshotV2Schema: z.ZodType<LegacyIngestQueueSnapshotV2> 
   })
   .strict();
 
-/** Strict read-only schema for a version-3 queue snapshot. */
 const legacyIngestQueueSnapshotV3Schema: z.ZodType<LegacyIngestQueueSnapshotV3> = z
   .object({
     version: z.literal(3),
@@ -546,7 +481,6 @@ const legacyIngestQueueSnapshotV3Schema: z.ZodType<LegacyIngestQueueSnapshotV3> 
   })
   .strict();
 
-/** Strict read-only schema for a version-4 queue snapshot. */
 const legacyIngestQueueSnapshotV4Schema: z.ZodType<LegacyIngestQueueSnapshotV4> = z
   .object({
     version: z.literal(4),
@@ -563,12 +497,6 @@ const legacyIngestQueueSnapshotV4Schema: z.ZodType<LegacyIngestQueueSnapshotV4> 
   })
   .strict();
 
-/**
- * Strict runtime schema for a complete version-5 ingest queue snapshot.
- *
- * Version 5 intentionally has no extension bag. Every new persisted field
- * requires another version and an explicit read migration.
- */
 export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
   .object({
     version: z.literal(INGEST_QUEUE_VERSION),
@@ -586,73 +514,34 @@ export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
   })
   .strict();
 
-/**
- * Formats one Zod issue path for stable diagnostics.
- *
- * @param path - Zod property and array-index path
- * @returns Dot-separated diagnostic field
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.map(String).join(".");
 }
 
-/**
- * Reports whether unknown persisted JSON declares the legacy version-1 format.
- *
- * @param value - Untrusted queue JSON
- * @returns Whether the top-level version discriminator is exactly one
- */
 function isLegacyVersionOneSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 1
     : false;
 }
 
-/**
- * Reports whether unknown persisted JSON declares the legacy version-2 format.
- *
- * @param value - Untrusted queue JSON
- * @returns Whether the top-level version discriminator is exactly two
- */
 function isLegacyVersionTwoSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 2
     : false;
 }
 
-/**
- * Reports whether unknown persisted JSON declares the legacy version-3 format.
- *
- * @param value - Untrusted queue JSON
- * @returns Whether the top-level version discriminator is exactly three
- */
 function isLegacyVersionThreeSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 3
     : false;
 }
 
-/**
- * Reports whether unknown persisted JSON declares the legacy version-4 format.
- *
- * @param value - Untrusted queue JSON
- * @returns Whether the top-level version discriminator is exactly four
- */
 function isLegacyVersionFourSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 4
     : false;
 }
 
-/**
- * Reconstructs the best available per-source high-watermark from legacy records.
- *
- * Equal-revision payload conflicts deliberately retain the first candidate so
- * semantic validation can detect the disagreeing job or rerun and fail closed.
- *
- * @param legacy - Strictly parsed version-1 queue state
- * @returns One highest observed record per source
- */
 function deriveLegacySourceHighWatermarks(
   legacy: LegacyIngestQueueSnapshotV1
 ): IngestSourceHighWatermark[] {
@@ -682,13 +571,6 @@ function deriveLegacySourceHighWatermarks(
   return [...highWatermarks.values()];
 }
 
-/**
- * Makes pre-v3 awaiting-review state explicit without inventing Review Store proof.
- *
- * @param jobs - Strictly parsed legacy queue jobs
- * @param version - Legacy snapshot version that owned the jobs
- * @returns One fail-closed marker per legacy awaiting-review job
- */
 function deriveLegacyPendingReviews(
   jobs: readonly KnowledgeIngestJob[],
   version: 1 | 2
@@ -706,12 +588,6 @@ function deriveLegacyPendingReviews(
     }));
 }
 
-/**
- * Converts one strictly parsed version-1 snapshot into detached current state.
- *
- * @param legacy - Valid version-1 persisted queue
- * @returns Equivalent current queue without review-rejection or apply-abandonment history
- */
 function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
   const applying = legacy.jobs.find(
     (job): job is Extract<KnowledgeIngestJob, { status: "processing" }> =>
@@ -744,15 +620,6 @@ function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQ
   };
 }
 
-/**
- * Converts one strictly parsed version-2 snapshot into detached current state.
- *
- * Version 2 predates durable review rejection identity, so migration starts
- * that append-only audit collection empty without inferring prior decisions.
- *
- * @param legacy - Valid version-2 persisted queue
- * @returns Equivalent current queue
- */
 function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQueueSnapshot {
   return {
     ...legacy,
@@ -771,16 +638,6 @@ function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQ
   };
 }
 
-/**
- * Converts one strictly parsed version-3 snapshot into detached current state.
- *
- * A reviewed apply already in progress cannot be bound to a final Manifest
- * intent from version-3 bytes. Migration therefore preserves its ChangeSet
- * identity but marks the review authorization as explicitly unverified.
- *
- * @param legacy - Valid version-3 persisted queue
- * @returns Equivalent current queue with fail-closed reviewed apply provenance
- */
 function migrateVersionThreeSnapshot(
   legacy: LegacyIngestQueueSnapshotV3
 ): IngestQueueSnapshot | null {
@@ -847,16 +704,6 @@ function migrateVersionThreeSnapshot(
   };
 }
 
-/**
- * Converts one strictly parsed version-4 snapshot into detached current state.
- *
- * Version 4 predates explicit no-journal apply-abandonment history. Migration
- * starts the append-only audit collection empty rather than inferring decisions
- * from terminal jobs or Review Store state that is not present in this snapshot.
- *
- * @param legacy - Valid version-4 persisted queue
- * @returns Equivalent current queue with empty apply-abandonment history
- */
 function migrateVersionFourSnapshot(legacy: LegacyIngestQueueSnapshotV4): IngestQueueSnapshot {
   return {
     ...legacy,
@@ -865,12 +712,6 @@ function migrateVersionFourSnapshot(legacy: LegacyIngestQueueSnapshotV4): Ingest
   };
 }
 
-/**
- * Maps strict schema issues to stable public knowledge diagnostics.
- *
- * @param issues - Zod issues emitted by the selected persisted version schema
- * @returns Stable structural diagnostics
- */
 function mapSchemaIssues(issues: z.ZodIssue[]): KnowledgeDiagnostic[] {
   return issues.map((issue) => ({
     code: `schema_${issue.code}`,
@@ -880,12 +721,6 @@ function mapSchemaIssues(issues: z.ZodIssue[]): KnowledgeDiagnostic[] {
   }));
 }
 
-/**
- * Strictly parses unknown persisted queue JSON.
- *
- * @param value - Runtime value expected to contain a queue snapshot
- * @returns Parsed detached snapshot or structural diagnostics
- */
 export function parseIngestQueueSnapshot(
   value: unknown
 ): KnowledgeParseResult<IngestQueueSnapshot> {
@@ -945,14 +780,6 @@ export function parseIngestQueueSnapshot(
   };
 }
 
-/**
- * Appends one deterministic semantic validation error.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable code
- * @param field - Snapshot field associated with the issue
- * @param message - Human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -962,23 +789,10 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Reports whether a job still participates in source-level queue deduplication.
- *
- * @param job - Durable queue job
- * @returns Whether the job is non-terminal
- */
 function isActiveJob(job: KnowledgeIngestJob): boolean {
   return !["failed", "completed", "cancelled"].includes(job.status);
 }
 
-/**
- * Compares every immutable queue-job field retained by an apply claim marker.
- *
- * @param claim - Interrupted or committed apply identity
- * @param job - Durable queue job expected to own the claim
- * @returns Whether the marker belongs to the exact job input and attempt
- */
 function applyClaimMatchesJob(claim: IngestApplyJobClaim, job: KnowledgeIngestJob): boolean {
   return (
     claim.jobId === job.id &&
@@ -990,13 +804,6 @@ function applyClaimMatchesJob(claim: IngestApplyJobClaim, job: KnowledgeIngestJo
   );
 }
 
-/**
- * Compares the content and pipeline represented by two source observations.
- *
- * @param left - First source payload identity
- * @param right - Second source payload identity
- * @returns Whether both observations describe identical compile input
- */
 function sourcePayloadMatches(
   left: Pick<IngestSourceHighWatermark, "sourceContentHash" | "pipelineFingerprint">,
   right: Pick<IngestSourceHighWatermark, "sourceContentHash" | "pipelineFingerprint">
@@ -1007,12 +814,6 @@ function sourcePayloadMatches(
   );
 }
 
-/**
- * Validates cross-record queue invariants after strict shape parsing.
- *
- * @param value - Unknown or typed queue snapshot
- * @returns Deterministic validation result
- */
 export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidationResult {
   const parsed = parseIngestQueueSnapshot(value);
   if (!parsed.ok) {

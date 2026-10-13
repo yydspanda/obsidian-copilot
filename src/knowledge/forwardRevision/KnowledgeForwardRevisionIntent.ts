@@ -7,10 +7,8 @@ import type {
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of a user-requested forward Wiki revision intent. */
 export const KNOWLEDGE_FORWARD_REVISION_INTENT_VERSION = 1 as const;
 
-/** Defensive structural limits for detached forward-revision intent snapshots. */
 export const KNOWLEDGE_FORWARD_REVISION_INTENT_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: 1_024,
@@ -18,7 +16,6 @@ export const KNOWLEDGE_FORWARD_REVISION_INTENT_LIMITS = Object.freeze({
   maxTotalStringCharacters: 8_192,
 });
 
-/** Exact historical Apply identity whose accepted output is being proposed again. */
 export interface KnowledgeForwardRevisionHistoricalApplyIdentity {
   readonly bundleId: string;
   readonly pagePath: string;
@@ -36,7 +33,6 @@ export interface KnowledgeForwardRevisionHistoricalApplyIdentity {
   readonly selectedContentHash: string;
 }
 
-/** Current single-owner authority that a future proposal must freshly re-prove. */
 export interface KnowledgeForwardRevisionCurrentAuthority {
   readonly currentState: "applied";
   readonly ownership: "generated";
@@ -53,13 +49,6 @@ export interface KnowledgeForwardRevisionCurrentAuthority {
   readonly vaultObservedBeforeHash: string;
 }
 
-/**
- * Immutable descriptor and proof material for a possible forward revision.
- *
- * Possession of this data never authorizes a Review, Queue, Vault, Runtime, or
- * Manifest write. Every future mutation boundary must independently re-prove
- * current authority and consume its own authentic capability.
- */
 export interface KnowledgeForwardRevisionIntent {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_INTENT_VERSION;
   readonly kind: "forward_revision";
@@ -70,7 +59,6 @@ export interface KnowledgeForwardRevisionIntent {
   readonly current: Readonly<KnowledgeForwardRevisionCurrentAuthority>;
 }
 
-/** Caller facts from which the module derives a canonical opaque intent id. */
 export type CreateKnowledgeForwardRevisionIntentInput = Omit<
   KnowledgeForwardRevisionIntent,
   "version" | "kind" | "intentId"
@@ -133,9 +121,7 @@ const FALLBACK_VALIDATION_DIAGNOSTICS: readonly Readonly<KnowledgeDiagnostic>[] 
   }),
 ]);
 
-/** Sanitized strict-snapshot failure containing only fixed protocol diagnostics. */
 export class KnowledgeForwardRevisionIntentValidationError extends TypeError {
-  /** Creates an error; only module-issued instances carry authentic diagnostics. */
   constructor(diagnostics: readonly Readonly<KnowledgeDiagnostic>[], authenticityToken?: symbol) {
     super("The knowledge forward revision intent is invalid");
     this.name = "KnowledgeForwardRevisionIntentValidationError";
@@ -147,13 +133,11 @@ export class KnowledgeForwardRevisionIntentValidationError extends TypeError {
     }
   }
 
-  /** Returns detached deeply frozen diagnostics, never caller-owned storage. */
   get diagnostics(): readonly Readonly<KnowledgeDiagnostic>[] {
     return validationErrorDiagnostics.get(this) ?? FALLBACK_VALIDATION_DIAGNOSTICS;
   }
 }
 
-/** Creates one module-authentic validation error with detached diagnostics. */
 function createValidationError(
   diagnostics: readonly Readonly<KnowledgeDiagnostic>[]
 ): KnowledgeForwardRevisionIntentValidationError {
@@ -162,7 +146,6 @@ function createValidationError(
   );
 }
 
-/** Reports whether an unknown throw is an authentic module-issued failure. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionIntentValidationError {
@@ -173,12 +156,10 @@ function isAuthenticValidationError(
   );
 }
 
-/** Creates one fixed safe diagnostic without retaining rejected values. */
 function diagnostic(code: string, field: string, message: string): KnowledgeDiagnostic {
   return Object.freeze({ code, severity: "error" as const, field, message });
 }
 
-/** Reads one exact plain record entirely through own enumerable data descriptors. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -212,7 +193,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures a bounded dense string array without invoking element accessors. */
 function snapshotStringArray(value: unknown): readonly string[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -246,7 +226,6 @@ function snapshotStringArray(value: unknown): readonly string[] | undefined {
   }
 }
 
-/** Reports whether a string is one bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -258,7 +237,6 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -274,7 +252,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -283,17 +260,14 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether a value is a non-negative safe integer. */
 function isRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Captures and validates one canonical Vault-relative page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -312,7 +286,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Counts all protocol strings against one fixed construction budget. */
 function isWithinStringBudget(values: readonly string[]): boolean {
   let total = 0;
   for (const value of values) {
@@ -322,7 +295,6 @@ function isWithinStringBudget(values: readonly string[]): boolean {
   return true;
 }
 
-/** Strictly snapshots historical Apply authority without retaining caller objects. */
 function snapshotHistorical(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionHistoricalApplyIdentity> | undefined {
@@ -368,7 +340,6 @@ function snapshotHistorical(
   });
 }
 
-/** Strictly snapshots current sole-owner authority without retaining caller objects. */
 function snapshotCurrent(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionCurrentAuthority> | undefined {
@@ -413,7 +384,6 @@ function snapshotCurrent(
   });
 }
 
-/** Creates the identity payload shared by construction and strict revalidation. */
 function createIntentIdentityPayload(
   value: Omit<KnowledgeForwardRevisionIntent, "version" | "kind" | "intentId">
 ): JsonValue {
@@ -425,7 +395,6 @@ function createIntentIdentityPayload(
   } as unknown as JsonValue;
 }
 
-/** Derives the opaque deterministic id for one already detached semantic payload. */
 function deriveIntentId(
   value: Omit<KnowledgeForwardRevisionIntent, "version" | "kind" | "intentId">
 ): string {
@@ -434,7 +403,6 @@ function deriveIntentId(
   )}`;
 }
 
-/** Snapshots common creator facts before the canonical id exists. */
 function snapshotCreateInput(
   value: unknown
 ): Omit<KnowledgeForwardRevisionIntent, "version" | "kind" | "intentId"> {
@@ -474,15 +442,6 @@ function snapshotCreateInput(
   });
 }
 
-/**
- * Constructs descriptor-only proof material with a canonical derived intent id.
- *
- * The returned object is data, not write authority. This function performs no
- * I/O and cannot enqueue, persist Review state, or mutate Wiki/Manifest files.
- *
- * @param value - Exact historical and current facts without derived fields
- * @returns Detached deeply frozen canonical intent
- */
 export function createKnowledgeForwardRevisionIntent(
   value: CreateKnowledgeForwardRevisionIntentInput
 ): Readonly<KnowledgeForwardRevisionIntent> {
@@ -506,13 +465,6 @@ export function createKnowledgeForwardRevisionIntent(
   }
 }
 
-/**
- * Strictly snapshots one forward-revision intent from descriptor-safe bounded data.
- *
- * @param value - Unknown intent crossing a future durable boundary
- * @returns Detached deeply frozen protocol value
- * @throws KnowledgeForwardRevisionIntentValidationError when any invariant fails
- */
 export function snapshotKnowledgeForwardRevisionIntent(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionIntent> {
@@ -598,12 +550,6 @@ export function snapshotKnowledgeForwardRevisionIntent(
   }
 }
 
-/**
- * Validates one unknown intent without throwing or retaining rejected values.
- *
- * @param value - Unknown candidate intent
- * @returns Closed deterministic validation result
- */
 export function validateKnowledgeForwardRevisionIntent(value: unknown): KnowledgeValidationResult {
   try {
     snapshotKnowledgeForwardRevisionIntent(value);
@@ -625,12 +571,6 @@ export function validateKnowledgeForwardRevisionIntent(value: unknown): Knowledg
   }
 }
 
-/**
- * Computes the canonical content identity of one strict forward-revision intent.
- *
- * @param value - Strict or unknown intent candidate
- * @returns Namespaced lowercase SHA-256 digest
- */
 export function createKnowledgeForwardRevisionIntentDigest(value: unknown): string {
   const intent = snapshotKnowledgeForwardRevisionIntent(value);
   return sha256(

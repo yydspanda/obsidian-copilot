@@ -18,10 +18,8 @@ import type { JsonValue } from "@/knowledge/model/types";
 import { SUPPORTED_OKF_VERSION } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current secret-free model behavior projection consumed by future Knowledge providers. */
 export const KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION = 1 as const;
 
-/** Current private route-to-adapter binding included in every pipeline fingerprint. */
 export const KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION = 1 as const;
 
 const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
@@ -29,14 +27,12 @@ const DEFAULT_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const VERBOSITIES = ["low", "medium", "high"] as const;
 const MAX_CAPTURED_ARRAY_LENGTH = 10_000;
 
-/** Plain project fields captured from the same Projects generation as Bundle discovery. */
 export interface ProjectKnowledgePipelineProjectInput {
   id: string;
   projectModelKey: string;
   modelConfigs: unknown;
 }
 
-/** Narrow global settings projection; active model entries may retain ignored extra fields. */
 export interface ProjectKnowledgePipelineSettingsInput {
   temperature: number;
   maxTokens: number;
@@ -45,7 +41,6 @@ export interface ProjectKnowledgePipelineSettingsInput {
   activeModels: readonly unknown[];
 }
 
-/** Static compiler/parser/output behavior shared by one startup generation. */
 export interface ProjectKnowledgePipelineProfileSourceOptions {
   compilerVersion: string;
   compilerConfiguration: JsonValue;
@@ -56,7 +51,6 @@ export interface ProjectKnowledgePipelineProfileSourceOptions {
   providerRouteIdentities: Readonly<Record<string, string>>;
 }
 
-/** Stable, non-secret failure categories for profile projection. */
 export type ProjectKnowledgePipelineProfileErrorCode =
   | "input_invalid"
   | "project_missing"
@@ -94,9 +88,7 @@ const PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_TOKEN = Symbol(
   "ProjectKnowledgePipelineProfileError.constructor"
 );
 
-/** Sanitized profile-projection failure that never retains model settings. */
 export class ProjectKnowledgePipelineProfileError extends TypeError {
-  /** Creates one stable profile failure for this module's private mint authority. */
   constructor(token: symbol, code: ProjectKnowledgePipelineProfileErrorCode) {
     super("The project knowledge pipeline profile is invalid");
     if (
@@ -110,13 +102,11 @@ export class ProjectKnowledgePipelineProfileError extends TypeError {
     Object.freeze(this);
   }
 
-  /** Reads one authentic fixed diagnostic code without trusting exposed properties. */
   static inspect(value: unknown): ProjectKnowledgePipelineProfileErrorCode | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     return projectKnowledgePipelineProfileErrorCodes.get(value);
   }
 
-  /** Returns the fixed diagnostic code retained in module-private state. */
   get code(): ProjectKnowledgePipelineProfileErrorCode {
     const code = ProjectKnowledgePipelineProfileError.inspect(this);
     if (code === undefined) {
@@ -126,7 +116,6 @@ export class ProjectKnowledgePipelineProfileError extends TypeError {
   }
 }
 
-/** Mints one authentic profile error without exposing construction authority. */
 function createProjectKnowledgePipelineProfileError(
   code: ProjectKnowledgePipelineProfileErrorCode
 ): ProjectKnowledgePipelineProfileError {
@@ -196,12 +185,10 @@ interface ProjectKnowledgePipelineProfileSourceState {
 
 const profileSourceStates = new WeakMap<object, ProjectKnowledgePipelineProfileSourceState>();
 
-/** Compares strings by code unit without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Reads one enumerable own data property without invoking accessors. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") {
@@ -217,7 +204,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Reads one optional own data property while still rejecting accessors. */
 function readOptionalDataProperty(value: object, key: string): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -231,7 +217,6 @@ function readOptionalDataProperty(value: object, key: string): unknown {
   }
 }
 
-/** Checks a non-empty identity without trimming it. */
 function requireCanonicalText(
   value: unknown,
   code: ProjectKnowledgePipelineProfileErrorCode
@@ -242,7 +227,6 @@ function requireCanonicalText(
   return value;
 }
 
-/** Validates an optional finite number. */
 function readOptionalFiniteNumber(value: object, key: string): number | undefined {
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
@@ -252,7 +236,6 @@ function readOptionalFiniteNumber(value: object, key: string): number | undefine
   return candidate;
 }
 
-/** Validates an optional positive safe integer. */
 function readOptionalPositiveInteger(value: object, key: string): number | undefined {
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
@@ -262,7 +245,6 @@ function readOptionalPositiveInteger(value: object, key: string): number | undef
   return candidate as number;
 }
 
-/** Validates an optional boolean behavior field. */
 function readOptionalBoolean(value: object, key: string): boolean | undefined {
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
@@ -272,7 +254,6 @@ function readOptionalBoolean(value: object, key: string): boolean | undefined {
   return candidate;
 }
 
-/** Reads one closed-vocabulary optional text setting. */
 function readOptionalEnum(
   value: object,
   key: string,
@@ -286,7 +267,6 @@ function readOptionalEnum(
   return candidate;
 }
 
-/** Reads a required closed-vocabulary text setting. */
 function requireEnum(value: unknown, allowed: readonly string[]): string {
   if (typeof value !== "string" || !allowed.includes(value)) {
     throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
@@ -294,7 +274,6 @@ function requireEnum(value: unknown, allowed: readonly string[]): string {
   return value;
 }
 
-/** Reads a dense array using only its own data descriptors. */
 function snapshotDenseArray(value: unknown): readonly unknown[] {
   try {
     if (!Array.isArray(value)) {
@@ -325,7 +304,6 @@ function snapshotDenseArray(value: unknown): readonly unknown[] {
   }
 }
 
-/** Creates a detached immutable JSON snapshot without invoking accessors. */
 function snapshotJsonValue(
   value: unknown,
   ancestors: Set<object> = new Set<object>(),
@@ -381,7 +359,6 @@ function snapshotJsonValue(
   }
 }
 
-/** Canonicalizes a model endpoint into the profile's non-reversible identity. */
 export function createKnowledgeModelEndpointIdentity(value: unknown): string | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string" || value.trim() !== value) {
@@ -412,7 +389,6 @@ export function createKnowledgeModelEndpointIdentity(value: unknown): string | u
   );
 }
 
-/** Hashes provider routing fields so profile identity retains no tenant or deployment text. */
 function createRoutingIdentity(model: object): string | undefined {
   const keys = [
     "azureOpenAIApiInstanceName",
@@ -430,7 +406,6 @@ function createRoutingIdentity(model: object): string | undefined {
   return sha256(`knowledge-model-routing-v1\n${canonicalizeJson(routing)}`);
 }
 
-/** Captures a project record without retaining unrelated project text or Bundle input. */
 function captureProject(value: unknown): CapturedProject {
   try {
     const id = requireCanonicalText(readDataProperty(value, "id"), "input_invalid");
@@ -465,7 +440,6 @@ function captureProject(value: unknown): CapturedProject {
   }
 }
 
-/** Captures identity for every model and behavior only for project-selected identities. */
 function captureActiveModel(
   value: unknown,
   selectedModelKeys: ReadonlySet<string>
@@ -521,7 +495,6 @@ function captureActiveModel(
   });
 }
 
-/** Captures the settings allowlist once so later resolutions cannot observe mutation. */
 function captureSettings(
   value: ProjectKnowledgePipelineSettingsInput,
   selectedModelKeys: ReadonlySet<string>
@@ -553,7 +526,6 @@ function captureSettings(
   });
 }
 
-/** Captures static compiler/parser behavior as detached immutable JSON. */
 function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
   options: CapturedOptions;
   supportedProviders: ReadonlySet<string>;
@@ -637,7 +609,6 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
   };
 }
 
-/** Resolves one exact enabled project model into a secret-free behavior projection. */
 function selectModelBehavior(
   project: CapturedProject,
   settings: CapturedSettings,
@@ -743,7 +714,6 @@ function selectModelBehavior(
   return Object.freeze({ provider: selected.provider, model: modelIdentity, configuration });
 }
 
-/** Returns opaque source state only for an authentic constructed instance. */
 function requireProfileSourceState(value: unknown): ProjectKnowledgePipelineProfileSourceState {
   if (typeof value !== "object" || value === null) {
     throw createProjectKnowledgePipelineProfileError("input_invalid");
@@ -755,15 +725,7 @@ function requireProfileSourceState(value: unknown): ProjectKnowledgePipelineProf
   return state;
 }
 
-/**
- * Projects one Projects/settings generation into strict, secret-free pipeline profiles.
- *
- * Full model records may contain API keys, but this source reads only a fixed
- * positive allowlist of behavior fields. A future provider adapter must consume
- * this projection rather than spreading the original model object again.
- */
 export class ProjectKnowledgePipelineProfileSource {
-  /** Captures one immutable project/settings generation and static pipeline behavior. */
   constructor(
     projects: readonly ProjectKnowledgePipelineProjectInput[],
     settings: ProjectKnowledgePipelineSettingsInput,
@@ -793,7 +755,6 @@ export class ProjectKnowledgePipelineProfileSource {
     Object.freeze(this);
   }
 
-  /** Resolves the exact Bundle owner's configured project model without fallback. */
   resolve(owner: ConfiguredProjectKnowledgeBundle): KnowledgeBundlePipelineProfile {
     const state = requireProfileSourceState(this);
     const projectId = requireCanonicalText(readDataProperty(owner, "projectId"), "input_invalid");

@@ -1,7 +1,3 @@
-// react-resizable-panels ships ESM-only (no CJS dist entry), which Jest can't
-// parse. Tests never exercise the resize behavior — they only pull the package
-// in transitively via UI modals — so stub the three primitives `resizable.tsx`
-// consumes with passthrough components that render their children.
 import React from "react";
 
 const passthrough = (displayName) => {
@@ -10,6 +6,6 @@ const passthrough = (displayName) => {
   return Component;
 };
 
-export const PanelGroup = passthrough("PanelGroup");
+export const Group = passthrough("Group");
 export const Panel = passthrough("Panel");
-export const PanelResizeHandle = passthrough("PanelResizeHandle");
+export const Separator = passthrough("Separator");

@@ -8,7 +8,6 @@ import {
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
-/** Creates an unused atomic boundary for facade-isolation tests. */
 function createUnusedAtomicRuntimeFile(): AtomicRuntimeFile {
   return {
     initialize: jest.fn(async () => undefined),

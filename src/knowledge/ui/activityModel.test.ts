@@ -28,13 +28,6 @@ interface TestJobOptions {
   rerunRequested?: boolean;
 }
 
-/**
- * Creates fields shared by every test job.
- *
- * @param id - Stable test job id
- * @param options - Optional identity and timestamp overrides
- * @returns Common durable job fields
- */
 function createJobBase(id: string, options: TestJobOptions = {}) {
   return {
     id,
@@ -50,13 +43,6 @@ function createJobBase(id: string, options: TestJobOptions = {}) {
   };
 }
 
-/**
- * Creates one pending queue job.
- *
- * @param id - Stable test job id
- * @param options - Optional common fields and retry timestamp
- * @returns Pending durable job
- */
 function createPendingJob(
   id: string,
   options: TestJobOptions & { nextAttemptAt?: number } = {}
@@ -69,14 +55,6 @@ function createPendingJob(
   };
 }
 
-/**
- * Creates one actively processing queue job.
- *
- * @param id - Stable test job id
- * @param stage - Current durable work stage
- * @param options - Optional common fields
- * @returns Processing durable job
- */
 function createProcessingJob(
   id: string,
   stage: KnowledgeIngestWorkStage,
@@ -91,14 +69,6 @@ function createProcessingJob(
   };
 }
 
-/**
- * Creates one paused queue job.
- *
- * @param id - Stable test job id
- * @param stage - Paused non-applying stage
- * @param options - Optional common fields and reason
- * @returns Paused durable job
- */
 function createPausedJob(
   id: string,
   stage: Exclude<KnowledgeIngestWorkStage, "applying"> = "analyzing",
@@ -114,13 +84,6 @@ function createPausedJob(
   };
 }
 
-/**
- * Creates one awaiting-review queue job.
- *
- * @param id - Stable test job id
- * @param options - Optional common fields
- * @returns Awaiting-review durable job
- */
 function createReviewJob(
   id: string,
   options: TestJobOptions = {}
@@ -133,15 +96,6 @@ function createReviewJob(
   };
 }
 
-/**
- * Creates one failed queue job.
- *
- * @param id - Stable test job id
- * @param stage - Stage that failed
- * @param retryable - Whether the queue permits explicit retry
- * @param options - Optional common fields
- * @returns Failed durable job
- */
 function createFailedJob(
   id: string,
   stage: "queued" | KnowledgeIngestWorkStage | "review" = "generating",
@@ -162,13 +116,6 @@ function createFailedJob(
   };
 }
 
-/**
- * Creates one completed queue job.
- *
- * @param id - Stable test job id
- * @param options - Optional common fields
- * @returns Completed durable job
- */
 function createCompletedJob(id: string, options: TestJobOptions = {}): KnowledgeIngestJob {
   const base = createJobBase(id, options);
   return {
@@ -180,13 +127,6 @@ function createCompletedJob(id: string, options: TestJobOptions = {}): Knowledge
   };
 }
 
-/**
- * Creates one cancelled queue job.
- *
- * @param id - Stable test job id
- * @param options - Optional common fields
- * @returns Cancelled durable job
- */
 function createCancelledJob(id: string, options: TestJobOptions = {}): KnowledgeIngestJob {
   const base = createJobBase(id, options);
   return {
@@ -197,14 +137,6 @@ function createCancelledJob(id: string, options: TestJobOptions = {}): Knowledge
   };
 }
 
-/**
- * Creates a trusted test queue snapshot.
- *
- * @param jobs - Durable jobs contained by the snapshot
- * @param control - Optional Bundle execution gate
- * @param markers - Optional apply correlation markers
- * @returns Complete queue snapshot
- */
 function createSnapshot(
   jobs: KnowledgeIngestJob[],
   control: IngestQueueControl = { status: "running" },
@@ -246,12 +178,6 @@ function createSnapshot(
   };
 }
 
-/**
- * Creates an apply marker that exactly owns one completed test job.
- *
- * @param job - Completed durable job
- * @returns Correlated durable commit marker
- */
 function createCommitMarker(job: Extract<KnowledgeIngestJob, { status: "completed" }>) {
   const marker: IngestApplyCommitMarker = {
     jobId: job.id,
@@ -270,12 +196,6 @@ function createCommitMarker(job: Extract<KnowledgeIngestJob, { status: "complete
   return marker;
 }
 
-/**
- * Creates an interrupted apply claim for one failed test job.
- *
- * @param job - Failed applying job
- * @returns Durable apply claim marker
- */
 function createApplyClaim(job: Extract<KnowledgeIngestJob, { status: "failed" }>) {
   if (job.stage !== "applying") {
     throw new Error("Apply claim fixture must own an applying job");
@@ -292,12 +212,6 @@ function createApplyClaim(job: Extract<KnowledgeIngestJob, { status: "failed" }>
   return marker;
 }
 
-/**
- * Creates a semantically correlated snapshot for a single stage fixture.
- *
- * @param job - Single durable job under test
- * @returns Queue snapshot including any required execution gate or claim
- */
 function createSingleJobSnapshot(job: KnowledgeIngestJob): IngestQueueSnapshot {
   if (job.status === "processing" && job.stage === "applying") {
     const marker: IngestApplyClaimMarker = {

@@ -11,7 +11,6 @@ const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 const HASH_D = "d".repeat(64);
 
-/** Creates one internally coherent applied acceptance-authority fixture. */
 function createAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   return {
     runtimeId: "runtime-1",
@@ -44,7 +43,6 @@ function createAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   };
 }
 
-/** Creates a mutable JSON clone for persisted-state adversarial checks. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

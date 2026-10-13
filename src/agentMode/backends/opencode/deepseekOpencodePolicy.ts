@@ -14,7 +14,6 @@ interface DeepSeekOpencodeRoute {
   legacyCatalogBaseId: string | null;
 }
 
-/** Input retained while DeepSeek picker aliases and owners are reconciled. */
 export interface DeepSeekOpencodePickerCandidate {
   entry: EnabledModelEntry;
   provider: Provider;
@@ -82,12 +81,6 @@ function resolveDeepSeekOpencodeRoute(
   return undefined;
 }
 
-/**
- * Returns the isolated provider namespace required by a custom DeepSeek
- * endpoint, or `undefined` when normal OpenCode provider mapping applies.
- *
- * @param provider - Persisted provider whose OpenCode namespace is being selected.
- */
 export function deepSeekOpencodeProviderIdOverride(provider: Provider): string | undefined {
   // A compatible endpoint override cannot share the official provider key:
   // doing so mixes its route and credential with any enabled official row.
@@ -95,14 +88,6 @@ export function deepSeekOpencodeProviderIdOverride(provider: Provider): string |
   return isCustomDeepSeekEndpoint(provider) ? provider.providerId : undefined;
 }
 
-/**
- * Resolves the DeepSeek-specific model identity for an OpenCode provider row.
- * `undefined` delegates to normal OpenCode behavior; `null` rejects a retired
- * official/native identity before provider I/O.
- *
- * @param provider - Persisted provider that owns the configured model.
- * @param modelIdentity - Configured bare model id, or native provider-prefixed id.
- */
 function resolveDeepSeekOpencodeModelIdentity(
   provider: Provider,
   modelIdentity: string
@@ -112,14 +97,6 @@ function resolveDeepSeekOpencodeModelIdentity(
   return route.resolvedModelIdentity;
 }
 
-/**
- * Resolves the model identity OpenCode should expose for one configured row.
- * Official and native DeepSeek aliases become canonical, retired identities
- * return `null`, and every unrelated provider keeps its configured identity.
- *
- * @param provider - Provider row that establishes endpoint ownership.
- * @param configuredModel - Configured model whose identity is being resolved.
- */
 export function resolveOpencodeConfiguredModelIdentity(
   provider: Provider,
   configuredModel: ConfiguredModel
@@ -130,13 +107,6 @@ export function resolveOpencodeConfiguredModelIdentity(
   return resolvedIdentity === undefined ? configuredModel.info.id : resolvedIdentity;
 }
 
-/**
- * Resolves a persisted OpenCode selection, applying owner checks to the shared
- * DeepSeek namespace and passing every other namespace through unchanged.
- *
- * @param baseModelId - Persisted OpenCode `<provider>/<model>` identity.
- * @param settings - Current provider, configured-model, and enabled-model snapshot.
- */
 export function normalizeOpencodeSelectionBaseId(
   baseModelId: string,
   settings: CopilotSettings
@@ -195,12 +165,6 @@ export function normalizeOpencodeSelectionBaseId(
   return null;
 }
 
-/**
- * Collapses canonical DeepSeek picker aliases and removes shared routes owned
- * by more than one provider while preserving every other candidate in order.
- *
- * @param candidates - Routable picker entries paired with their persisted owners.
- */
 export function reconcileDeepSeekOpencodePickerCandidates(
   candidates: readonly DeepSeekOpencodePickerCandidate[]
 ): readonly EnabledModelEntry[] {
@@ -246,12 +210,6 @@ export function reconcileDeepSeekOpencodePickerCandidates(
     : out.filter((entry) => !ambiguousBaseIds.has(entry.baseModelId));
 }
 
-/**
- * Returns whether enabled official DeepSeek rows would collapse two accounts
- * onto OpenCode's single catalog provider key.
- *
- * @param entries - Current backend registry resolution, including broken rows.
- */
 export function hasAmbiguousDeepSeekOpencodeRoute(
   entries: readonly EnabledBackendEntry[]
 ): boolean {

@@ -4,7 +4,6 @@ import {
 } from "@/knowledge/startup/KnowledgeProductionWorkerSession";
 import type { IngestQueue, RunNextResult } from "@/knowledge/ingest/queue/IngestQueue";
 
-/** Creates a Queue-shaped test double with deterministic results. */
 function createQueue(result: RunNextResult = { kind: "idle" }): {
   queue: IngestQueue;
   runNext: jest.Mock<Promise<RunNextResult>, [string]>;

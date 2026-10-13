@@ -11,21 +11,18 @@ const TABS = [
 
 type TabItemProps = React.ComponentProps<typeof TabItem>;
 
-/** A whole strip plus its panel — the unit a reader actually judges the variant by. */
 const Strip: React.FC<{ variant: TabVariant; labels?: string[] }> = ({ variant, labels }) => {
   const tabs = labels ? labels.map((label, i) => ({ id: `t${i}`, label, icon: null })) : TABS;
   const [selected, setSelected] = React.useState(tabs[0].id);
   return (
     <div className="tw-flex tw-flex-col">
       <div className="tw-flex tw-flex-wrap tw-gap-1" role="tablist">
-        {tabs.map((tab, index) => (
+        {tabs.map((tab) => (
           <TabItem
             key={tab.id}
             tab={tab}
             isSelected={selected === tab.id}
             onClick={() => setSelected(tab.id)}
-            isFirst={index === 0}
-            isLast={index === tabs.length - 1}
             variant={variant}
           />
         ))}
@@ -44,12 +41,10 @@ const meta = {
 } satisfies Meta<TabItemProps>;
 export default meta;
 
-/** Pane-edge strip: rounded at the top only, and its panel paints the grey backdrop. */
 export const PageVariant: StoryObj<TabItemProps> = {
   render: () => <Strip variant="page" />,
 };
 
-/** Nested chips: uniformly rounded, accent outline when selected, no second backdrop. */
 export const InlineVariant: StoryObj<TabItemProps> = {
   render: () => <Strip variant="inline" />,
 };
@@ -66,8 +61,6 @@ export const WarningDot: StoryObj<TabItemProps> = {
         }}
         isSelected={false}
         onClick={() => undefined}
-        isFirst={false}
-        isLast={false}
       />
       <TabItem
         tab={{
@@ -78,19 +71,11 @@ export const WarningDot: StoryObj<TabItemProps> = {
         }}
         isSelected
         onClick={() => undefined}
-        isFirst={false}
-        isLast={false}
       />
     </div>
   ),
 };
 
-/**
- * The real Agents strip: four tabs whose labels are long enough to wrap once the
- * canvas is narrow. Narrow the gallery's width toolbar over this one — a story
- * cannot pin a width, so the fixture supplies the content and the toolbar
- * supplies the boundary.
- */
 export const LongLabels: StoryObj<TabItemProps> = {
   render: () => (
     <div className="tw-flex tw-flex-col tw-gap-4">

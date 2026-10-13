@@ -30,9 +30,7 @@ interface LinkedSignal {
 const states = new WeakMap<object, State>();
 const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 
-/** Explicit fail-closed action used before and between production generations. */
 class UnavailableKnowledgeForwardRevisionProposalActionPort implements KnowledgeForwardRevisionProposalActionPort {
-  /** Returns a value-free unavailable result without reading caller values. */
   async proposeKnownOutput(
     _session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     _outputRef: string,
@@ -42,15 +40,12 @@ class UnavailableKnowledgeForwardRevisionProposalActionPort implements Knowledge
   }
 }
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether one caught value is platform-standard cancellation. */
 const isAbortError = isKnowledgeAbortError;
 
-/** Captures the exact production adapter receiver behind one frozen invocation. */
 function captureProductionDelegate(
   value: KnowledgeProductionForwardRevisionProposalActionAdapter
 ): Readonly<CapturedDelegate> {
@@ -65,7 +60,6 @@ function captureProductionDelegate(
   });
 }
 
-/** Captures the internal unavailable action without widening replacement authority. */
 function captureUnavailableDelegate(
   value: KnowledgeForwardRevisionProposalActionPort
 ): Readonly<CapturedDelegate> {
@@ -79,7 +73,6 @@ function captureUnavailableDelegate(
   });
 }
 
-/** Links caller and generation cancellation for pre-publication coordinator checks. */
 function linkSignals(caller: AbortSignal, generation: AbortSignal): Readonly<LinkedSignal> {
   const controller = new AbortController();
   const abort = (): void => controller.abort();
@@ -97,7 +90,6 @@ function linkSignals(caller: AbortSignal, generation: AbortSignal): Readonly<Lin
   });
 }
 
-/** Returns hidden state only for an authentic stable proposal action port. */
 function requireState(value: unknown): State {
   try {
     if (
@@ -116,9 +108,7 @@ function requireState(value: unknown): State {
   throw createAbortError();
 }
 
-/** Stable generation-revocable action surface exposed to Known applied outputs UI. */
 export class DelegatingKnowledgeForwardRevisionProposalActionPort implements KnowledgeForwardRevisionProposalActionPort {
-  /** Creates one unavailable stable action surface. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeForwardRevisionProposalActionPort());
     states.set(this, {
@@ -132,14 +122,12 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     Object.freeze(this);
   }
 
-  /** Requires one exact process-local stable proposal action port. */
   static assert(
     value: unknown
   ): asserts value is DelegatingKnowledgeForwardRevisionProposalActionPort {
     requireState(value);
   }
 
-  /** Requires that one exact production adapter owns the current generation. */
   static assertCurrentDelegate(
     value: unknown,
     delegate: KnowledgeProductionForwardRevisionProposalActionAdapter
@@ -149,13 +137,11 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     if (state.disposed || state.generation.delegate.owner !== delegate) throw createAbortError();
   }
 
-  /** Reports whether this authentic surface currently routes to a production delegate. */
   isAvailable(): boolean {
     const state = requireState(this);
     return !state.disposed && state.generation.delegate.owner !== state.unavailable;
   }
 
-  /** Atomically publishes one genuine production adapter and revokes old work. */
   replaceDelegate(delegate: KnowledgeProductionForwardRevisionProposalActionAdapter): void {
     const state = requireState(this);
     if (state.disposed) throw createAbortError();
@@ -168,7 +154,6 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     previous.abortController.abort();
   }
 
-  /** Conditionally revokes only the exact production adapter still installed. */
   revokeDelegate(delegate: KnowledgeProductionForwardRevisionProposalActionAdapter): void {
     const state = requireState(this);
     KnowledgeProductionForwardRevisionProposalActionAdapter.assert(delegate);
@@ -176,7 +161,6 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     this.setUnavailable();
   }
 
-  /** Withdraws the current generation without disposing the stable UI surface. */
   setUnavailable(): void {
     const state = requireState(this);
     if (state.disposed) return;
@@ -188,13 +172,6 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     previous.abortController.abort();
   }
 
-  /**
-   * Routes one opaque authentic session selection through the current generation.
-   *
-   * Generation or caller cancellation wins for every non-committed result. A
-   * confirmed `published` result wins after delegate dispatch so durable truth is
-   * never rewritten as a cancellation merely because the lease was then revoked.
-   */
   async proposeKnownOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -226,7 +203,6 @@ export class DelegatingKnowledgeForwardRevisionProposalActionPort implements Kno
     }
   }
 
-  /** Permanently revokes this stable action surface and all in-flight work. */
   dispose(): void {
     const state = requireState(this);
     if (state.disposed) return;

@@ -114,7 +114,6 @@ interface AttemptResult {
   plannedOperation: "ingest" | "query_writeback";
 }
 
-/** Creates the single project-owned Bundle used by authentic preparation tests. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   return {
     projectId: "project-personal",
@@ -129,7 +128,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   };
 }
 
-/** Creates the initial durable Manifest for the production Queue attempt. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -146,7 +144,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates an exact managed source whose strict origin authorizes query writeback. */
 function createQueryWritebackManifest(): SourceManifest {
   const manifest = createManifest();
   return {
@@ -164,7 +161,6 @@ function createQueryWritebackManifest(): SourceManifest {
   };
 }
 
-/** Creates the parser identity retained in the exact pipeline fingerprint. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -174,7 +170,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates the complete secret-free model profile bound to the private route. */
 function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -209,21 +204,18 @@ function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates one exact source or schema byte read. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
 
-/** Builds the authentic workflow plan shared by Queue proof and source parsing. */
 async function createExecutionPlan(
   profile: KnowledgeBundlePipelineProfile,
   manifest: SourceManifest,
   executionOwner: ReturnType<typeof createKnowledgeExecutionOwner>
 ): Promise<KnowledgeSourceExecutionPlan> {
   const parser: KnowledgeByteParser = {
-    /** Returns the exact parser profile used by planning. */
     getProfile: () => createParserProfile(),
-    /** Converts exact source bytes into one trusted full-text artifact. */
+
     parse: async () => ({
       artifact: {
         kind: "text" as const,
@@ -251,7 +243,6 @@ async function createExecutionPlan(
   }).load([createOwner()], new AbortController().signal);
 }
 
-/** Creates a deterministic missing-target resolver for a new Wiki page. */
 function createTargetResolver(): CompilerTargetResolver {
   return Object.freeze({
     resolve: async (targets: readonly CompilerTargetRequest[]) =>
@@ -263,12 +254,10 @@ function createTargetResolver(): CompilerTargetResolver {
   });
 }
 
-/** Creates an affirmative deterministic candidate validator for handler protocol tests. */
 function createCandidateValidator(): CompilerCandidateValidator {
   return Object.freeze({ validate: async () => VALIDATION_SUCCESS });
 }
 
-/** Creates a source-backed draft for every program-owned target. */
 function createGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
     version: 1,
@@ -282,7 +271,6 @@ function createGenerationWireOutput(request: CompilerGenerationRequest): string 
   });
 }
 
-/** Creates an authentic no-change attempt for an existing owned page. */
 function createUnchangedAttemptOptions(): AttemptOptions {
   const manifest = createManifest();
   manifest.entries[0].lastSuccessful = {
@@ -329,7 +317,6 @@ function createUnchangedAttemptOptions(): AttemptOptions {
   };
 }
 
-/** Creates a draft with an unknown support id for controlled failure coverage. */
 function createUnsupportedGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
     version: 1,
@@ -343,7 +330,6 @@ function createUnsupportedGenerationWireOutput(request: CompilerGenerationReques
   });
 }
 
-/** Creates one real repository for constructor validation without Runtime execution. */
 function createStandaloneReviews(): ChangeSetReviewRepository {
   const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
   const executionOwner = createKnowledgeExecutionOwner();
@@ -352,7 +338,6 @@ function createStandaloneReviews(): ChangeSetReviewRepository {
   });
 }
 
-/** Creates one private route lease and its lifecycle close owner. */
 function createRouteLease(
   profile: KnowledgeBundlePipelineProfile,
   invoke: KnowledgePrivateModelInvoke,
@@ -368,7 +353,6 @@ function createRouteLease(
   return { owner, lease: owner.getLease() };
 }
 
-/** Runs the complete authentic Queue → preparation → compile → Review handler chain. */
 async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
   const profile = createPipelineProfile();
   const manifest = options.manifest ?? createManifest();
@@ -404,7 +388,7 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
       return await preparationExecutor.execute(context);
     },
   });
-  // Existing committed state is loaded from disk, never introduced by a generic Manifest write.
+
   if (previousSuccess) {
     const state = JSON.parse(await capabilities.file.read()) as KnowledgeRuntimeStoreSnapshot;
     state.revision += 1;
@@ -501,14 +485,12 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
   }
 }
 
-/** Returns the single durable Queue job produced by a test attempt. */
 function requireOnlyJob(snapshot: IngestQueueSnapshot) {
   const job = snapshot.jobs[0];
   if (!job || snapshot.jobs.length !== 1) throw new Error("Expected exactly one Queue job");
   return job;
 }
 
-/** Builds one valid prepared transaction journal from an accepted Review record. */
 function createPreparedJournal(record: AcceptedChangeSetReviewRecord): ChangeSetTransactionJournal {
   const targets = record.acceptedChangeSet.changes.map((change) => {
     if (change.operation !== "create") {

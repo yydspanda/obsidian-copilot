@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { Loader2, Check, X } from "lucide-react";
 import type { ToolCallPart } from "@/agentMode/ui/agentTrail";
 import type { AgentToolStatus } from "@/agentMode/session/types";
-import { lookupToolSummary } from "@/agentMode/ui/toolSummaries";
+import { displayTargetFromPath, lookupToolSummary } from "@/agentMode/ui/toolSummaries";
 import { renderDiff } from "@/agentMode/ui/diffRender";
 import { getVaultBase } from "@/utils/vaultPath";
 import { openVaultPath } from "@/utils/openVaultPath";
@@ -18,9 +18,6 @@ interface ActionCardProps {
 export const ActionCard: React.FC<ActionCardProps> = ({ part, open, onToggle }) => {
   const app = useApp();
   const summary = lookupToolSummary(part);
-  // `vaultBase` is stable for the plugin lifetime, but `getVaultBase` is
-  // cheap once cached — memoize to keep the summary inputs referentially
-  // stable across re-renders.
   const summaryCtx = useMemo(() => ({ vaultBase: getVaultBase(app) }), [app]);
   const Icon = summary.icon;
   const line = summary.collapsedLine(part, summaryCtx);
@@ -28,32 +25,33 @@ export const ActionCard: React.FC<ActionCardProps> = ({ part, open, onToggle }) 
   const outputs = part.output ?? [];
   const details = summary.expandedDetails?.(part) ?? null;
   const expandable = outputs.length > 0 || details !== null;
-  // Only expose a clickable target once the call has completed — opening a
-  // half-written file mid-Edit would race with the tool, and an in-progress
-  // Read has nothing to show yet.
   const targetPath =
     part.status === "completed" ? (summary.targetPath?.(part, summaryCtx) ?? null) : null;
+  const link = targetPath
+    ? { path: targetPath, label: displayTargetFromPath(part, summaryCtx.vaultBase) ?? targetPath }
+    : null;
 
   return (
     <AgentActivityCard
       icon={Icon}
       label={
-        targetPath ? (
-          <a
-            href="#"
-            className="tw-min-w-0 tw-truncate tw-text-inherit hover:tw-text-accent hover:tw-underline"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              // `targetPath` is vault-relative for in-vault notes but stays
-              // absolute for files the agent read/wrote outside the vault.
-              // Route through `openVaultPath` so an outside-vault path opens
-              // in the OS app instead of fabricating a phantom vault folder.
-              openVaultPath(app, targetPath, { newLeaf: true });
-            }}
-          >
-            {line}
-          </a>
+        link ? (
+          <>
+            <span className="tw-shrink-0">
+              {line.slice(0, line.lastIndexOf(link.label)).trimEnd()}
+            </span>
+            <a
+              href="#"
+              className="tw-min-w-0 tw-truncate tw-text-normal hover:tw-text-accent hover:tw-underline"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openVaultPath(app, link.path, { newLeaf: true });
+              }}
+            >
+              {link.label}
+            </a>
+          </>
         ) : (
           <span className="tw-truncate">{line}</span>
         )

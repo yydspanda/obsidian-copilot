@@ -1,6 +1,7 @@
 import type { AgentChatMessage } from "@/agentMode/session/types";
 import type { AgentInputDraftControls } from "@/agentMode/ui/hooks/useAgentInputDrafts";
 import { useSelectedTextContexts, type ProjectConfig } from "@/aiParams";
+import { useActiveWebTabState } from "@/components/chat-components/hooks/useActiveWebTabState";
 import { useActiveFile } from "@/hooks/useActiveFile";
 import { getMiyoFilePath, getMiyoFolderName } from "@/miyo/miyoUtils";
 import {
@@ -8,17 +9,9 @@ import {
   type ChatRelevantNotesContext,
 } from "@/search/chatRelevantNotesContext";
 import { getMatchingPatterns, shouldIndexFile } from "@/search/searchUtils";
-import { App, MarkdownView, TFile } from "obsidian";
+import { App, MarkdownView } from "obsidian";
 import { useEffect, useMemo, useRef } from "react";
 
-/** Publish composition snapshots to the vault's last-focused source.
- * @param app - Vault owner.
- * @param root - Chat surface in its current window.
- * @param id - Logical input identity, isolated across session/project switches.
- * @param draft - Current composition and its attachment setters.
- * @param messages - Visible message store, including in-flight response state.
- * @param project - Current project's explicit source configuration.
- */
 export function useChatRelevantNotesContext(
   app: App,
   root: HTMLElement | null,
@@ -30,6 +23,9 @@ export function useChatRelevantNotesContext(
   const store = getChatRelevantNotesStore(app);
   const activeFile = useActiveFile();
   const [selections] = useSelectedTextContexts();
+  // New chats include the web tab by default, which is not an attachment until a page is open.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/667
+  const { activeWebTabForMentions } = useActiveWebTabState();
   const projectFiles = useMemo(() => {
     const { inclusions, exclusions } = getMatchingPatterns({
       ...project?.contextSource,
@@ -48,8 +44,6 @@ export function useChatRelevantNotesContext(
   const streamingId =
     draft.loading && tail?.sender === "AI" && !tail.turnStopReason ? tail.id : undefined;
   const history = messages.filter((message) => message.id !== streamingId);
-  // Queue entries remain visible after the composer resets and before dispatch.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
   const queued = draft.queue;
   const contexts = [...history, ...queued].flatMap((message) =>
     message.context ? [message.context] : []
@@ -113,24 +107,11 @@ export function useChatRelevantNotesContext(
       (count, context) => count + context.urls.length + (context.webTabs?.length ?? 0),
       0
     ) +
-    (draft.includeActiveWebTab ? 1 : 0);
+    (draft.includeActiveWebTab && activeWebTabForMentions ? 1 : 0);
   // Equal retrieval content must keep its identity across streaming renders.
   // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
   const key = JSON.stringify({ id, request: snapshot, skippedAttachments });
-  const { setContextNotes } = draft;
-  const current = useMemo<ChatRelevantNotesContext>(
-    () => ({
-      ...(JSON.parse(key) as Omit<ChatRelevantNotesContext, "addFile">),
-      addFile: (path) => {
-        const file = app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile)
-          setContextNotes((notes) =>
-            notes.some((note) => note.path === path) ? notes : [...notes, file]
-          );
-      },
-    }),
-    [key, app, setContextNotes]
-  );
+  const current = useMemo(() => JSON.parse(key) as ChatRelevantNotesContext, [key]);
   const currentRef = useRef(current);
   currentRef.current = current;
   const previousId = useRef(id);
@@ -149,8 +130,6 @@ export function useChatRelevantNotesContext(
     else store.update(current);
   }, [store, current, root, id]);
   useEffect(() => {
-    // The source owner stays mounted while both recommendation hosts are closed.
-    // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
     const ref = app.workspace.on("active-leaf-change", (leaf) => {
       if (leaf?.view instanceof MarkdownView) store.select(null);
     });

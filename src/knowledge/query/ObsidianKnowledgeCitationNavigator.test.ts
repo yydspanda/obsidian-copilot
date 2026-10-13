@@ -3,7 +3,6 @@ jest.mock("obsidian", () => ({
     path: string;
     extension: string;
 
-    /** Creates a minimal runtime TFile for navigator tests. */
     constructor(path: string) {
       this.path = path;
       this.extension = path.split(".").pop() ?? "";
@@ -35,12 +34,10 @@ import { ObsidianKnowledgeCitationNavigator } from "./ObsidianKnowledgeCitationN
 const SOURCE_PATH = "Sources/Research.md";
 const PDF_SOURCE_PATH = "Sources/研究 Paper.pdf";
 
-/** Creates detached exact bytes for one fake Vault binary read. */
 function createBinary(...values: number[]): ArrayBuffer {
   return new Uint8Array(values).buffer;
 }
 
-/** Promise whose completion is explicitly controlled by one navigation test. */
 function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -49,19 +46,16 @@ function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   return { promise, resolve };
 }
 
-/** Flushes work scheduled behind the shared App navigation queue. */
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/** Creates one fake TFile despite Obsidian's opaque public constructor. */
 function createTestFile(path: string): TFile {
   const Constructor = TFile as unknown as new (value: string) => TFile;
   return new Constructor(path);
 }
 
-/** Creates one fake MarkdownView with an exact file and editor owner. */
 function createTestMarkdownView(file: TFile, editor: Editor): MarkdownView {
   const Constructor = MarkdownView as unknown as new () => MarkdownView;
   const view = new Constructor();
@@ -69,7 +63,6 @@ function createTestMarkdownView(file: TFile, editor: Editor): MarkdownView {
   return view;
 }
 
-/** Creates fields shared by exact source locator fixtures. */
 function createLocatorBase(content: string, excerpt: string) {
   return {
     sourceId: "source-1",
@@ -80,7 +73,6 @@ function createLocatorBase(content: string, excerpt: string) {
   };
 }
 
-/** Creates one claim citation from an exact locator. */
 function createCitation(locator: SourceLocator): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -90,7 +82,6 @@ function createCitation(locator: SourceLocator): ClaimCitation {
   };
 }
 
-/** In-memory App/Vault/Workspace owner for read-only navigator tests. */
 class NavigatorHarness {
   content: string;
   editorContent: string;
@@ -125,7 +116,6 @@ class NavigatorHarness {
   onOpen?: () => void;
   onOpenLink?: () => void;
 
-  /** Creates one stable captured owner and visible Markdown editor. */
   constructor(
     content: string,
     editorContent = normalizeCitationText(content),
@@ -171,7 +161,6 @@ class NavigatorHarness {
     this.appOwner = { vault: this.vault, workspace: this.workspace };
   }
 
-  /** Creates the navigator after every exact owner dependency is installed. */
   createNavigator(): ObsidianKnowledgeCitationNavigator {
     return new ObsidianKnowledgeCitationNavigator(this.appOwner as unknown as App);
   }

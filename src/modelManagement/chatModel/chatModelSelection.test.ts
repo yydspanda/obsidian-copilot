@@ -84,6 +84,12 @@ describe("chatModelSelection", () => {
         true
       );
       expect(isChatModelSelectionForEntry(target, "other")).toBe(false);
+      expect(isChatModelSelectionForEntry(target, `gpt-5|${ChatModelProviders.OPENAI}`)).toBe(
+        false
+      );
+      expect(isChatModelSelectionForEntry(target, `gpt-4o|${ChatModelProviders.ANTHROPIC}`)).toBe(
+        false
+      );
     });
   });
 
@@ -108,6 +114,18 @@ describe("chatModelSelection", () => {
   });
 
   describe("findChatBackendEntry()", () => {
+    it("returns the first usable entry when nothing is selected", () => {
+      const first = entry("a", "gpt-4o", provider("p1"));
+      expect(
+        findChatBackendEntry([{ configuredModelId: "broken", state: "broken" }, first], undefined)
+      ).toBe(first);
+    });
+
+    it("returns undefined when no entry is usable", () => {
+      expect(
+        findChatBackendEntry([{ configuredModelId: "broken", state: "broken" }], "broken")
+      ).toBeUndefined();
+    });
     it("resolves configured-model IDs and keeps ordinary stale-selection fallback", () => {
       const p = provider("p1");
       const first = entry("first", "gpt-4o", p);
@@ -123,6 +141,24 @@ describe("chatModelSelection", () => {
       expect(
         findChatBackendEntry([safe], `deepseek-v4-pro|${ChatModelProviders.DEEPSEEK}`)
       ).toBeUndefined();
+    });
+
+    it.each([undefined, "", "removed", "broken"])(
+      "returns undefined for %s when first-entry fallback is off (https://github.com/Brevilabs/obsidian-copilot-private/issues/616)",
+      (selection) => {
+        const entries: EnabledBackendEntry[] = [
+          { configuredModelId: "broken", state: "broken" },
+          entry("a", "gpt-4o", provider("p1")),
+        ];
+        expect(findChatBackendEntry(entries, selection, false)).toBeUndefined();
+      }
+    );
+
+    it("maps a legacy selection when first-entry fallback is off (https://github.com/Brevilabs/obsidian-copilot-private/issues/616)", () => {
+      expect(
+        findChatBackendEntry([entry("a", "gpt-4o", provider("p1"))], "gpt-4o|openai", false)
+          ?.configuredModelId
+      ).toBe("a");
     });
   });
 
@@ -158,7 +194,7 @@ describe("chatModelSelection", () => {
       ).toBe("plus-model");
     });
 
-    it("resolves legacy local-provider aliases after migration to openai-compatible", () => {
+    it("maps a legacy local-provider key to the migrated openai-compatible model", () => {
       const ollama = provider("ollama", {
         displayName: "Ollama",
         baseUrl: "http://localhost:11434/v1",
@@ -174,7 +210,7 @@ describe("chatModelSelection", () => {
       ).toBe("ollama-model");
     });
 
-    it("resolves a legacy xAI key when a custom endpoint uses the OpenAI-format constructor", () => {
+    it("maps a legacy xAI key when the endpoint is a custom OpenAI-format URL", () => {
       const xai = provider("xai", {
         baseUrl: "https://proxy.example.com/v1",
         origin: { kind: "byok", catalogProviderId: "xai" },
@@ -188,10 +224,11 @@ describe("chatModelSelection", () => {
       ).toBe("xai-model");
     });
 
-    it("skips broken rows and falls back to the first valid entry", () => {
+    it("falls back to the first usable entry when the selection matches nothing", () => {
+      const p = provider("p1");
       const entries: EnabledBackendEntry[] = [
         { configuredModelId: "broken", state: "broken" },
-        entry("a", "gpt-4o", provider("p1")),
+        entry("a", "gpt-4o", p),
       ];
 
       expect(resolveChatModelSelectionId(entries, "gone")).toBe("a");

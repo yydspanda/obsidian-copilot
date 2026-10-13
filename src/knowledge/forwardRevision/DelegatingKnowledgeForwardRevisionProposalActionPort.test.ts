@@ -2,15 +2,12 @@ jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPor
   type Operation = (session: unknown, outputRef: string, signal: AbortSignal) => Promise<unknown>;
   const operations = new WeakMap<object, Operation>();
 
-  /** Test-only exact adapter with the same hidden-state authenticity contract. */
   class MockKnowledgeProductionForwardRevisionProposalActionAdapter {
-    /** Mints one exact test adapter around a controlled asynchronous operation. */
     constructor(operation: Operation) {
       operations.set(this, operation);
       Object.freeze(this);
     }
 
-    /** Requires one exact test adapter instance. */
     static assert(
       value: unknown
     ): asserts value is MockKnowledgeProductionForwardRevisionProposalActionAdapter {
@@ -25,7 +22,6 @@ jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPor
       }
     }
 
-    /** Runs the controlled operation retained by this exact adapter. */
     async proposeKnownOutput(
       session: unknown,
       outputRef: string,
@@ -65,7 +61,6 @@ type TestOperation = (
   signal: AbortSignal
 ) => Promise<Readonly<KnowledgeForwardRevisionProposalActionResult>>;
 
-/** Creates one manually resolved promise for generation races. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -74,7 +69,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Mints one test-authentic adapter through the mocked production boundary. */
 function createAdapter(
   operation: TestOperation
 ): KnowledgeProductionForwardRevisionProposalActionAdapter {

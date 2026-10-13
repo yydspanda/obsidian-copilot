@@ -52,7 +52,6 @@ import type {
 } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 import { createKnowledgeExecutionTestHarness } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 
-/** Creates one complete secret-free model route declaration. */
 function createRouteDescriptor(
   configurationOverrides: Record<string, JsonValue> = {}
 ): KnowledgePrivateModelRouteDescriptor {
@@ -78,17 +77,14 @@ function createRouteDescriptor(
   };
 }
 
-/** Creates inert JSON for routes whose invocation is forbidden by the test. */
 function createUnusedWireOutput(): string {
   return "{}";
 }
 
-/** Creates one reviewed provider route through the token-protected factory. */
 function createPrivateRoute(invoke: KnowledgePrivateModelInvoke): KnowledgePrivateModelRoute {
   return bindKnowledgePrivateModelRoute(createRouteDescriptor(), invoke);
 }
 
-/** Expects one stable sanitized adapter error code. */
 function expectAdapterError(
   operation: () => unknown,
   code: KnowledgeCompilerModelAdapterError["code"]
@@ -103,7 +99,6 @@ function expectAdapterError(
   }
 }
 
-/** Expects one stable sanitized adapter error from an asynchronous operation. */
 async function expectAdapterErrorAsync(
   operation: () => Promise<unknown>,
   code: KnowledgeCompilerModelAdapterError["code"],
@@ -131,7 +126,6 @@ const SOURCE_BYTES = new TextEncoder().encode("# Source\nExact source text\n");
 const SCHEMA_BYTES = new TextEncoder().encode("# Knowledge schema\n");
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_BYTES);
 
-/** Creates the exact project-owned Bundle used by the authorized model harness. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -144,7 +138,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: "project-personal", config };
 }
 
-/** Creates one durable source Manifest. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -161,7 +154,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates the parser profile used by both the plan and parser capability. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -171,7 +163,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates one exact secret-free pipeline profile matching the private route. */
 function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   const route = createRouteDescriptor();
   return {
@@ -193,7 +184,6 @@ function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates a detached exact-reader result for test source or schema bytes. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
@@ -207,7 +197,6 @@ interface AuthorizedModelHarnessContext {
   reportStages: ("analyzing" | "generating")[];
 }
 
-/** Creates an authentic plan, Queue claim, Runtime authority, and source preparation. */
 async function runAuthorizedModelAttempt(
   handler: (value: AuthorizedModelHarnessContext) => Promise<void>
 ): Promise<void> {
@@ -294,7 +283,6 @@ async function runAuthorizedModelAttempt(
   });
 }
 
-/** Creates a valid compiler input from the exact authorized source preparation. */
 function createCompileInput(
   preparation: KnowledgeAuthorizedSourcePreparation
 ): KnowledgeCompileInput {
@@ -329,7 +317,6 @@ function createCompileInput(
   };
 }
 
-/** Creates a compiler around one explicit model boundary and deterministic no-write dependencies. */
 function createCompiler(model: CompilerModelPort): KnowledgeCompiler {
   return new KnowledgeCompiler({
     model,
@@ -351,7 +338,6 @@ function createCompiler(model: CompilerModelPort): KnowledgeCompiler {
   });
 }
 
-/** Creates one grounded result for the program-bound destination. */
 function createSuccessfulWireOutput(
   _stage: "generation",
   request: Readonly<CompilerGenerationRequest>
@@ -368,7 +354,6 @@ function createSuccessfulWireOutput(
   });
 }
 
-/** Captures one genuine compiler request after authorization without invoking its route. */
 async function authorizeGenerationWithCompiler(
   adapter: ReturnType<typeof bindKnowledgeCompilerModelAdapter>,
   preparation: KnowledgeAuthorizedSourcePreparation,

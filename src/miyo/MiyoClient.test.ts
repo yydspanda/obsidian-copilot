@@ -1,5 +1,5 @@
 import { logInfo, logError } from "@/logger";
-import { MiyoClient, MiyoRequestError } from "@/miyo/MiyoClient";
+import { MiyoClient, MiyoRequestError, type MiyoSearchResult } from "@/miyo/MiyoClient";
 import { MiyoServiceDiscovery } from "@/miyo/MiyoServiceDiscovery";
 import { getSettings } from "@/settings/model";
 import { requestUrl, type RequestUrlResponse } from "obsidian";
@@ -37,6 +37,7 @@ describe("MiyoClient", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedRequestUrl.mockReset();
     mockedGetSettings.mockReturnValue({
       plusLicenseKey: "plus-test-license",
       debug: false,
@@ -71,117 +72,211 @@ describe("MiyoClient", () => {
     });
   });
 
-  it("posts vault-relative path to /v0/parse-doc and returns parsed payload", async () => {
-    mockedRequestUrl.mockResolvedValue({
-      status: 200,
-      json: {
+  describe("parseDoc()", () => {
+    it("posts the vault-relative path to /v0/parse-doc and returns the parsed document", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: {
+          text: "parsed text",
+          format: "pdf",
+          source_path: "docs/sample.pdf",
+          title: "Sample",
+          page_count: 3,
+        },
+        text: "",
+      } as RequestUrlResponse);
+
+      const client = new MiyoClient();
+      const result = await client.parseDoc("http://127.0.0.1:8742", "TestVault", "docs/sample.pdf");
+
+      expect(result).toEqual({
         text: "parsed text",
         format: "pdf",
         source_path: "docs/sample.pdf",
         title: "Sample",
         page_count: 3,
-      },
-      text: "",
-    } as RequestUrlResponse);
-
-    const client = new MiyoClient();
-    const result = await client.parseDoc("http://127.0.0.1:8742", "TestVault", "docs/sample.pdf");
-
-    expect(result).toEqual({
-      text: "parsed text",
-      format: "pdf",
-      source_path: "docs/sample.pdf",
-      title: "Sample",
-      page_count: 3,
+      });
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8742/v0/parse-doc",
+          method: "POST",
+          headers: {
+            Authorization: "Bearer plus-test-license",
+          },
+          contentType: "application/json",
+          body: JSON.stringify({ folder_name: "TestVault", path: "docs/sample.pdf" }),
+        })
+      );
+      expect(mockedLogInfo).toHaveBeenCalledWith(
+        "Miyo request:",
+        expect.objectContaining({
+          method: "POST",
+          url: "http://127.0.0.1:8742/v0/parse-doc",
+          hasAuthorizationHeader: true,
+        })
+      );
     });
-    expect(mockedRequestUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8742/v0/parse-doc",
-        method: "POST",
-        headers: {
-          Authorization: "Bearer plus-test-license",
-        },
-        contentType: "application/json",
-        body: JSON.stringify({ folder_name: "TestVault", path: "docs/sample.pdf" }),
-      })
-    );
-    expect(mockedLogInfo).toHaveBeenCalledWith(
-      "Miyo request:",
-      expect.objectContaining({
-        method: "POST",
-        url: "http://127.0.0.1:8742/v0/parse-doc",
-        hasAuthorizationHeader: true,
-      })
-    );
   });
 
-  it("sends folder_name in /v0/search requests", async () => {
-    mockedRequestUrl.mockResolvedValue({
-      status: 200,
-      json: { results: [] },
-      text: "",
-    } as RequestUrlResponse);
+  describe("search()", () => {
+    it("sends folder_name in /v0/search requests", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { results: [] },
+        text: "",
+      } as RequestUrlResponse);
 
-    const client = new MiyoClient();
-    await client.search("http://127.0.0.1:8742", "/vault", "project notes", 10, [
-      { field: "mtime", gte: 1, lte: 2 },
-    ]);
+      const client = new MiyoClient();
+      await client.search("http://127.0.0.1:8742", "/vault", "project notes", 10, {
+        filters: [{ field: "mtime", gte: 1, lte: 2 }],
+      });
 
-    expect(mockedRequestUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8742/v0/search",
-        method: "POST",
-        body: JSON.stringify({
-          query: "project notes",
-          folder_name: "/vault",
-          limit: 10,
-          filters: [{ field: "mtime", gte: 1, lte: 2 }],
-        }),
-      })
-    );
-  });
-
-  it("requests folder scans through /v0/scan", async () => {
-    mockedRequestUrl.mockResolvedValue({
-      status: 202,
-      json: { status: "started", path: "/vault" },
-      text: "",
-    } as RequestUrlResponse);
-
-    const client = new MiyoClient();
-    const result = await client.scanFolder("http://127.0.0.1:8742", "/vault", true);
-
-    expect(result).toEqual({ status: "started", path: "/vault" });
-    expect(mockedRequestUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8742/v0/scan",
-        method: "POST",
-        body: JSON.stringify({ path: "/vault", force: true }),
-      })
-    );
-  });
-
-  it("lists indexed files from /v0/folder/files with folder_name query params", async () => {
-    mockedRequestUrl.mockResolvedValue({
-      status: 200,
-      json: { files: [], total: 0 },
-      text: "",
-    } as RequestUrlResponse);
-
-    const client = new MiyoClient();
-    await client.listFolderFiles("http://127.0.0.1:8742", {
-      folderName: "/vault",
-      offset: 10,
-      limit: 25,
-      orderBy: "mtime",
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8742/v0/search",
+          method: "POST",
+          body: JSON.stringify({
+            query: "project notes",
+            folder_name: "/vault",
+            limit: 10,
+            filters: [{ field: "mtime", gte: 1, lte: 2 }],
+          }),
+        })
+      );
     });
 
-    expect(mockedRequestUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8742/v0/folder/files?folder_name=%2Fvault&offset=10&limit=25&order_by=mtime",
-        method: "GET",
-      })
+    it("sends paths in /v0/search requests when given (https://github.com/Brevilabs/obsidian-copilot-private/issues/527)", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { results: [] },
+        text: "",
+      } as RequestUrlResponse);
+
+      await new MiyoClient().search("http://127.0.0.1:8742", "Vault", "stoicism", 30, {
+        paths: [".pdf", ".epub"],
+      });
+
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: JSON.stringify({
+            query: "stoicism",
+            folder_name: "Vault",
+            limit: 30,
+            paths: [".pdf", ".epub"],
+          }),
+        })
+      );
+    });
+
+    it.each([[undefined], [[]]])(
+      "omits paths from /v0/search requests when %j (https://github.com/Brevilabs/obsidian-copilot-private/issues/527)",
+      async (paths) => {
+        mockedRequestUrl.mockResolvedValue({
+          status: 200,
+          json: { results: [] },
+          text: "",
+        } as RequestUrlResponse);
+
+        await new MiyoClient().search("http://127.0.0.1:8742", "Vault", "stoicism", 30, { paths });
+
+        expect(mockedRequestUrl).toHaveBeenCalledWith(
+          expect.objectContaining({
+            body: JSON.stringify({ query: "stoicism", folder_name: "Vault", limit: 30 }),
+          })
+        );
+      }
     );
+
+    it("returns snippet on /v0/search results as-is (https://github.com/Brevilabs/obsidian-copilot-private/issues/527)", async () => {
+      const results: MiyoSearchResult[] = [
+        { id: "a", score: 1, path: "a.md", snippet: "a short preview" },
+        { id: "b", score: 0.5, path: "b.md", snippet: null },
+      ];
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { results },
+        text: "",
+      } as RequestUrlResponse);
+
+      const response = await new MiyoClient().search(
+        "http://127.0.0.1:8742",
+        "Vault",
+        "stoicism",
+        10
+      );
+
+      expect(response.results).toEqual(results);
+    });
+
+    it("sends folder_names alongside the folder_name anchor, so a Miyo without multi-folder search still searches only the anchor — https://github.com/logancyang/obsidian-copilot/issues/3508", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { results: [] },
+        text: "",
+      } as RequestUrlResponse);
+
+      await new MiyoClient().search("http://127.0.0.1:8742", "Vault", "stoicism", 30, {
+        folderNames: ["Vault", "Research", "ChatGPT"],
+      });
+
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: JSON.stringify({
+            query: "stoicism",
+            folder_name: "Vault",
+            folder_names: ["Vault", "Research", "ChatGPT"],
+            limit: 30,
+          }),
+        })
+      );
+    });
+  });
+
+  describe("listFolders()", () => {
+    it("lists every folder registered with Miyo, including synced chat folders, from /v0/folder — https://github.com/logancyang/obsidian-copilot/issues/3508", async () => {
+      const folders = [
+        { path: "Vault", absolute_path: "/Users/me/Vault", origin: "user" },
+        { path: "ChatGPT", absolute_path: "/Users/me/.miyo/chatgpt", origin: "chat_sync" },
+      ];
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { folders },
+        text: "",
+      } as RequestUrlResponse);
+
+      const response = await new MiyoClient().listFolders("http://127.0.0.1:8742");
+
+      expect(response.folders).toEqual(folders);
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8742/v0/folder",
+          method: "GET",
+          body: undefined,
+        })
+      );
+    });
+  });
+
+  describe("scanFolder()", () => {
+    it("posts the folder path and force flag to /v0/scan and returns the scan status", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 202,
+        json: { status: "started", path: "/vault" },
+        text: "",
+      } as RequestUrlResponse);
+
+      const client = new MiyoClient();
+      const result = await client.scanFolder("http://127.0.0.1:8742", "/vault", true);
+
+      expect(result).toEqual({ status: "started", path: "/vault" });
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8742/v0/scan",
+          method: "POST",
+          body: JSON.stringify({ path: "/vault", force: true }),
+        })
+      );
+    });
   });
 
   describe("recommend()", () => {
@@ -428,20 +523,7 @@ describe("MiyoClient", () => {
     });
   });
 
-  describe("checkFolderRegistration", () => {
-    it("checks registration under the proxy path and encodes the folder query (https://github.com/Brevilabs/obsidian-copilot-private/issues/466)", async () => {
-      mockResolveBaseUrl.mockResolvedValue("https://host.example/gateway/search/");
-      mockedRequestUrl.mockResolvedValue({ status: 200 } as RequestUrlResponse);
-      await expect(new MiyoClient().checkFolderRegistration("Shared & Notes")).resolves.toBe(
-        "registered"
-      );
-      expect(mockedRequestUrl).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://host.example/gateway/search/v0/folder?path=Shared+%26+Notes",
-          method: "GET",
-        })
-      );
-    });
+  describe("checkFolderRegistration()", () => {
     it("returns 'registered' on HTTP 200 and queries /v0/folder with the folder path", async () => {
       mockedRequestUrl.mockResolvedValue({
         status: 200,
@@ -462,6 +544,19 @@ describe("MiyoClient", () => {
       );
     });
 
+    it("checks registration under the proxy path and encodes the folder query (https://github.com/Brevilabs/obsidian-copilot-private/issues/466)", async () => {
+      mockResolveBaseUrl.mockResolvedValue("https://host.example/gateway/search/");
+      mockedRequestUrl.mockResolvedValue({ status: 200 } as RequestUrlResponse);
+      await expect(new MiyoClient().checkFolderRegistration("Shared & Notes")).resolves.toBe(
+        "registered"
+      );
+      expect(mockedRequestUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://host.example/gateway/search/v0/folder?path=Shared+%26+Notes",
+          method: "GET",
+        })
+      );
+    });
     it("returns 'unregistered' on HTTP 404", async () => {
       mockedRequestUrl.mockResolvedValue({
         status: 404,
@@ -513,12 +608,8 @@ describe("MiyoClient", () => {
     });
   });
 
-  describe("constructor", () => {
+  describe("constructor()", () => {
     it("authenticates with the snapshot it was given, not whatever settings hold later", async () => {
-      // A queued Miyo mutation can outlive the vault that started it. Reading
-      // the key per request would then send the newly-opened vault's credential
-      // to the outgoing vault's endpoint, so callers whose work spans that
-      // boundary capture the key up front.
       mockedRequestUrl.mockResolvedValue({
         status: 201,
         json: { path: "/Users/me/vault" },
@@ -526,7 +617,6 @@ describe("MiyoClient", () => {
       } as RequestUrlResponse);
       const client = new MiyoClient({ plusLicenseKey: "key-of-the-vault-that-asked" });
 
-      // The vault switches while the mutation is queued.
       mockedGetSettings.mockReturnValue({
         plusLicenseKey: "key-of-a-different-vault",
         debug: false,
@@ -570,7 +660,6 @@ describe("MiyoClient", () => {
         })
       );
     });
-    beforeEach(() => mockedRequestUrl.mockReset());
     it("POSTs the request to /v0/folder and returns the created record on 201", async () => {
       const folderRecord = { path: "/Users/me/vault", exclude_folders: ["copilot"] };
       mockedRequestUrl.mockResolvedValue({
@@ -749,9 +838,6 @@ describe("MiyoClient", () => {
     });
 
     it("refuses addFolder after the URL and credentials resolve, so nothing is sent (https://github.com/Brevilabs/obsidian-copilot-private/issues/284)", async () => {
-      // The caller's own check runs before this method; URL resolution is
-      // asynchronous, so only a hook here can stop a request whose caller went
-      // stale in between.
       mockedRequestUrl.mockResolvedValue({
         status: 201,
         json: { path: "/Users/me/vault" },
@@ -767,6 +853,49 @@ describe("MiyoClient", () => {
 
       expect(mockResolveBaseUrl).toHaveBeenCalled();
       expect(mockedRequestUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("resolveBaseUrl()", () => {
+    it("returns the URL discovered for the given override", async () => {
+      await expect(new MiyoClient().resolveBaseUrl("http://192.168.1.10:8742")).resolves.toBe(
+        "http://127.0.0.1:8742"
+      );
+      expect(mockResolveBaseUrl).toHaveBeenCalledWith({ overrideUrl: "http://192.168.1.10:8742" });
+    });
+
+    it("throws when discovery finds no Miyo base URL", async () => {
+      mockResolveBaseUrl.mockResolvedValue(null);
+
+      await expect(new MiyoClient().resolveBaseUrl()).rejects.toThrow(
+        "Miyo base URL not available"
+      );
+    });
+  });
+
+  describe("isBackendAvailable()", () => {
+    it("is true when /v0/health reports status ok", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { status: "ok" },
+      } as RequestUrlResponse);
+
+      await expect(new MiyoClient().isBackendAvailable()).resolves.toBe(true);
+    });
+
+    it("is false when /v0/health reports a status other than ok", async () => {
+      mockedRequestUrl.mockResolvedValue({
+        status: 200,
+        json: { status: "starting" },
+      } as RequestUrlResponse);
+
+      await expect(new MiyoClient().isBackendAvailable()).resolves.toBe(false);
+    });
+
+    it("is false when the health request fails", async () => {
+      mockedRequestUrl.mockRejectedValue(new Error("network down"));
+
+      await expect(new MiyoClient().isBackendAvailable()).resolves.toBe(false);
     });
   });
 
@@ -792,16 +921,11 @@ describe("MiyoClient", () => {
     it("resolves null once the probe timeout elapses when the request never responds", async () => {
       jest.useFakeTimers();
       try {
-        // A connection that opens but never sends a response: requestUrl (which
-        // ignores abort) stays pending forever, so only the timeout can settle it.
         mockedRequestUrl.mockReturnValue(new Promise<never>(() => {}) as never);
 
         const client = new MiyoClient();
         const resultPromise = client.fetchHealth("http://127.0.0.1:8742");
 
-        // Advance past the 8s health bound; the timeout must resolve the probe to
-        // null instead of leaving it pending (which would wedge the status store's
-        // single-flight refresh forever).
         await jest.advanceTimersByTimeAsync(8001);
 
         await expect(resultPromise).resolves.toBeNull();

@@ -6,7 +6,6 @@ import { createSourceContentHash, isExactUint8Array } from "@/knowledge/model/fi
 import { isPathWithinRoot, parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { loadObsidianNodeRuntimeModules } from "@/knowledge/runtime/ObsidianNodeRuntime";
 
-/** Durable outcomes of one exact-byte folder-import publication attempt. */
 export type KnowledgeFolderImportFilePublishResult =
   | Readonly<{
       status: "created" | "reused";
@@ -20,7 +19,6 @@ export type KnowledgeFolderImportFilePublishResult =
       observedByteLength?: number;
     }>;
 
-/** Stable failure categories that never retain a Vault path or source byte. */
 export type KnowledgeFolderImportFileStoreErrorCode =
   | "unsupported_adapter"
   | "unsupported_runtime"
@@ -29,22 +27,17 @@ export type KnowledgeFolderImportFileStoreErrorCode =
   | "destination_unavailable"
   | "io_failure";
 
-/** Sanitized failure raised by the Windows folder-import file boundary. */
 export class KnowledgeFolderImportFileStoreError extends Error {
-  /** Creates a path-free, byte-free file-store failure. */
   constructor(public readonly code: KnowledgeFolderImportFileStoreErrorCode) {
     super("The selected knowledge file could not be copied into the Vault");
     this.name = "KnowledgeFolderImportFileStoreError";
   }
 }
 
-/** Current production generation retained by one folder-import file store. */
 export interface KnowledgeFolderImportFileStoreGenerationPort {
-  /** Rejects synchronously when this exact production generation is stale. */
   assertCurrent(): void;
 }
 
-/** Minimum stat payload required to classify one native destination. */
 export interface KnowledgeFolderImportNodeStat {
   readonly size: number;
   isDirectory(): boolean;
@@ -52,13 +45,11 @@ export interface KnowledgeFolderImportNodeStat {
   isSymbolicLink?(): boolean;
 }
 
-/** Bigint-only native identity returned without lossy Windows inode conversion. */
 export interface KnowledgeFolderImportNodeIdentityStat {
   readonly dev: bigint;
   readonly ino: bigint;
 }
 
-/** Native file handle used by exact binary publication and observation. */
 export interface KnowledgeFolderImportNodeFileHandle {
   writeFile(data: Uint8Array): Promise<void>;
   readFile(): Promise<Uint8Array>;
@@ -68,7 +59,6 @@ export interface KnowledgeFolderImportNodeFileHandle {
   close(): Promise<void>;
 }
 
-/** Native filesystem promises required by the narrow folder-import boundary. */
 export interface KnowledgeFolderImportNodeFileSystem {
   realpath(path: string): Promise<string>;
   lstat(path: string): Promise<KnowledgeFolderImportNodeStat>;
@@ -83,7 +73,6 @@ export interface KnowledgeFolderImportNodeFileSystem {
   unlink(path: string): Promise<void>;
 }
 
-/** Native path operations required to contain every folder-import mutation. */
 export interface KnowledgeFolderImportNodePath {
   readonly sep: string;
   resolve(...paths: string[]): string;
@@ -94,14 +83,12 @@ export interface KnowledgeFolderImportNodePath {
   join(...paths: string[]): string;
 }
 
-/** Validated native modules loaded only while one desktop import is active. */
 export interface KnowledgeFolderImportNodeRuntime {
   readonly fs: KnowledgeFolderImportNodeFileSystem;
   readonly path: KnowledgeFolderImportNodePath;
   readonly randomUUID: () => string;
 }
 
-/** Lazily loads the exact native capabilities used by folder import. */
 export type KnowledgeFolderImportNodeRuntimeLoader = () => KnowledgeFolderImportNodeRuntime;
 
 interface AuthorizedFolderImportDestination {
@@ -127,12 +114,10 @@ interface KnowledgeFolderImportNativeFileIdentity {
   readonly inode: bigint;
 }
 
-/** Creates the standard cancellation category for stale import authority. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether an unknown native rejection carries one stable Node code. */
 function hasNodeErrorCode(error: unknown, code: string): boolean {
   return (
     typeof error === "object" &&
@@ -142,7 +127,6 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
   );
 }
 
-/** Recognizes cancellation across Obsidian popout and test DOM realms. */
 function isAbortError(error: unknown): boolean {
   try {
     return (
@@ -155,7 +139,6 @@ function isAbortError(error: unknown): boolean {
   }
 }
 
-/** Reports whether one native path is equal to or below a real root. */
 function isNativePathWithinRoot(
   pathModule: KnowledgeFolderImportNodePath,
   candidate: string,
@@ -170,12 +153,10 @@ function isNativePathWithinRoot(
   );
 }
 
-/** Reports whether a resolved native path retains the exact requested spelling. */
 function hasExactNativePathSpelling(actualPath: string, expectedPath: string): boolean {
   return actualPath === expectedPath;
 }
 
-/** Requires a valid regular-file or directory stat without trusting exotic payloads. */
 function classifyStat(stat: unknown): "directory" | "file" | "unsupported" {
   if (
     typeof stat !== "object" ||
@@ -194,7 +175,6 @@ function classifyStat(stat: unknown): "directory" | "file" | "unsupported" {
   }
 }
 
-/** Reads a safe non-negative native byte length. */
 function captureStatByteLength(stat: KnowledgeFolderImportNodeStat): number | undefined {
   try {
     return Number.isSafeInteger(stat.size) && stat.size >= 0 ? stat.size : undefined;
@@ -203,7 +183,6 @@ function captureStatByteLength(stat: KnowledgeFolderImportNodeStat): number | un
   }
 }
 
-/** Captures a native file identity only when Node represents it without precision loss. */
 function captureNativeFileIdentity(
   stat: KnowledgeFolderImportNodeIdentityStat
 ): KnowledgeFolderImportNativeFileIdentity | undefined {
@@ -220,7 +199,6 @@ function captureNativeFileIdentity(
   }
 }
 
-/** Reports whether two captured native identities refer to the same exact inode. */
 function haveSameNativeFileIdentity(
   left: KnowledgeFolderImportNativeFileIdentity,
   right: KnowledgeFolderImportNativeFileIdentity
@@ -228,7 +206,6 @@ function haveSameNativeFileIdentity(
   return left.device === right.device && left.inode === right.inode;
 }
 
-/** Reads one exact bigint handle identity or reports unavailable native support. */
 async function readHandleNativeFileIdentity(
   handle: KnowledgeFolderImportNodeFileHandle
 ): Promise<KnowledgeFolderImportNativeFileIdentity | undefined> {
@@ -239,7 +216,6 @@ async function readHandleNativeFileIdentity(
   }
 }
 
-/** Requires exact bytes and detaches them from a caller- or adapter-owned buffer. */
 function captureBytes(value: unknown): Uint8Array {
   if (!isExactUint8Array(value)) {
     throw new KnowledgeFolderImportFileStoreError("invalid_input");
@@ -251,7 +227,6 @@ function captureBytes(value: unknown): Uint8Array {
   }
 }
 
-/** Captures exact adapter bytes while classifying malformed native payloads as I/O failures. */
 function captureAdapterBytes(value: unknown): Uint8Array {
   if (!isExactUint8Array(value)) {
     throw new KnowledgeFolderImportFileStoreError("io_failure");
@@ -263,7 +238,6 @@ function captureAdapterBytes(value: unknown): Uint8Array {
   }
 }
 
-/** Compares two detached byte arrays without accepting hash equality alone. */
 function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   for (let index = 0; index < left.byteLength; index += 1) {
@@ -272,7 +246,6 @@ function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   return true;
 }
 
-/** Closes a native file handle without masking the authoritative operation result. */
 async function closeQuietly(
   handle: KnowledgeFolderImportNodeFileHandle | undefined
 ): Promise<void> {
@@ -284,7 +257,6 @@ async function closeQuietly(
   }
 }
 
-/** Records a possible private orphan without retaining its path, name, or source bytes. */
 function reportPossibleTemporaryOrphan(): void {
   try {
     logWarn(
@@ -292,10 +264,10 @@ function reportPossibleTemporaryOrphan(): void {
     );
   } catch {
     // Diagnostics must not replace the authoritative publication result.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Validates the extra native methods carried by Node's real promises namespace. */
 export function loadObsidianKnowledgeFolderImportNodeRuntime(): KnowledgeFolderImportNodeRuntime {
   let baseRuntime: ReturnType<typeof loadObsidianNodeRuntimeModules>;
   try {
@@ -321,26 +293,10 @@ export function loadObsidianKnowledgeFolderImportNodeRuntime(): KnowledgeFolderI
   });
 }
 
-/**
- * Windows desktop boundary for copying selected exact bytes beneath one source root.
- *
- * The configured source root must already exist. Descendant directories may be
- * created one at a time only after their real paths remain beneath that root.
- * Files publish through a fully written, synced temporary inode and one exclusive
- * hard link, so an existing file or directory is never overwritten.
- */
 export class ObsidianKnowledgeFolderImportFileStore {
   private readonly adapter: FileSystemAdapter;
   private readonly sourceRoot: string;
 
-  /**
-   * Captures one exact source-root and production-generation authority.
-   *
-   * @param adapter - Current Windows desktop Vault adapter
-   * @param sourceRoot - Existing, authorized Vault-relative source root
-   * @param generation - Exact production generation that owns the import
-   * @param loadNodeRuntime - Injectable lazy native boundary for deterministic tests
-   */
   constructor(
     adapter: DataAdapter,
     sourceRoot: string,
@@ -358,7 +314,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     this.sourceRoot = parsedRoot.path;
   }
 
-  /** Ensures every missing destination parent beneath the exact existing source root. */
   async ensureParents(destinationPath: string, signal: AbortSignal): Promise<void> {
     const exactDestination = this.captureDestinationPath(destinationPath);
     try {
@@ -368,7 +323,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Creates, reuses, or reports a conflict for one exact binary destination. */
   async publish(
     destinationPath: string,
     bytes: Uint8Array,
@@ -443,7 +397,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Captures one exact Windows-safe destination nested strictly below the source root. */
   private captureDestinationPath(destinationPath: string): string {
     const parsed = parseVaultPath(destinationPath);
     if (
@@ -457,7 +410,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     return parsed.path;
   }
 
-  /** Proves cancellation and the owning production generation together. */
   private assertCurrent(signal: AbortSignal): void {
     if (signal.aborted) throw createAbortError();
     try {
@@ -468,7 +420,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     if (signal.aborted) throw createAbortError();
   }
 
-  /** Resolves the real root and creates validated descendant parents one level at a time. */
   private async authorizeDestination(
     destinationPath: string,
     signal: AbortSignal
@@ -573,7 +524,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     });
   }
 
-  /** Re-proves the exact root and final parent immediately around native publication. */
   private async reproveDestinationNamespace(
     destination: AuthorizedFolderImportDestination,
     signal: AbortSignal
@@ -619,13 +569,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /**
-   * Removes only the exact native inode captured from the created private temporary.
-   *
-   * Node does not expose unlink-at-directory-handle semantics. If a replaced
-   * namespace makes the old path missing or point at another inode, cleanup never
-   * follows it and deliberately retains a possible private orphan instead.
-   */
   private async cleanupTemporarySafely(
     destination: AuthorizedFolderImportDestination,
     temporaryPath: string,
@@ -666,7 +609,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Re-proves the captured root and parent without consulting cancelled generation state. */
   private async isCleanupNamespaceCurrent(
     destination: AuthorizedFolderImportDestination
   ): Promise<boolean> {
@@ -702,7 +644,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Proves that cleanup received the exact private path created for this destination. */
   private isExactTemporaryPath(
     destination: AuthorizedFolderImportDestination,
     temporaryPath: string
@@ -723,7 +664,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Reads one existing target through a bound handle or reports exact absence. */
   private async observeExisting(
     destination: AuthorizedFolderImportDestination,
     expectedByteLength: number,
@@ -797,7 +737,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     }
   }
 
-  /** Converts an exact observation into a path-free create/reuse/conflict receipt. */
   private classifyObservation(
     observation: ExistingFolderImportObservation,
     expectedBytes: Uint8Array,
@@ -826,7 +765,6 @@ export class ObsidianKnowledgeFolderImportFileStore {
     });
   }
 
-  /** Preserves only cancellation and this boundary's sanitized failures. */
   private rethrowSanitized(error: unknown): never {
     if (error instanceof KnowledgeFolderImportFileStoreError || isAbortError(error)) {
       throw error;

@@ -33,14 +33,12 @@ const COMPILE_ATTEMPT_BUILDER_TOKEN = Symbol(
 );
 const COMPILE_ATTEMPT_TOKEN = Symbol("KnowledgeProductionCompileAttempt.constructor");
 
-/** One Bundle-scoped private route created from the exact production preflight snapshot. */
 export interface KnowledgeProductionModelRouteBinding {
   bundleId: string;
   route: KnowledgePrivateModelRoute;
   answerRoute: KnowledgeGroundedAnswerModelRoute;
 }
 
-/** Generation-owned non-model ports captured before any Queue attempt exists. */
 export interface KnowledgeProductionCompileAttemptDependencies {
   targetResolver: CompilerTargetResolver;
   candidateValidator: CompilerCandidateValidator;
@@ -89,26 +87,21 @@ const compileAttemptBuilderStates = new WeakMap<
 const compileAttemptStates = new WeakMap<object, KnowledgeProductionCompileAttemptState>();
 const reservedModelRoutePreparations = new WeakSet<object>();
 
-/** Stable route-generation failure that retains no Bundle, model, request, or credential value. */
 export class KnowledgeProductionModelRouteLeaseError extends Error {
-  /** Creates one value-free production route capability failure. */
   constructor() {
     super("The production Knowledge model route generation is unavailable");
     this.name = "KnowledgeProductionModelRouteLeaseError";
   }
 }
 
-/** Creates the platform-standard cancellation used after synchronous route revocation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Checks one canonical non-empty Bundle identifier without normalizing it. */
 function isCanonicalIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/** Returns hidden state only for an authentic model-route lease. */
 function requireLeaseState(value: unknown): KnowledgeProductionModelRouteLeaseState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionModelRouteLeaseError();
@@ -120,7 +113,6 @@ function requireLeaseState(value: unknown): KnowledgeProductionModelRouteLeaseSt
   return state;
 }
 
-/** Returns hidden state only for an authentic lifecycle owner. */
 function requireOwnerState(value: unknown): KnowledgeProductionModelRouteLeaseOwnerState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionModelRouteLeaseError();
@@ -132,7 +124,6 @@ function requireOwnerState(value: unknown): KnowledgeProductionModelRouteLeaseOw
   return state;
 }
 
-/** Returns hidden state only for an authentic compile-attempt builder. */
 function requireAttemptBuilderState(value: unknown): KnowledgeProductionCompileAttemptBuilderState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionModelRouteLeaseError();
@@ -144,7 +135,6 @@ function requireAttemptBuilderState(value: unknown): KnowledgeProductionCompileA
   return state;
 }
 
-/** Returns hidden state only for an authentic opaque compile attempt. */
 function requireAttemptState(value: unknown): KnowledgeProductionCompileAttemptState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionModelRouteLeaseError();
@@ -156,14 +146,12 @@ function requireAttemptState(value: unknown): KnowledgeProductionCompileAttemptS
   return state;
 }
 
-/** Requires one current lease before or after a mutable asynchronous boundary. */
 function assertLeaseCurrent(state: KnowledgeProductionModelRouteLeaseState): void {
   if (!state.current) {
     throw createAbortError();
   }
 }
 
-/** Reads one dense route-binding array after its caller installs a sanitized failure boundary. */
 function snapshotRouteBindingsUnsafe(
   value: readonly KnowledgeProductionModelRouteBinding[]
 ): readonly KnowledgeProductionModelRouteBinding[] {
@@ -229,7 +217,6 @@ function snapshotRouteBindingsUnsafe(
   return Object.freeze(bindings);
 }
 
-/** Snapshots route bindings without allowing Proxy traps or route errors to escape. */
 function snapshotRouteBindings(
   value: readonly KnowledgeProductionModelRouteBinding[]
 ): readonly KnowledgeProductionModelRouteBinding[] {
@@ -240,7 +227,6 @@ function snapshotRouteBindings(
   }
 }
 
-/** Finds and captures one callable data method without evaluating accessors. */
 function captureDataMethod<T extends (...args: never[]) => unknown>(
   receiver: object,
   key: string
@@ -269,7 +255,6 @@ function captureDataMethod<T extends (...args: never[]) => unknown>(
   throw new KnowledgeProductionModelRouteLeaseError();
 }
 
-/** Captures generation-owned ports after its caller installs a sanitized failure boundary. */
 function captureAttemptPortsUnsafe(
   value: KnowledgeProductionCompileAttemptDependencies
 ): CapturedCompileAttemptPorts {
@@ -309,7 +294,6 @@ function captureAttemptPortsUnsafe(
   });
 }
 
-/** Captures exact generation ports without allowing Proxy traps or dependency errors to escape. */
 function captureAttemptPorts(
   value: KnowledgeProductionCompileAttemptDependencies
 ): CapturedCompileAttemptPorts {
@@ -327,7 +311,6 @@ interface CapturedExecutionContext {
   reportStage: IngestExecutionContext["reportStage"];
 }
 
-/** Captures an exact Queue context without invoking accessors or trusting copied DTOs. */
 function captureExecutionContextUnsafe(value: IngestExecutionContext): CapturedExecutionContext {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new KnowledgeProductionModelRouteLeaseError();
@@ -377,7 +360,6 @@ function captureExecutionContextUnsafe(value: IngestExecutionContext): CapturedE
   });
 }
 
-/** Captures one Queue context while collapsing Proxy and claim failures. */
 function captureExecutionContext(value: IngestExecutionContext): CapturedExecutionContext {
   try {
     return captureExecutionContextUnsafe(value);
@@ -386,7 +368,6 @@ function captureExecutionContext(value: IngestExecutionContext): CapturedExecuti
   }
 }
 
-/** Requires the preparation proof to identify the exact Queue processing attempt. */
 function assertPreparationMatchesContext(
   preparation: KnowledgeAuthorizedSourcePreparation,
   context: CapturedExecutionContext
@@ -410,7 +391,6 @@ function assertPreparationMatchesContext(
   }
 }
 
-/** Advances the durable Queue stage while guarding the exact route generation and signal. */
 async function reportAttemptStage(
   state: KnowledgeProductionModelRouteLeaseState,
   preparation: KnowledgeAuthorizedSourcePreparation,
@@ -425,7 +405,6 @@ async function reportAttemptStage(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Wraps attempt ports with route-generation, Queue-signal, and Runtime reproof checks. */
 function createGuardedCompilerDependencies(
   state: KnowledgeProductionModelRouteLeaseState,
   preparation: KnowledgeAuthorizedSourcePreparation,
@@ -484,11 +463,9 @@ function createGuardedCompilerDependencies(
   });
 }
 
-/** Opaque, single-use join of one Queue attempt and its fully derived Compiler input. */
 export class KnowledgeProductionCompileAttempt {
   declare private readonly productionCompileAttemptBrand: void;
 
-  /** Rejects direct construction without the module-private builder token. */
   constructor(token: symbol) {
     if (token !== COMPILE_ATTEMPT_TOKEN) {
       throw new KnowledgeProductionModelRouteLeaseError();
@@ -496,7 +473,6 @@ export class KnowledgeProductionCompileAttempt {
     Object.freeze(this);
   }
 
-  /** Authenticates only a module-minted production compile attempt. */
   static assert(value: unknown): asserts value is KnowledgeProductionCompileAttempt {
     requireAttemptState(value);
   }
@@ -505,9 +481,7 @@ export class KnowledgeProductionCompileAttempt {
 Object.freeze(KnowledgeProductionCompileAttempt.prototype);
 Object.freeze(KnowledgeProductionCompileAttempt);
 
-/** Generation-bound builder that can mint attempts only from exact Queue contexts. */
 export class KnowledgeProductionCompileAttemptBuilder {
-  /** Rejects direct construction without the owning route lease. */
   constructor(
     token: symbol,
     lease: KnowledgeProductionModelRouteLease,
@@ -521,18 +495,10 @@ export class KnowledgeProductionCompileAttemptBuilder {
     Object.freeze(this);
   }
 
-  /** Authenticates only a builder issued by one current route generation. */
   static assert(value: unknown): asserts value is KnowledgeProductionCompileAttemptBuilder {
     requireAttemptBuilderState(value);
   }
 
-  /**
-   * Binds preparation, claim, signal, reporter, Queue time, and derived input once.
-   *
-   * @param preparation - Authentic Runtime/workflow source preparation
-   * @param context - Exact Queue-issued execution context
-   * @returns Opaque attempt consumable only by this builder's route lease
-   */
   async build(
     preparation: KnowledgeAuthorizedSourcePreparation,
     context: IngestExecutionContext
@@ -588,9 +554,7 @@ export class KnowledgeProductionCompileAttemptBuilder {
 Object.freeze(KnowledgeProductionCompileAttemptBuilder.prototype);
 Object.freeze(KnowledgeProductionCompileAttemptBuilder);
 
-/** Opaque preflight-owned route capability that never exposes routes, settings, or credentials. */
 export class KnowledgeProductionModelRouteLease {
-  /** Rejects direct construction without the module-private owner token. */
   constructor(token: symbol, routes: readonly KnowledgeProductionModelRouteBinding[]) {
     if (token !== MODEL_ROUTE_LEASE_TOKEN) {
       throw new KnowledgeProductionModelRouteLeaseError();
@@ -606,22 +570,18 @@ export class KnowledgeProductionModelRouteLease {
     Object.freeze(this);
   }
 
-  /** Authenticates only a module-minted route lease. */
   static assert(value: unknown): asserts value is KnowledgeProductionModelRouteLease {
     requireLeaseState(value);
   }
 
-  /** Reports whether this exact preflight generation still retains its private routes. */
   isCurrent(): boolean {
     return requireLeaseState(this).current;
   }
 
-  /** Throws synchronously after Settings, Projects, Runtime, or plugin invalidation. */
   assertCurrent(): void {
     assertLeaseCurrent(requireLeaseState(this));
   }
 
-  /** Checks that this generation owns exactly the supplied stable Bundle identities. */
   coversBundleIds(bundleIds: readonly string[]): boolean {
     const state = requireLeaseState(this);
     try {
@@ -651,7 +611,6 @@ export class KnowledgeProductionModelRouteLease {
     }
   }
 
-  /** Creates one lifecycle-fenced answer port without exposing either private route. */
   createGroundedAnswerModelPort(bundleId: string): Readonly<KnowledgeGroundedAnswerModelPort> {
     const state = requireLeaseState(this);
     assertLeaseCurrent(state);
@@ -671,12 +630,6 @@ export class KnowledgeProductionModelRouteLease {
     );
   }
 
-  /**
-   * Captures generation-owned target and validation ports into an opaque builder.
-   *
-   * @param dependencies - Fixed non-model ports for this production generation
-   * @returns Builder that accepts only exact Queue preparation contexts
-   */
   createAttemptBuilder(
     dependencies: KnowledgeProductionCompileAttemptDependencies
   ): KnowledgeProductionCompileAttemptBuilder {
@@ -694,12 +647,6 @@ export class KnowledgeProductionModelRouteLease {
     return new KnowledgeProductionCompileAttemptBuilder(COMPILE_ATTEMPT_BUILDER_TOKEN, this, ports);
   }
 
-  /**
-   * Consumes one exact opaque attempt without accepting caller-spliceable DTOs or ports.
-   *
-   * @param attempt - One builder-minted, generation-bound compile attempt
-   * @returns Controlled Compiler result for this exact attempt
-   */
   async compile(attempt: KnowledgeProductionCompileAttempt): Promise<KnowledgeCompileResult> {
     const state = requireLeaseState(this);
     assertLeaseCurrent(state);
@@ -748,9 +695,7 @@ export class KnowledgeProductionModelRouteLease {
 Object.freeze(KnowledgeProductionModelRouteLease.prototype);
 Object.freeze(KnowledgeProductionModelRouteLease);
 
-/** Lifecycle-only close authority kept out of the admission passed to worker composition. */
 export class KnowledgeProductionModelRouteLeaseOwner {
-  /** Rejects direct construction without the module-private factory token. */
   constructor(token: symbol, bindings: readonly KnowledgeProductionModelRouteBinding[]) {
     if (token !== MODEL_ROUTE_OWNER_TOKEN) {
       throw new KnowledgeProductionModelRouteLeaseError();
@@ -760,17 +705,14 @@ export class KnowledgeProductionModelRouteLeaseOwner {
     Object.freeze(this);
   }
 
-  /** Authenticates only a module-minted lifecycle owner. */
   static assert(value: unknown): asserts value is KnowledgeProductionModelRouteLeaseOwner {
     requireOwnerState(value);
   }
 
-  /** Returns the close-incapable lease admitted to production workflow composition. */
   getLease(): KnowledgeProductionModelRouteLease {
     return requireOwnerState(this).lease;
   }
 
-  /** Synchronously revokes the lease and releases all retained route closures. */
   close(): void {
     const state = requireLeaseState(requireOwnerState(this).lease);
     if (!state.current) return;
@@ -787,7 +729,6 @@ export class KnowledgeProductionModelRouteLeaseOwner {
 Object.freeze(KnowledgeProductionModelRouteLeaseOwner.prototype);
 Object.freeze(KnowledgeProductionModelRouteLeaseOwner);
 
-/** Creates one lifecycle-owned private route generation from preflight-created bindings. */
 export function createKnowledgeProductionModelRouteLeaseOwner(
   bindings: readonly KnowledgeProductionModelRouteBinding[]
 ): KnowledgeProductionModelRouteLeaseOwner {

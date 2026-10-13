@@ -2,20 +2,16 @@ jest.mock("obsidian", () => {
   const path = jest.requireActual<typeof import("node:path")>("node:path");
 
   class TFile {
-    /** Creates one fake loaded Vault file. */
     constructor(public readonly path: string) {}
   }
 
   class FileSystemAdapter {
-    /** Creates one fake filesystem adapter rooted at a native directory. */
     constructor(private readonly basePath: string) {}
 
-    /** Returns the fake Vault root. */
     getBasePath(): string {
       return this.basePath;
     }
 
-    /** Resolves one Vault-relative path beneath the fake root. */
     getFullPath(normalizedPath: string): string {
       return path.join(this.basePath, ...normalizedPath.split("/"));
     }
@@ -57,12 +53,10 @@ import type { ObsidianNodeRuntimeModules } from "@/knowledge/runtime/ObsidianNod
 
 const temporaryDirectories: string[] = [];
 
-/** Loads the native Node modules used by the filesystem-backed test edge. */
 function loadTestNodeRuntime(): ObsidianNodeRuntimeModules {
   return { fs, path, randomUUID };
 }
 
-/** Creates one loaded fake TFile despite the public constructor being opaque. */
 function createTestFile(targetPath: string): TFile {
   const TestFileConstructor = TFile as unknown as new (filePath: string) => TFile;
   return new TestFileConstructor(targetPath);
@@ -73,12 +67,10 @@ function createMemoryAdapter(): FileSystemAdapter {
   return new Adapter("/memory-vault");
 }
 
-/** Creates one exact journal file state. */
 function fileState(content: string) {
   return { kind: "file" as const, content, contentHash: createFileContentHash(content) };
 }
 
-/** In-memory Vault edge that exposes exact process/no-write behavior. */
 class MemoryVaultHarness {
   readonly files = new Map<string, string>();
   readonly directories = new Set<string>(["Wiki"]);
@@ -92,7 +84,6 @@ class MemoryVaultHarness {
   processReturnOverride?: string;
 
   readonly adapter = Object.assign(createMemoryAdapter(), {
-    /** Observes one in-memory file or folder. */
     stat: async (targetPath: string) => {
       if (this.malformedStat) {
         return { type: "unexpected" } as never;
@@ -110,7 +101,7 @@ class MemoryVaultHarness {
             size: this.statSizeOverride ?? new TextEncoder().encode(content).byteLength,
           };
     },
-    /** Reads exact in-memory text. */
+
     read: async (targetPath: string) => {
       this.readCallCount += 1;
       const content = this.files.get(targetPath);
@@ -123,10 +114,10 @@ class MemoryVaultHarness {
 
   readonly vault = {
     adapter: this.adapter,
-    /** Returns a loaded fake file when exact bytes exist. */
+
     getAbstractFileByPath: (targetPath: string) =>
       this.files.has(targetPath) ? createTestFile(targetPath) : null,
-    /** Atomically transforms one loaded fake file without writing on callback errors. */
+
     process: async (file: TFile, transform: (current: string) => string) => {
       if (this.processFailure) {
         const error = this.processFailure;
@@ -146,7 +137,6 @@ class MemoryVaultHarness {
   } as unknown as Vault;
 
   readonly creator: ExclusiveKnowledgeFileCreator = {
-    /** Creates an absent in-memory path without overwriting it. */
     create: async (targetPath: string, content: string) => {
       this.creatorCallCount += 1;
       if (this.files.has(targetPath) || this.directories.has(targetPath)) {
@@ -157,13 +147,11 @@ class MemoryVaultHarness {
     },
   };
 
-  /** Creates a file store over the in-memory Vault and exclusive creator. */
   createStore(creator: ExclusiveKnowledgeFileCreator = this.creator): ObsidianKnowledgeFileStore {
     return new ObsidianKnowledgeFileStore(this.vault, creator);
   }
 }
 
-/** Creates a fake FileSystemAdapter rooted at one fresh native directory. */
 async function createNativeAdapter(): Promise<FileSystemAdapter> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-knowledge-file-"));
   temporaryDirectories.push(root);
@@ -351,7 +339,6 @@ describe("ObsidianKnowledgeFileStore", () => {
   it("does not overwrite a file that appears during exclusive create", async () => {
     const harness = new MemoryVaultHarness();
     const racingCreator: ExclusiveKnowledgeFileCreator = {
-      /** Simulates another writer winning create before this caller. */
       create: async (targetPath) => {
         harness.files.set(targetPath, "concurrent content");
         return "exists";

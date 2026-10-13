@@ -14,7 +14,6 @@ import { PDF_PAGE_KNOWLEDGE_PARSER_VERSION } from "@/knowledge/parser/PdfPageKno
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { createSourceContentHash } from "@/knowledge/model/fingerprint";
 
-/** Creates one valid project-owned Bundle for capture tests. */
 function createOwner(sourceRoots: string[] = ["Sources"]): ConfiguredProjectKnowledgeBundle {
   return {
     projectId: "project-personal",
@@ -29,7 +28,6 @@ function createOwner(sourceRoots: string[] = ["Sources"]): ConfiguredProjectKnow
   };
 }
 
-/** Creates the exact current production parser profiles. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "knowledge-utf8-text",
@@ -39,7 +37,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates one externally resolvable promise for async boundary tests. */
 function createDeferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((nextResolve) => {
@@ -48,7 +45,6 @@ function createDeferred(): { readonly promise: Promise<void>; readonly resolve: 
   return { promise, resolve };
 }
 
-/** Creates the exact current production PDF parser profile. */
 function createPdfParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "knowledge-pdf-pages",
@@ -58,7 +54,6 @@ function createPdfParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates an in-memory registration core and captures its writes. */
 function createRegistrationFixture(
   existing: SourceManifestEntry[] = [],
   mode: "normal" | "fail" | "commit_then_throw" = "normal"
@@ -96,7 +91,6 @@ function createRegistrationFixture(
   return { core, registrations };
 }
 
-/** Creates a coordinator with individually overridable authority inputs. */
 function createCoordinator(options?: {
   owners?: readonly ConfiguredProjectKnowledgeBundle[];
   parserProfiles?: readonly KnowledgeSourceParserProfile[];
@@ -149,7 +143,6 @@ function createCoordinator(options?: {
   };
 }
 
-/** Expects one sanitized capture error code. */
 async function expectCaptureError(
   promise: Promise<unknown>,
   code: KnowledgeChatCaptureErrorCode
@@ -159,7 +152,6 @@ async function expectCaptureError(
   );
 }
 
-/** Creates a draft through the exact destination session shown to the user. */
 function createDraft(
   coordinator: KnowledgeProductionChatCaptureCoordinator,
   request: { readonly title: string; readonly body: string; readonly reviewConfirmed: true },

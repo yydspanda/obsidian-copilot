@@ -13,7 +13,6 @@ jest.mock("obsidian", () => {
     app = {};
     containerEl: HTMLElement;
 
-    /** Creates the minimum popout-aware ItemView surface needed by this suite. */
     constructor(_leaf: unknown) {
       const container = window.document.createElement("div");
       const title = window.document.createElement("div");
@@ -83,7 +82,6 @@ interface ControllerCalls {
   destroy: jest.Mock;
 }
 
-/** Creates one controller-shaped lifecycle spy. */
 function createController(): KnowledgeStudioController & ControllerCalls {
   return {
     start: jest.fn(),
@@ -93,17 +91,14 @@ function createController(): KnowledgeStudioController & ControllerCalls {
   } as unknown as KnowledgeStudioController & ControllerCalls;
 }
 
-/** Creates one detached workspace leaf for lifecycle-only rendering. */
 function createLeaf(): WorkspaceLeaf {
   return {} as WorkspaceLeaf;
 }
 
-/** Creates one stable folder import capability for view-prop verification. */
 function createFolderImportPort(): KnowledgeFolderImportPort {
   return { importFolder: jest.fn() };
 }
 
-/** Creates the local setup props retained across popout root rebuilds. */
 function createSetupProps(): {
   readiness: KnowledgeSetupReadinessStore;
   navigation: KnowledgeSetupNavigationPort;

@@ -1,7 +1,6 @@
 import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import type { KnowledgeSourceObservationRecoverableIssue } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
 
-/** Creates one path-free recoverable issue from the active watcher generation. */
 function createIssue(bundleId = "personal"): Readonly<KnowledgeSourceObservationRecoverableIssue> {
   return Object.freeze({ kind: "source_missing", bundleId, sourceId: "source-1" });
 }

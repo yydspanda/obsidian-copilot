@@ -42,10 +42,8 @@ import type {
 } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict source-base and fresh Apply revalidation version. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_REVALIDATION_VERSION = 1 as const;
 
-/** Exact source state that remains stable across unrelated Manifest writes. */
 export interface KnowledgeForwardRevisionSourceBaseV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_REVALIDATION_VERSION;
   readonly kind: "forward_revision_source_base";
@@ -56,14 +54,12 @@ export interface KnowledgeForwardRevisionSourceBaseV1 {
   readonly currentSourceFreshness: Readonly<KnowledgeForwardRevisionSourceFreshness>;
 }
 
-/** Creator input projected from one exact current Manifest source entry. */
 export interface CreateKnowledgeForwardRevisionSourceBaseInput {
   readonly bundleId: string;
   readonly sourceEntry: unknown;
   readonly currentSourceFreshness: unknown;
 }
 
-/** Durable structural proof of a fresh deterministic pre-Apply validation. */
 export interface KnowledgeForwardRevisionApplyRevalidationReceiptV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_REVALIDATION_VERSION;
   readonly kind: "forward_revision_apply_revalidation_receipt";
@@ -92,7 +88,6 @@ export interface KnowledgeForwardRevisionApplyRevalidationReceiptV1 {
   readonly receiptDigest: string;
 }
 
-/** Complete input for one fresh, still non-authoritative Apply receipt. */
 export interface CreateKnowledgeForwardRevisionApplyRevalidationReceiptInput {
   readonly acceptedDecision: unknown;
   readonly freshValidationReceipt: unknown;
@@ -151,9 +146,7 @@ const RECEIPT_CREATE_KEYS = [
 ] as const;
 const REVALIDATION_ID_PATTERN = /^forward-revision-apply-revalidation-[a-f0-9]{64}$/;
 
-/** Fixed value-free failure for invalid source-base or revalidation material. */
 export class KnowledgeForwardRevisionApplyRevalidationValidationError extends TypeError {
-  /** Creates one sanitized error; only this module can mark it authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Apply revalidation does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionApplyRevalidationValidationError";
@@ -164,14 +157,12 @@ export class KnowledgeForwardRevisionApplyRevalidationValidationError extends Ty
 const ERROR_TOKEN = Symbol("KnowledgeForwardRevisionApplyRevalidationValidationError");
 const authenticErrors = new WeakSet<KnowledgeForwardRevisionApplyRevalidationValidationError>();
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionApplyRevalidationValidationError(ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local failure. */
 function isAuthenticError(
   value: unknown
 ): value is KnowledgeForwardRevisionApplyRevalidationValidationError {
@@ -182,12 +173,10 @@ function isAuthenticError(
   );
 }
 
-/** Hashes one exact JSON projection with explicit domain separation. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Strictly snapshots the last successful source compile projection. */
 function snapshotLastSuccessful(value: unknown): Readonly<SourceCompileSnapshot> {
   const captured = captureForwardApplyJson(value);
   if (captured === undefined) invalid();
@@ -202,7 +191,6 @@ function snapshotLastSuccessful(value: unknown): Readonly<SourceCompileSnapshot>
   return freezeForwardApplyJson(parsed.data.lastSuccessful);
 }
 
-/** Enforces exact correlations within one source-base projection. */
 function assertSourceBaseSemantics(
   bundleId: string,
   sourceId: string,
@@ -230,7 +218,6 @@ function assertSourceBaseSemantics(
   }
 }
 
-/** Strictly snapshots one exact source-base projection. */
 export function snapshotKnowledgeForwardRevisionSourceBase(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionSourceBaseV1> {
@@ -276,7 +263,6 @@ export function snapshotKnowledgeForwardRevisionSourceBase(
   }
 }
 
-/** Creates one source-base projection from an exact current Manifest entry. */
 export function createKnowledgeForwardRevisionSourceBase(
   value: CreateKnowledgeForwardRevisionSourceBaseInput
 ): Readonly<KnowledgeForwardRevisionSourceBaseV1> {
@@ -309,7 +295,6 @@ export function createKnowledgeForwardRevisionSourceBase(
   }
 }
 
-/** Computes the required source base over its complete canonical projection. */
 export function createKnowledgeForwardRevisionSourceBaseDigest(value: unknown): string {
   const sourceBase = snapshotKnowledgeForwardRevisionSourceBase(value);
   const freshness = sourceBase.currentSourceFreshness;
@@ -354,7 +339,6 @@ export function createKnowledgeForwardRevisionSourceBaseDigest(value: unknown): 
   });
 }
 
-/** Creates the exact digest payload excluding self-identifying receipt fields. */
 function createReceiptPayload(
   accepted: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>,
   freshValidationReceipt: Readonly<KnowledgeForwardRevisionValidationReceiptV1>,
@@ -391,7 +375,6 @@ function createReceiptPayload(
   });
 }
 
-/** Strictly rejoins one revalidation receipt to its accepted decision. */
 export function snapshotKnowledgeForwardRevisionApplyRevalidationReceiptForAcceptedDecision(
   value: unknown,
   acceptedDecisionValue: unknown
@@ -493,7 +476,6 @@ export function snapshotKnowledgeForwardRevisionApplyRevalidationReceiptForAccep
   }
 }
 
-/** Strictly snapshots one self-contained revalidation receipt. */
 export function snapshotKnowledgeForwardRevisionApplyRevalidationReceipt(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyRevalidationReceiptV1> {
@@ -581,7 +563,6 @@ export function snapshotKnowledgeForwardRevisionApplyRevalidationReceipt(
   }
 }
 
-/** Creates one strict fresh revalidation receipt for an accepted decision. */
 export function createKnowledgeForwardRevisionApplyRevalidationReceipt(
   value: CreateKnowledgeForwardRevisionApplyRevalidationReceiptInput
 ): Readonly<KnowledgeForwardRevisionApplyRevalidationReceiptV1> {
@@ -638,14 +619,12 @@ export function createKnowledgeForwardRevisionApplyRevalidationReceipt(
   }
 }
 
-/** Computes the canonical digest of one strict standalone receipt. */
 export function createKnowledgeForwardRevisionApplyRevalidationReceiptDigest(
   value: unknown
 ): string {
   return snapshotKnowledgeForwardRevisionApplyRevalidationReceipt(value).receiptDigest;
 }
 
-/** Parses an untrusted revalidation receipt into a detached value or diagnostic. */
 export function parseKnowledgeForwardRevisionApplyRevalidationReceipt(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionApplyRevalidationReceiptV1>> {
@@ -666,7 +645,6 @@ export function parseKnowledgeForwardRevisionApplyRevalidationReceipt(
   }
 }
 
-/** Validates one untrusted revalidation receipt without retaining rejected data. */
 export function validateKnowledgeForwardRevisionApplyRevalidationReceipt(
   value: unknown
 ): KnowledgeValidationResult {
@@ -676,7 +654,6 @@ export function validateKnowledgeForwardRevisionApplyRevalidationReceipt(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed diagnostic. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

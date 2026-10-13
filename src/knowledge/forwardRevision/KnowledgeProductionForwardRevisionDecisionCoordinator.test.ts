@@ -9,14 +9,12 @@ jest.mock(
     const errorCodes = new WeakMap<object, string>();
 
     class KnowledgeForwardRevisionValidationCoordinatorError extends Error {
-      /** Captures one mock-module-authentic sanitized validation failure. */
       constructor(code: string) {
         super("validation failed");
         errorCodes.set(this, code);
         Object.freeze(this);
       }
 
-      /** Inspects only failures minted by this mock module. */
       static inspect(value: unknown): string | undefined {
         return typeof value === "object" && value !== null ? errorCodes.get(value) : undefined;
       }
@@ -25,7 +23,6 @@ jest.mock(
     class KnowledgeProductionForwardRevisionValidationCoordinator {
       readonly calls: unknown[] = [];
 
-      /** Captures one exact owner and scripted genuine validation operation. */
       constructor(
         executionOwner: unknown,
         handler: (request: unknown, signal: AbortSignal) => unknown
@@ -35,7 +32,6 @@ jest.mock(
         Object.freeze(this);
       }
 
-      /** Requires one exact mock coordinator and execution owner. */
       static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
         if (
           typeof value !== "object" ||
@@ -48,7 +44,6 @@ jest.mock(
         }
       }
 
-      /** Runs the scripted validator while retaining its exact request. */
       async validate(request: unknown, signal: AbortSignal): Promise<unknown> {
         this.calls.push(request);
         return coordinatorHandlers.get(this)?.(request, signal);
@@ -76,14 +71,12 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
   const errorCodes = new WeakMap<object, string>();
 
   class KnowledgeForwardRevisionDecisionPortError extends Error {
-    /** Captures one mock-module-authentic sanitized Runtime failure. */
     constructor(code: string) {
       super("decision failed");
       errorCodes.set(this, code);
       Object.freeze(this);
     }
 
-    /** Inspects only failures minted by this mock module. */
     static inspect(value: unknown): string | undefined {
       return typeof value === "object" && value !== null ? errorCodes.get(value) : undefined;
     }
@@ -93,7 +86,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
     readonly readPendingCalls: unknown[] = [];
     readonly decideCalls: unknown[] = [];
 
-    /** Captures one exact owner and scripted genuine Runtime operations. */
     constructor(
       owner: unknown,
       handlers: {
@@ -105,7 +97,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
       Object.freeze(this);
     }
 
-    /** Requires one exact mock-module-minted decision port. */
     static assert(value: unknown): void {
       if (
         typeof value !== "object" ||
@@ -117,18 +108,15 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
       }
     }
 
-    /** Reports exact mock execution ownership. */
     static matchesExecutionOwner(value: unknown, owner: unknown): boolean {
       return typeof value === "object" && value !== null && portStates.get(value)?.owner === owner;
     }
 
-    /** Runs one scripted strict admission read. */
     async readPending(command: unknown, signal: AbortSignal): Promise<unknown> {
       this.readPendingCalls.push(command);
       return portStates.get(this)?.readPending(command, signal);
     }
 
-    /** Runs one scripted atomic decision operation. */
     async decide(request: unknown, signal: AbortSignal): Promise<unknown> {
       this.decideCalls.push(request);
       return portStates.get(this)?.decide(request, signal);
@@ -190,7 +178,6 @@ interface MockDecisionPort {
   readonly decideCalls: unknown[];
 }
 
-/** Creates one strict pending proposal for high-level orchestration tests. */
 function createProposal() {
   const selectedContentHash = createFileContentHash(HISTORICAL_CONTENT);
   const currentHash = createFileContentHash(CURRENT_CONTENT);
@@ -262,7 +249,6 @@ function createProposal() {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates one mock genuine validator under the selected execution owner. */
 function createValidator(
   owner: KnowledgeExecutionOwner,
   handler: (request: unknown, signal: AbortSignal) => unknown
@@ -274,7 +260,6 @@ function createValidator(
   return new Constructor(owner, handler);
 }
 
-/** Creates one mock genuine decision port under the selected execution owner. */
 function createDecisionPort(
   owner: KnowledgeExecutionOwner,
   readPending: (
@@ -293,7 +278,6 @@ function createDecisionPort(
   return new Constructor(owner, { readPending, decide });
 }
 
-/** Creates one detached terminal result whose body must not cross the coordinator boundary. */
 function createTerminalResult(
   kind: "accepted" | "rejected",
   outcome: "decided" | "already_decided" = "decided"
@@ -308,7 +292,6 @@ function createTerminalResult(
   });
 }
 
-/** Creates one production coordinator fixture with a strict accept-exact command. */
 function createFixture(options?: {
   readonly validationResult?: Readonly<KnowledgeForwardRevisionValidationCoordinatorResult>;
   readonly admission?: Readonly<KnowledgeForwardRevisionDecisionAdmission> | null;
@@ -363,7 +346,6 @@ function createFixture(options?: {
   };
 }
 
-/** Reads one enumerable request field without widening mock call types. */
 function readRequestField(value: unknown, key: keyof KnowledgeForwardRevisionDecisionRequest) {
   return (value as Readonly<Record<string, unknown>>)[key];
 }

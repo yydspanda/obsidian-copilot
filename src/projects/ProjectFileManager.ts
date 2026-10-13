@@ -55,17 +55,6 @@ import { App, normalizePath, stringifyYaml, TFile, TFolder, Vault } from "obsidi
 import { ensureProjectsMigratedIfNeeded } from "@/projects/projectMigration";
 import type { StartupMigrationItem } from "@/services/startupMigration";
 
-/**
- * Resolves the knowledge Bundle portion of an update without conflating omission and deletion.
- *
- * An omitted property preserves the cached advanced configuration. An explicit own
- * `knowledgeBundle: undefined` removes it. Any other explicit value replaces it as
- * untrusted project data for the knowledge configuration source to validate later.
- *
- * @param existing - Currently cached project configuration
- * @param update - Incoming complete project update
- * @returns Detached update with the intended Bundle property state
- */
 function resolveProjectKnowledgeBundleUpdate(
   existing: ProjectConfig,
   update: ProjectConfig
@@ -86,14 +75,6 @@ function resolveProjectKnowledgeBundleUpdate(
   return resolved;
 }
 
-/**
- * Builds the complete frontmatter map for hidden-folder adapter writes.
- *
- * @param project - Project configuration to serialize
- * @param folderName - Folder name used only as the project-name fallback
- * @param timestamps - Created and last-used timestamps
- * @returns Complete frontmatter without invented optional values
- */
 export function buildHiddenProjectFrontmatter(
   project: ProjectConfig,
   folderName: string,
@@ -103,8 +84,6 @@ export function buildHiddenProjectFrontmatter(
   const youtubeUrls = splitUrlsStringToArray(project.contextSource?.youtubeUrls || "");
 
   const fm: Record<string, unknown> = {
-    // Reason: do NOT fallback to folderName for id — with name-based folders,
-    // folderName is derived from project name, not id.
     [COPILOT_PROJECT_ID]: project.id.trim(),
     [COPILOT_PROJECT_NAME]: (project.name || folderName).trim(),
     [COPILOT_PROJECT_DESCRIPTION]: (project.description || "").trim(),
@@ -130,14 +109,6 @@ export function buildHiddenProjectFrontmatter(
   return fm;
 }
 
-/**
- * Builds complete project content for hidden-folder adapter writes.
- *
- * @param project - Project configuration to serialize
- * @param folderName - Folder name used only as the project-name fallback
- * @param timestamps - Created and last-used timestamps
- * @returns Complete Markdown file with YAML frontmatter
- */
 function buildProjectFileContent(
   project: ProjectConfig,
   folderName: string,
@@ -147,29 +118,19 @@ function buildProjectFileContent(
   return `---\n${stringifyYaml(fm)}---\n${project.systemPrompt || ""}`;
 }
 
-/**
- * Returns the normalized parent portion of one captured Vault file path.
- *
- * @param filePath - Vault-relative file path
- * @returns Parent path, or an empty string for a root-level file
- */
 function getVaultParentPath(filePath: string): string {
   const separatorIndex = filePath.lastIndexOf("/");
   return separatorIndex < 0 ? "" : filePath.slice(0, separatorIndex);
 }
 
-/** Reports use of a ProjectFileManager reference after its owning plugin lifecycle ended. */
 export class ProjectFileManagerDisposedError extends Error {
-  /** Creates a stable disposed-lifecycle failure. */
   constructor() {
     super("ProjectFileManager cannot be used after disposal");
     this.name = "ProjectFileManagerDisposedError";
   }
 }
 
-/** Reports that an operation's configured projects folder changed while it awaited I/O. */
 export class ProjectFileManagerFolderChangedError extends Error {
-  /** Creates a stable folder-generation failure. */
   constructor() {
     super("ProjectFileManager operation belongs to an obsolete projects folder");
     this.name = "ProjectFileManagerFolderChangedError";
@@ -193,55 +154,35 @@ const preparedProjectScanAuthorities = new WeakMap<
   ProjectScanAuthority
 >();
 
-/**
- * Nominal token for one prepared full-project scan.
- *
- * The concrete class is intentionally module-private. Callers can carry the
- * exported alias between manager methods, but cannot construct a valid token.
- */
 class PreparedProjectScanToken {
   private readonly preparedProjectScanBrand = true;
 
-  /**
-   * Creates a token whose authority is retained outside the public object shape.
-   *
-   * @param authority - Exact manager lifecycle and state revision authorized to commit
-   */
   constructor(authority: ProjectScanAuthority) {
     preparedProjectScanAuthorities.set(this, authority);
     Object.freeze(this);
   }
 }
 
-/** Opaque identity for one full-project scan and its conditional cache commit. */
 export type PreparedProjectScan = PreparedProjectScanToken;
 
-/**
- * Project file manager (aligned with system-prompts Manager pattern).
- *
- * Responsibilities:
- * - CRUD: create/update/delete project.md files
- * - Cache: maintain in-memory list via state.ts
- * - last-used: throttled frontmatter writes via RecentUsageManager
- */
 export class ProjectFileManager {
   private static instance: ProjectFileManager | undefined;
   private readonly app: App;
   private readonly vault: Vault;
-  /** Opaque authority for every Projects state mutation and pending-write lease. */
+
   private readonly stateOwner: ProjectStateOwner;
   private readonly projectLastUsedManager = new RecentUsageManager<string>();
-  /** Permanent boundary for one plugin/App ownership generation. */
+
   private disposed = false;
-  /** Successful initialization state for this exact App/Vault owner. */
+
   private initialized = false;
-  /** Shared initialization work for concurrent callers. */
+
   private initializePromise?: Promise<StartupMigrationItem | null>;
-  /** Invalidates all asynchronous work synchronously on disposal. */
+
   private lifecycleGeneration = 0;
-  /** Shared CAS revision for scans and direct project-state mutations. */
+
   private projectStateRevision = 0;
-  /** Exact configured-folder generation for asynchronous CRUD operations. */
+
   private projectFolderRevision = 0;
 
   private constructor(app: App) {
@@ -250,11 +191,6 @@ export class ProjectFileManager {
     this.stateOwner = beginProjectStateLifecycle();
   }
 
-  /**
-   * Get singleton instance.
-   * @param app - Obsidian App (required on first call)
-   * @returns ProjectFileManager singleton
-   */
   public static getInstance(app?: App): ProjectFileManager {
     const current = ProjectFileManager.instance;
     if (current && app && (current.app !== app || current.vault !== app.vault)) {
@@ -268,15 +204,6 @@ export class ProjectFileManager {
     return ProjectFileManager.instance;
   }
 
-  /**
-   * Starts a fresh plugin lifecycle even when the App/Vault identity is unchanged.
-   *
-   * This is the construction entry point for ProjectRegister. It closes a still-live
-   * manager from an overlapping hot reload before publishing the new lifecycle owner.
-   *
-   * @param app - App/Vault owner for the new plugin lifecycle
-   * @returns Fresh active ProjectFileManager
-   */
   public static startLifecycle(app: App): ProjectFileManager {
     ProjectFileManager.instance?.dispose();
     const manager = new ProjectFileManager(app);
@@ -284,12 +211,6 @@ export class ProjectFileManager {
     return manager;
   }
 
-  /**
-   * Permanently releases this App/Vault owner and invalidates all in-flight work.
-   *
-   * Cache clearing is restricted to the active singleton owner so an obsolete retained
-   * reference can never erase records installed by a later plugin/App generation.
-   */
   public dispose(): void {
     if (this.disposed) return;
 
@@ -306,13 +227,6 @@ export class ProjectFileManager {
     releaseProjectStateLifecycle(this.stateOwner);
   }
 
-  /**
-   * Initialize: run one-time migration from data.json if needed, then load all
-   * projects from vault files. Migration unconditionally clears settings.projectList
-   * after backing up failures to unsupported/ (no retry/merge — single source of truth).
-   *
-   * @returns Shared initialization Promise for the current lifecycle
-   */
   public initialize(): Promise<StartupMigrationItem | null> {
     this.assertActive();
     if (this.initialized) return Promise.resolve(null);
@@ -324,20 +238,12 @@ export class ProjectFileManager {
     return initialization;
   }
 
-  /**
-   * Runs migration and installs one scan only while its lifecycle still owns the singleton.
-   *
-   * @param generation - Lifecycle generation captured by initialize()
-   */
   private async performInitialization(generation: number): Promise<StartupMigrationItem | null> {
     logInfo("[Projects] Initializing ProjectFileManager");
     try {
       const migrationResult = await ensureProjectsMigratedIfNeeded(this.app, this.stateOwner);
       this.assertGeneration(generation);
 
-      // Reason: Vault events are registered before initialization. If one mutates
-      // project state while the initial scan is in flight, retry from disk instead
-      // of either overwriting the event or leaving a partial initial cache.
       let installed = false;
       while (!installed) {
         const preparedScan = this.prepareProjectScan();
@@ -358,32 +264,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Get cached ProjectConfig list.
-   * @returns Array of ProjectConfig
-   */
-  public getProjects(): ProjectConfig[] {
-    this.assertActive();
-    return getCachedProjectRecords().map((r) => r.project);
-  }
-
-  /**
-   * Get cached ProjectFileRecord list.
-   * @returns Array of ProjectFileRecord
-   */
-  public getProjectRecords(): ProjectFileRecord[] {
-    this.assertActive();
-    return getCachedProjectRecords();
-  }
-
-  /**
-   * Reload all projects from vault (full scan + cache replace).
-   *
-   * Concurrent reloads use latest-wins cache installation. A reload started before
-   * disposal may finish its I/O, but it cannot commit into a later lifecycle's cache.
-   *
-   * @returns Records observed by this reload
-   */
   public async reloadProjects(): Promise<ProjectFileRecord[]> {
     const generation = this.captureActiveGeneration();
     const pendingInitialization = this.initializePromise;
@@ -399,11 +279,6 @@ export class ProjectFileManager {
     return records;
   }
 
-  /**
-   * Prepares a latest-wins full scan and invalidates every older prepared scan.
-   *
-   * @returns Opaque scan identity for fetch/currentness/commit operations
-   */
   public prepareProjectScan(): PreparedProjectScan {
     const generation = this.captureActiveGeneration();
     const revision = ++this.projectStateRevision;
@@ -414,15 +289,6 @@ export class ProjectFileManager {
     });
   }
 
-  /**
-   * Reads all projects for a previously prepared scan without committing them.
-   *
-   * A token may become stale during I/O. The records are still returned so callers
-   * can finish deterministically, but only commitPreparedProjectScan can publish them.
-   *
-   * @param preparedScan - Opaque identity returned by prepareProjectScan()
-   * @returns Records observed by this scan
-   */
   public async fetchPreparedProjectScan(
     preparedScan: PreparedProjectScan
   ): Promise<ProjectFileRecord[]> {
@@ -436,12 +302,6 @@ export class ProjectFileManager {
     return records;
   }
 
-  /**
-   * Reports whether a prepared scan still owns the current project-state revision.
-   *
-   * @param preparedScan - Opaque scan identity
-   * @returns True only for this active manager's latest unconsumed scan
-   */
   public isPreparedProjectScanCurrent(preparedScan: PreparedProjectScan): boolean {
     const authority = preparedProjectScanAuthorities.get(preparedScan);
     return (
@@ -454,16 +314,6 @@ export class ProjectFileManager {
     );
   }
 
-  /**
-   * Atomically publishes a prepared scan only if no newer scan or mutation won first.
-   *
-   * Successful commit consumes the token by advancing the same revision immediately
-   * before replacing project state.
-   *
-   * @param preparedScan - Opaque scan identity
-   * @param records - Complete records produced by that scan
-   * @returns True when this scan committed; false when it was stale
-   */
   public commitPreparedProjectScan(
     preparedScan: PreparedProjectScan,
     records: ProjectFileRecord[]
@@ -474,34 +324,17 @@ export class ProjectFileManager {
     return updateCachedProjectRecordsForOwner(this.stateOwner, records);
   }
 
-  /**
-   * Invalidates all prepared scans before a direct project-state mutation.
-   *
-   * Call this synchronously and immediately adjacent to the owner-bound state
-   * mutation that establishes the newer truth.
-   */
   public invalidatePreparedProjectScans(): void {
     this.assertActive();
     this.projectStateRevision += 1;
   }
 
-  /**
-   * Invalidates scans and every CRUD operation captured under the prior folder setting.
-   *
-   * ProjectRegister calls this synchronously when projectsFolder changes, before its
-   * debounce, so old-folder continuations fail closed even after a new scan commits.
-   */
   public invalidateProjectsFolder(): void {
     this.assertActive();
     this.projectFolderRevision += 1;
     this.projectStateRevision += 1;
   }
 
-  /**
-   * Fetch all projects from the Vault without updating cached records.
-   *
-   * @returns Project records observed during the scan
-   */
   public async fetchProjects(): Promise<ProjectFileRecord[]> {
     const generation = this.captureActiveGeneration();
     const records = await fetchAllProjects(this.app);
@@ -509,39 +342,21 @@ export class ProjectFileManager {
     return records;
   }
 
-  /**
-   * Get the RecentUsageManager for project last-used timestamps (for UI sorting).
-   */
   public getProjectUsageTimestampsManager(): RecentUsageManager<string> {
     this.assertActive();
     return this.projectLastUsedManager;
   }
 
-  /**
-   * Returns the opaque Projects state authority owned by this active manager.
-   *
-   * @returns Current lifecycle's state owner
-   */
   public getStateOwner(): ProjectStateOwner {
     this.assertActive();
     return this.stateOwner;
   }
 
-  /**
-   * Captures the current lifecycle generation after asserting this owner is active.
-   *
-   * @returns Current lifecycle generation
-   */
   private captureActiveGeneration(): number {
     this.assertActive();
     return this.lifecycleGeneration;
   }
 
-  /**
-   * Captures both plugin lifecycle and configured-folder identity for one CRUD operation.
-   *
-   * @returns Authority that must be revalidated after every asynchronous boundary
-   */
   private captureFileOperationAuthority(): ProjectFileOperationAuthority {
     return {
       lifecycleGeneration: this.captureActiveGeneration(),
@@ -550,9 +365,6 @@ export class ProjectFileManager {
     };
   }
 
-  /**
-   * Rejects calls through a reference whose plugin/App lifecycle has ended.
-   */
   private assertActive(): void {
     if (
       this.disposed ||
@@ -563,11 +375,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Rejects an asynchronous continuation that no longer owns this lifecycle.
-   *
-   * @param generation - Generation captured before the asynchronous boundary
-   */
   private assertGeneration(generation: number): void {
     if (
       this.disposed ||
@@ -579,11 +386,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Rejects an asynchronous CRUD continuation from an obsolete projects folder.
-   *
-   * @param authority - Operation authority captured before its first Vault access
-   */
   private assertFileOperationAuthority(authority: ProjectFileOperationAuthority): void {
     this.assertGeneration(authority.lifecycleGeneration);
     if (
@@ -594,12 +396,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Acquires an exact owner-bound pending-write lease or rejects stale work.
-   *
-   * @param filePath - Vault path whose plugin-generated events should be suppressed
-   * @returns Opaque lease that must be released in a finally block
-   */
   private acquireFileWrite(filePath: string): ProjectFileWriteLease {
     const lease = acquireProjectFileWrite(this.stateOwner, filePath);
     if (!lease) {
@@ -608,30 +404,14 @@ export class ProjectFileManager {
     return lease;
   }
 
-  /**
-   * Sanitize a string for use as a project folder name.
-   * Typically receives the project name (or id as fallback when name is empty).
-   * Replaces path separators and control characters.
-   * Rejects reserved names that conflict with internal directories.
-   */
   private sanitizeFolderName(input: string): string {
     const sanitized = sanitizeVaultPathSegment(input);
-    // Reason: "unsupported" is reserved for migration failure backups
     if (sanitized.toLowerCase() === PROJECTS_UNSUPPORTED_FOLDER_NAME) {
       return `_${sanitized}`;
     }
     return sanitized;
   }
 
-  /**
-   * Best-effort rollback for one still-current lifecycle.
-   * Also removes the parent folder if empty. Active-lifecycle cleanup errors are logged;
-   * stale lifecycle errors are rethrown so no later Vault side effect can run.
-   *
-   * @param filePath - Created file to remove
-   * @param folderPath - Parent folder to remove when empty
-   * @param generation - Lifecycle generation that created the file
-   */
   private async rollbackCreatedFile(
     filePath: string,
     folderPath: string,
@@ -645,8 +425,7 @@ export class ProjectFileManager {
         this.assertGeneration(generation);
       } else if (await this.vault.adapter.exists(filePath)) {
         this.assertGeneration(generation);
-        // Reason: hidden-folder files are not indexed by vault cache.
-        // Fall back to adapter-based deletion for consistent hidden-folder support.
+
         await this.vault.adapter.remove(filePath);
         this.assertGeneration(generation);
       } else {
@@ -674,28 +453,16 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Extract the leading YAML frontmatter block (including closing marker and trailing newline).
-   * @returns The frontmatter block string, or null if none found
-   */
   private getLeadingFrontmatterBlock(raw: string): string | null {
-    // Reason: strip optional BOM before matching, consistent with readFrontmatterFieldFromFile
     const content = raw.replace(/^\uFEFF/, "");
     const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
     return match ? match[0] : null;
   }
 
-  /**
-   * Create a new project record at \<projectsFolder\>/\<folderName\>/project.md.
-   * @param project - ProjectConfig to create
-   * @returns Newly created ProjectFileRecord
-   */
   public async createProject(project: ProjectConfig): Promise<ProjectFileRecord> {
     const authority = this.captureFileOperationAuthority();
     const generation = authority.lifecycleGeneration;
 
-    // Reason: validate raw id first, then sanitize only for folder name derivation.
-    // The project.id stays as-is for stable logical identity.
     const projectId = (project.id || "").trim();
     if (!projectId) throw new Error("Project id cannot be empty");
 
@@ -713,14 +480,10 @@ export class ProjectFileManager {
       }
     }
 
-    // Reason: derive folder name from project name for user-friendly vault browsing.
-    // Fall back to id when name is empty/whitespace.
     const folderName = this.sanitizeFolderName(trimmedName || projectId);
     const filePath = getProjectConfigFilePath(folderName, authority.projectsFolder);
     const folderPath = getVaultParentPath(filePath);
 
-    // Reason: detect case-insensitive folder collisions (macOS/Windows vaults are
-    // case-insensitive). Without this, "Foo" and "foo" map to the same disk folder.
     const folderKey = folderName.toLowerCase();
     const cachedRecords = getCachedProjectRecords();
     const existingFolderConflict = cachedRecords.find(
@@ -744,9 +507,6 @@ export class ProjectFileManager {
       );
       this.assertFileOperationAuthority(authority);
 
-      // Reason: detect folder name collisions where a different project id sanitizes to the
-      // same folder (e.g. "a/b" and "a\\b" both produce "a_b"). Check both cache and filesystem.
-      // Uses adapter.exists() instead of getAbstractFileByPath() for hidden-folder compatibility.
       const fileAlreadyExists = await this.vault.adapter.exists(filePath);
       this.assertFileOperationAuthority(authority);
       if (fileAlreadyExists) {
@@ -764,8 +524,6 @@ export class ProjectFileManager {
           ? project.UsageTimestamps
           : 0;
 
-      // Reason: use vault.create() return value directly instead of re-fetching via
-      // getAbstractFileByPath(), which fails for hidden folders not indexed by vault cache.
       const file = await this.vault.create(filePath, project.systemPrompt || "");
       this.assertFileOperationAuthority(authority);
 
@@ -783,7 +541,6 @@ export class ProjectFileManager {
         );
         this.assertFileOperationAuthority(authority);
       } catch (fmError) {
-        // Reason: rollback the created file to avoid leaving a "poisoned" file without frontmatter
         this.assertGeneration(generation);
         await this.rollbackCreatedFile(filePath, folderPath, generation);
         this.assertGeneration(generation);
@@ -806,12 +563,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Update an existing project (located by id).
-   * @param projectId - Project id to update
-   * @param nextProject - New ProjectConfig (id must match)
-   * @returns Updated ProjectFileRecord
-   */
   public async updateProject(
     projectId: string,
     nextProject: ProjectConfig
@@ -843,27 +594,17 @@ export class ProjectFileManager {
     let filePath = existing.filePath;
     let folderName = existing.folderName;
     const fileWriteLeases: ProjectFileWriteLease[] = [];
-    // Every path below derives from the record's OWN location, never the live
-    // projects root. A Copilot root change activates immediately while
-    // ProjectRegister reloads its cache on a 1s trailing debounce, so an update
-    // started in that window would otherwise rename and write inside a
-    // different tree — destructively when the new root is a previously-used one
-    // that already holds a project of this name.
+
     const { projectsRoot } = getProjectAnchorFromConfigPath(existing.filePath);
     const projectFolderIn = (name: string) => normalizePath(`${projectsRoot}/${name}`);
 
-    // Reason: when the project name changes, the folder should be renamed to match.
-    // This keeps vault browsing intuitive (folder = project name).
     const nextFolderName = this.sanitizeFolderName(trimmedName || normalizedId);
     let oldFilePathForPending: string | null = null;
 
     if (nextFolderName !== existing.folderName) {
       const newFolderPath = projectFolderIn(nextFolderName);
-      // Reason: a folder rename keeps the config basename (`project.md`), so the new config
-      // path is just `project.md` under the renamed folder.
       const newFilePath = getProjectConfigFilePath(nextFolderName, projectsRoot);
 
-      // Check collision: cache (case-insensitive) + filesystem
       const folderKey = nextFolderName.toLowerCase();
       const folderConflict = getCachedProjectRecords().find(
         (r) => r.project.id !== normalizedId && r.folderName.toLowerCase() === folderKey
@@ -873,9 +614,6 @@ export class ProjectFileManager {
           `Cannot rename project folder: "${nextFolderName}" conflicts with project "${folderConflict.project.name}"`
         );
       }
-      // Reason: on case-insensitive filesystems (macOS/Windows), a case-only rename
-      // (e.g. "foo" → "Foo") reports the old folder as "already existing". Skip the
-      // disk-conflict check when the paths differ only in case.
       const isCaseOnlyRename =
         newFolderPath.toLowerCase() === projectFolderIn(existing.folderName).toLowerCase();
       const newFolderExists = !isCaseOnlyRename && (await this.vault.adapter.exists(newFolderPath));
@@ -884,14 +622,12 @@ export class ProjectFileManager {
         throw new Error(`Cannot rename project folder: "${newFolderPath}" already exists on disk`);
       }
 
-      // Suppress vault events for both old and new project.md paths
       oldFilePathForPending = filePath;
       fileWriteLeases.push(this.acquireFileWrite(oldFilePathForPending));
       fileWriteLeases.push(this.acquireFileWrite(newFilePath));
 
       try {
         const oldFolderPath = projectFolderIn(existing.folderName);
-        // Reason: use vault-cache-aware rename when possible, adapter fallback for hidden folders
         const folderObj = this.vault.getAbstractFileByPath(oldFolderPath);
         if (folderObj instanceof TFolder) {
           await this.vault.rename(folderObj, newFolderPath);
@@ -900,7 +636,6 @@ export class ProjectFileManager {
         }
         this.assertFileOperationAuthority(authority);
       } catch (renameError) {
-        // Rename failed — folder not moved, clean up pending and rethrow
         for (const lease of fileWriteLeases.splice(0)) {
           releaseProjectFileWrite(lease);
         }
@@ -911,7 +646,6 @@ export class ProjectFileManager {
         throw renameError;
       }
 
-      // Update local variables to use new paths for subsequent writes
       filePath = newFilePath;
       folderName = nextFolderName;
       logInfo(
@@ -920,21 +654,14 @@ export class ProjectFileManager {
     }
 
     try {
-      // Reason: only add pending-write guard when no folder rename occurred.
-      // When a rename happened, the new path was already guarded at L380 and will be
-      // cleaned up in the finally block. Adding again would leak the ref-count.
       if (!oldFilePathForPending) {
         fileWriteLeases.push(this.acquireFileWrite(filePath));
       }
 
-      // Reason: use resolveFileByPath to handle both vault-cached and hidden-folder files.
-      // getAbstractFileByPath returns null for hidden folders even when the file exists on disk.
       let file = await resolveFileByPath(this.app, filePath);
       this.assertFileOperationAuthority(authority);
       let materialized = false;
 
-      // Reason: if the file doesn't exist anywhere (e.g. legacy project merged into cache before
-      // migration completed), materialize it now so the update can proceed.
       if (!file) {
         logInfo(`[Projects] Materializing missing vault file for project: ${normalizedId}`);
         const folderPath = projectFolderIn(folderName);
@@ -955,8 +682,6 @@ export class ProjectFileManager {
         Number.isFinite(existing.project.created) && existing.project.created > 0
           ? existing.project.created
           : Date.now();
-      // Reason: take the maximum of cached value and in-memory manager value to avoid
-      // clobbering a recent touchProjectLastUsed() write with a stale cached value.
       const cachedLastUsed =
         Number.isFinite(existing.project.UsageTimestamps) && existing.project.UsageTimestamps > 0
           ? existing.project.UsageTimestamps
@@ -970,10 +695,7 @@ export class ProjectFileManager {
         UsageTimestamps: lastUsedMs,
       };
 
-      // Reason: processFrontMatter (used by writeProjectFrontmatter) does not work reliably
-      // on synthetic TFiles for hidden folders. Split into cached-file and adapter-based paths.
       if (isInVaultCache(this.app, filePath)) {
-        // Vault-cached file: use processFrontMatter for safe field-level updates
         try {
           await writeProjectFrontmatter(
             this.app,
@@ -1000,7 +722,6 @@ export class ProjectFileManager {
           throw fmError;
         }
 
-        // Read back the updated frontmatter block, then combine with new body in a single write
         const rawWithFrontmatter = await this.vault.read(file);
         this.assertFileOperationAuthority(authority);
         const frontmatterBlock = this.getLeadingFrontmatterBlock(rawWithFrontmatter);
@@ -1014,7 +735,6 @@ export class ProjectFileManager {
         );
         this.assertFileOperationAuthority(authority);
       } else {
-        // Hidden-folder file: build complete content and write via adapter
         const content = buildProjectFileContent(projectForWrite, folderName, {
           createdMs,
           lastUsedMs,
@@ -1047,14 +767,11 @@ export class ProjectFileManager {
         throw writeError;
       }
       this.assertGeneration(generation);
-      // Reason: if the folder was already renamed but writing failed, roll the folder back
-      // to prevent leaving the project in an inconsistent location.
+
       if (oldFilePathForPending && folderName !== existing.folderName) {
         try {
           const oldFolderPath = projectFolderIn(existing.folderName);
           const newFolderPath = projectFolderIn(folderName);
-          // Reason: use vault.rename() for cached folders (same as forward rename) so
-          // the vault cache stays consistent. Fall back to adapter for hidden folders.
           const renamedFolder = this.vault.getAbstractFileByPath(newFolderPath);
           if (renamedFolder instanceof TFolder) {
             await this.vault.rename(renamedFolder, oldFolderPath);
@@ -1084,11 +801,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Delete a project by id. Deletes only the managed project.md file, then removes the folder
-   * if it is empty. AGENTS.md and other user-editable files are preserved.
-   * @param projectId - Project id to delete
-   */
   public async deleteProject(projectId: string): Promise<void> {
     const authority = this.captureFileOperationAuthority();
     const generation = authority.lifecycleGeneration;
@@ -1099,16 +811,10 @@ export class ProjectFileManager {
       return;
     }
 
-    // From the record's own config path: deleting via the live root would target
-    // a same-named project in a different tree during the window after a root
-    // change but before ProjectRegister reloads its cache.
     const { projectFolderPath: folderPath } = getProjectAnchorFromConfigPath(existing.filePath);
     const fileWriteLease = this.acquireFileWrite(existing.filePath);
 
     try {
-      // Reason: delete only the managed config file to avoid destroying user files
-      // that may have been placed in the project folder. trashFile respects the
-      // user's trash behavior (system trash / .trash folder / permanent).
       const configFile = this.vault.getAbstractFileByPath(existing.filePath);
       if (configFile instanceof TFile) {
         await trashFile(this.app, configFile);
@@ -1117,28 +823,18 @@ export class ProjectFileManager {
         const configFileExists = await this.vault.adapter.exists(existing.filePath);
         this.assertFileOperationAuthority(authority);
         if (configFileExists) {
-          // Reason: hidden-folder files are not indexed by vault cache.
-          // Fall back to adapter-based deletion for consistent hidden-folder support.
           await this.vault.adapter.remove(existing.filePath);
           this.assertFileOperationAuthority(authority);
         }
       }
 
-      // Reason: clear cache immediately after file deletion to prevent phantom project
-      // state if the subsequent folder cleanup fails.
       this.assertFileOperationAuthority(authority);
       this.invalidatePreparedProjectScans();
       deleteCachedProjectRecordByIdForOwner(this.stateOwner, normalizedId);
 
-      // Drop Copilot's own instruction wiring (marker-owned mirror, import-only CLAUDE.md) so
-      // the folder can empty and a same-named project created later cannot inherit this one's
-      // instructions through the mirror conversion. User-authored files are preserved.
       await removeGeneratedInstructionFiles(this.app, folderPath);
       this.assertFileOperationAuthority(authority);
 
-      // Cleanup: remove the folder only if it is empty after deleting project.md.
-      // Best-effort: the project file is already gone, so cleanup failure
-      // must not leave a phantom project in memory.
       try {
         const folder = this.vault.getAbstractFileByPath(folderPath);
         if (folder instanceof TFolder && folder.children.length === 0) {
@@ -1167,11 +863,6 @@ export class ProjectFileManager {
         logWarn(`[Projects] Failed to clean up empty project folder: ${folderPath}`, cleanupError);
       }
 
-      // Reason: clear the off-vault failure-marker bucket
-      // (markers/<md5(projectId)>). Clearing it stops a project
-      // recreated under the same id from inheriting stale negative-cache state.
-      // Desktop-gated + dynamically imported so node-backed cache modules never
-      // load on mobile; best-effort so a cleanup failure can't strand the delete.
       if (isDesktopRuntime()) {
         const { clearProjectMarkers } = await import("@/context/projectMarkerCleanup");
         await clearProjectMarkers(this.app, normalizedId).catch((err) =>
@@ -1182,8 +873,6 @@ export class ProjectFileManager {
 
       logInfo(`[Projects] Deleted project: ${normalizedId} -> ${folderPath}`);
 
-      // Reason: rescan to re-admit any previously-ignored duplicate-id files.
-      // The register won't fire (pending guard), so we trigger rescan here.
       void this.reloadProjects().catch((err) => {
         if (err instanceof ProjectFileManagerDisposedError) return;
         logError("[Projects] Rescan after delete failed", err);
@@ -1193,10 +882,6 @@ export class ProjectFileManager {
     }
   }
 
-  /**
-   * Touch project last-used: memory updated immediately; frontmatter write throttled.
-   * @param projectId - Project id to touch
-   */
   public async touchProjectLastUsed(projectId: string): Promise<void> {
     const authority = this.captureFileOperationAuthority();
     const generation = authority.lifecycleGeneration;
@@ -1205,10 +890,8 @@ export class ProjectFileManager {
     if (!record) return;
 
     try {
-      // 1. Update memory immediately (for UI sorting feedback)
       this.projectLastUsedManager.touch(normalizedId);
 
-      // 2. Check if persistence is needed (throttled)
       const timestampToPersist = this.projectLastUsedManager.shouldPersist(
         normalizedId,
         record.project.UsageTimestamps
@@ -1220,12 +903,10 @@ export class ProjectFileManager {
       this.assertFileOperationAuthority(authority);
       if (!file) return;
 
-      // Reason: an exact lease cannot release another concurrent writer's guard.
       const fileWriteLease = this.acquireFileWrite(filePath);
       let actualPersistedValue = timestampToPersist;
       try {
         if (isInVaultCache(this.app, filePath)) {
-          // Vault-cached file: use processFrontMatter for safe field-level update
           await this.app.fileManager.processFrontMatter(
             file,
             (frontmatter: Record<string, unknown>) => {
@@ -1239,7 +920,6 @@ export class ProjectFileManager {
           );
           this.assertFileOperationAuthority(authority);
         } else {
-          // Hidden-folder file: use adapter-based frontmatter patch
           const adapterFm = await readFrontmatterViaAdapter(this.app, filePath);
           this.assertFileOperationAuthority(authority);
           const existing = Number(adapterFm?.[COPILOT_PROJECT_LAST_USED]);
@@ -1256,12 +936,9 @@ export class ProjectFileManager {
         releaseProjectFileWrite(fileWriteLease);
       }
 
-      // 3. Mark persistence successful with actual written value (for accurate throttling)
       this.assertFileOperationAuthority(authority);
       this.projectLastUsedManager.markPersisted(normalizedId, actualPersistedValue);
 
-      // 4. Sync cached record so updateProject() sees the latest value.
-      // Reason: re-read fresh record to avoid overwriting concurrent edits to other fields.
       const freshRecord = getCachedProjectRecordById(normalizedId);
       if (freshRecord) {
         this.assertFileOperationAuthority(authority);

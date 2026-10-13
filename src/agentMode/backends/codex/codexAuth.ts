@@ -2,6 +2,7 @@ import type { BackendAuth, BackendAuthStatus } from "@/agentMode/session/types";
 import { buildSimpleSpawnDescriptor } from "@/agentMode/backends/shared/simpleBinaryBackend";
 import { sanitizeBuiltinSkillEnvOverrides } from "@/agentMode/backends/shared/builtinSkillEnv";
 import { signInWithCli, signOutWithCli } from "@/agentMode/backends/shared/cliSignIn";
+import { logWarn } from "@/logger";
 import { requireNodeModule } from "@/utils/desktopRuntime";
 import { detectBinary } from "@/utils/detectBinary";
 import { buildCodexAcpInvocation, resolveSupportedCodexAcpEntry } from "./codexVersion";
@@ -21,8 +22,6 @@ async function invocation(settings: CopilotSettings) {
     sanitizeBuiltinSkillEnvOverrides(config?.envOverrides)
   );
   const entry = resolveSupportedCodexAcpEntry(descriptor.command);
-  // User-owned npm adapters still need Node on Windows; native bundles provide their runtime.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
   const node =
     process.platform === "win32" && entry.endsWith(".js") ? await detectBinary("node") : undefined;
   return buildCodexAcpInvocation(entry, [], descriptor.env, process.platform, node ?? undefined);
@@ -30,12 +29,11 @@ async function invocation(settings: CopilotSettings) {
 
 async function readCodexAuthStatus(settings: CopilotSettings) {
   const call = await invocation(settings);
-  // Environment-authenticated sessions need no browser login or persisted credentials.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
   if (call.env.CODEX_API_KEY?.trim() || call.env.OPENAI_API_KEY?.trim()) return { signedIn: true };
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 10_000);
   let status: BackendAuthStatus | undefined;
+  let lastReply = "none";
   let input: import("node:stream").Writable;
   try {
     // account/read exposes identity without opening credential files or returning tokens.
@@ -59,8 +57,6 @@ async function readCodexAuthStatus(settings: CopilotSettings) {
           );
         },
         onLine: (line) => {
-          // App-server also emits diagnostics and notifications; only our replies select an account.
-          // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
           let reply: AccountReply | null;
           try {
             reply = JSON.parse(line);
@@ -69,17 +65,17 @@ async function readCodexAuthStatus(settings: CopilotSettings) {
           }
           if (!reply || typeof reply !== "object") return;
           if (reply.id === 0 && reply.result) {
+            lastReply = "initialize";
             input.write(JSON.stringify({ method: "initialized" }) + "\n");
             input.write(
               JSON.stringify({ id: 1, method: "account/read", params: { refreshToken: false } }) +
                 "\n"
             );
           } else if (reply.id === 1 && reply.result) {
+            lastReply = "account/read";
             const account = reply.result.account;
             if (account === null) status = { signedIn: false };
             else if (account && typeof account.type === "string") {
-              // Only ChatGPT accounts have an email. API-key accounts remain signed in without a label.
-              // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
               const email =
                 account.type === "chatgpt" && typeof account.email === "string"
                   ? account.email.trim()
@@ -91,21 +87,26 @@ async function readCodexAuthStatus(settings: CopilotSettings) {
               };
             }
             input.end();
-          } else if ((reply.id === 0 || reply.id === 1) && reply.error) input.end();
+          } else if ((reply.id === 0 || reply.id === 1) && reply.error) {
+            lastReply = reply.id === 0 ? "initialize error" : "account/read error";
+            input.end();
+          }
         },
       }
     ).done;
-    // Probe failures must not masquerade as successful logout.
-    // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
-    if (!status || controller.signal.aborted)
+    if (!status || controller.signal.aborted) {
+      logWarn("[AgentMode] Codex account probe incomplete", {
+        lastReply,
+        timedOut: controller.signal.aborted,
+      });
       throw new Error("Unable to verify Codex authentication status.");
+    }
     return status;
   } finally {
     window.clearTimeout(timeout);
   }
 }
 
-/** Uses the same configured adapter and profile as Codex sessions, without reading credentials. */
 export const codexAuth: BackendAuth = {
   getProbeKey(settings) {
     const config = settings.agentMode?.backends?.codex;
@@ -138,6 +139,7 @@ export const codexAuth: BackendAuth = {
     try {
       return await readCodexAuthStatus(settings);
     } catch {
+      logWarn("[AgentMode] Codex account status unavailable");
       return { signedIn: false };
     }
   },
@@ -172,6 +174,8 @@ export const codexAuth: BackendAuth = {
         acceptUrl: (url) => url.startsWith("https://auth.openai.com/"),
       }
     ).done;
+    if (!result.loggedIn && !handlers?.signal?.aborted)
+      logWarn("[AgentMode] Codex browser sign-in ended without a verified account");
     return { signedIn: result.loggedIn, ...(result.label ? { label: result.label } : {}) };
   },
 };

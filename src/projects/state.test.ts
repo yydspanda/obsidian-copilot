@@ -22,12 +22,6 @@ import {
 } from "@/projects/state";
 import { ProjectFileRecord } from "@/projects/type";
 
-/**
- * Builds a minimal project record for lifecycle ownership tests.
- *
- * @param id - Stable project id and path segment
- * @returns Project record with deterministic fields
- */
 function createProjectRecord(id: string): ProjectFileRecord {
   const project: ProjectConfig = {
     id,

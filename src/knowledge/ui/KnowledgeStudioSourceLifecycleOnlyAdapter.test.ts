@@ -15,7 +15,6 @@ import {
 
 const RETIREMENT_REF = "a".repeat(64);
 
-/** Creates one strict missing-source projection with configurable durable blockers. */
 function createModel(
   blockers: readonly ("active_transaction" | "bundle_review_pending")[] = []
 ): Readonly<KnowledgeSourceLifecycleModel> {
@@ -39,7 +38,6 @@ function createModel(
   });
 }
 
-/** Creates observable least-authority lifecycle methods for adapter tests. */
 function createLifecycle(
   model: Readonly<KnowledgeSourceLifecycleModel> = createModel()
 ): KnowledgeSourceLifecyclePort & {

@@ -45,7 +45,6 @@ const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 const ARTIFACT_HASH = "1".repeat(64);
 
-/** Creates one strict pending proposal fixture. */
 function createProposal(transactionId = "transaction-historical") {
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
@@ -115,7 +114,6 @@ function createProposal(transactionId = "transaction-historical") {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates one coherent exact acceptance prestate. */
 function createAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   return {
     runtimeId: "runtime-1",
@@ -148,7 +146,6 @@ function createAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   };
 }
 
-/** Creates one parser observation whose content identity differs from source bytes. */
 function createArtifact(
   artifactId = "artifact-1",
   artifactContentHash = ARTIFACT_HASH
@@ -163,7 +160,6 @@ function createArtifact(
   };
 }
 
-/** Creates one complete historical citation locator. */
 function createCitation(
   citationId = "citation-1",
   artifactId = "artifact-1",
@@ -187,7 +183,6 @@ function createCitation(
   };
 }
 
-/** Creates a valid receipt input and its exact correlation values. */
 function createFixture(options?: {
   action?: "accept_exact" | "accept_edited";
   historicalCitations?: unknown[];
@@ -238,19 +233,16 @@ function createFixture(options?: {
   return { proposal, proposalDigest, command, afterContent, acceptanceAuthority, input };
 }
 
-/** Creates a mutable JSON clone for persisted-state tampering. */
 type Mutable<T> = T extends readonly (infer Item)[]
   ? Mutable<Item>[]
   : T extends object
     ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
     : T;
 
-/** Creates a mutable JSON clone for adversarial persisted-state checks. */
 function clone<T>(value: T): Mutable<T> {
   return JSON.parse(JSON.stringify(value)) as Mutable<T>;
 }
 
-/** Captures one thrown value without weakening its runtime type. */
 function captureThrow(callback: () => unknown): unknown {
   try {
     callback();

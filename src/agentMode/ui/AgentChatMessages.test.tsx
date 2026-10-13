@@ -7,16 +7,24 @@ import type {
 } from "@/agentMode/session/types";
 import AgentChatMessages from "@/agentMode/ui/AgentChatMessages";
 import { AI_SENDER } from "@/constants";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 
 type AgentChatMessagesProps = React.ComponentProps<typeof AgentChatMessages>;
+
+const mockSingleMessageRender = jest.fn();
+const mockTrailRender = jest.fn();
+const mockScrollState = { paused: false, onResume: jest.fn() };
 
 jest.mock("@/hooks/useChatScrolling", () => ({
   // eslint-disable-next-line @eslint-react/hooks-extra/no-unnecessary-use-prefix -- mocks the real hook; name must match the export
   useChatScrolling: () => ({
     containerMinHeight: 0,
     scrollContainerCallbackRef: jest.fn(),
+    contentCallbackRef: jest.fn(),
+    onScroll: jest.fn(),
+    isScrollPaused: mockScrollState.paused,
+    scrollToEnd: mockScrollState.onResume,
     getMessageKey: (message: { id: string }) => message.id,
   }),
 }));
@@ -26,26 +34,35 @@ jest.mock("@/components/chat-components/ChatSingleMessage", () => ({
   default: ({
     message,
     footerStart,
+    sourcePath,
   }: {
     message: { message: string };
     footerStart?: React.ReactNode;
-  }) => (
-    <div>
-      {message.message}
-      <div data-testid="single-message-footer">{footerStart}</div>
-    </div>
-  ),
+    sourcePath?: string;
+  }) => {
+    mockSingleMessageRender(message);
+    return (
+      <div data-source-path={sourcePath}>
+        {message.message}
+        <div data-testid="single-message-footer">{footerStart}</div>
+      </div>
+    );
+  },
 }));
 
 jest.mock("@/agentMode/ui/AgentTrailView", () => ({
-  AgentTrail: ({ timestamp }: { timestamp?: string }) => (
-    <div data-testid="agent-trail-timestamp">{timestamp}</div>
-  ),
+  AgentTrail: ({ timestamp, parts }: { timestamp?: string; parts: unknown[] }) => {
+    mockTrailRender(parts);
+    return <div data-testid="agent-trail-timestamp">{timestamp}</div>;
+  },
 }));
 
 jest.mock("@/agentMode/ui/ToolPermissionCard", () => ({
-  ToolPermissionCard: ({ request }: { request: PermissionPrompt }) => (
-    <div>Permission {request.toolCall.toolCallId}</div>
+  ToolPermissionCard: ({ request, toolName }: { request: PermissionPrompt; toolName?: string }) => (
+    <div>
+      Permission {request.toolCall.toolCallId}
+      {toolName ? ` via ${toolName}` : ""}
+    </div>
   ),
 }));
 
@@ -129,9 +146,32 @@ describe("AgentChatMessages", () => {
     beforeEach(() => {
       jest.useFakeTimers();
       jest.setSystemTime(200_000);
+      mockSingleMessageRender.mockClear();
+      mockTrailRender.mockClear();
+      mockScrollState.paused = false;
+      mockScrollState.onResume.mockClear();
     });
 
     afterEach(() => jest.useRealTimers());
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/277 shows a return control over the paused transcript and resumes following on click", () => {
+      mockScrollState.paused = true;
+      renderMessages([assistantMessage("response", 1_000)], false);
+
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      expect(mockScrollState.onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards the active session conversation path to user messages https://github.com/Brevilabs/obsidian-copilot-private/issues/539", () => {
+      const { container } = renderMessages(
+        [assistantMessage("user-1", 1, { sender: "user", message: "[[Findings]]" })],
+        false,
+        { sourcePath: "chat/Conversation.md" }
+      );
+      expect(
+        container.querySelector('[data-source-path="chat/Conversation.md"]')?.textContent
+      ).toContain("[[Findings]]");
+    });
 
     it("retains the latest completed turn duration with a static icon", () => {
       const { container } = renderMessages(
@@ -148,12 +188,16 @@ describe("AgentChatMessages", () => {
     });
 
     it("retires the prior duration when the next turn starts", () => {
-      const { container } = renderMessages(
-        [
-          assistantMessage("answer-1", 1_000, { turnDurationMs: 51_000 }),
-          assistantMessage("answer-2", 198_000, { message: "", parts: [] }),
-        ],
-        true
+      const completed = assistantMessage("answer-1", 1_000, { turnDurationMs: 51_000 });
+      const { container, rerender, props } = renderMessages([completed], false);
+      expect(screen.getByText("51s")).toBeTruthy();
+
+      rerender(
+        <AgentChatMessages
+          {...props}
+          messages={[completed, assistantMessage("answer-2", 198_000, { message: "", parts: [] })]}
+          isLoading
+        />
       );
 
       expect(screen.queryByText("51s")).toBeNull();
@@ -177,6 +221,44 @@ describe("AgentChatMessages", () => {
       );
 
       expect(screen.getByTestId("agent-trail-timestamp").textContent).toBe(timestamp);
+    });
+
+    it("keeps completed plain and structured turns mounted without rendering them again while the live turn streams https://github.com/logancyang/obsidian-copilot/issues/3343", () => {
+      const user = assistantMessage("user-1", 1_000, {
+        sender: "user",
+        message: "Summarize this note",
+      });
+      const completed = assistantMessage("answer-1", 2_000, {
+        parts: [{ kind: "text", text: "The note has three points." }],
+      });
+      const live = assistantMessage("answer-2", 3_000, {
+        message: "First point",
+        parts: [{ kind: "text", text: "First point" }],
+      });
+      const { rerender, props } = renderMessages([user, completed, live], true);
+      const originalUser = mockSingleMessageRender.mock.calls[0][0];
+      const originalCompletedParts = mockTrailRender.mock.calls[0][0];
+
+      rerender(
+        <AgentChatMessages
+          {...props}
+          messages={[
+            user,
+            completed,
+            {
+              ...live,
+              message: "First point and second point",
+              parts: [{ kind: "text", text: "First point and second point" }],
+            },
+          ]}
+        />
+      );
+
+      expect(mockSingleMessageRender).toHaveBeenCalledTimes(1);
+      expect(mockSingleMessageRender.mock.calls[0][0]).toBe(originalUser);
+      expect(mockTrailRender).toHaveBeenCalledTimes(3);
+      expect(mockTrailRender.mock.calls[0][0]).toBe(originalCompletedParts);
+      expect(screen.getAllByTestId("agent-trail-timestamp")).toHaveLength(2);
     });
 
     it("shows questions before permissions and reveals a permission after questions clear for https://github.com/logancyang/obsidian-copilot/issues/2948", () => {
@@ -204,6 +286,22 @@ describe("AgentChatMessages", () => {
         ["Permission permission-first"]
       );
       expect(rail.querySelector("[data-action-id]")).not.toBe(firstAction);
+    });
+
+    it("passes the pending permission the tool name its chat tool call shows for https://github.com/Brevilabs/obsidian-copilot-private/issues/599", () => {
+      const toolTurn = assistantMessage("answer-1", 62_000, {
+        parts: [
+          { kind: "tool_call", id: "search-1", title: "websearch", status: "pending" },
+        ] as AgentChatMessage["parts"],
+      });
+
+      renderMessages([toolTurn], true, {
+        pendingToolPermissions: [permission("search-1")],
+      });
+
+      expect(screen.getByRole("region", { name: "Pending agent actions" }).textContent).toBe(
+        "Permission search-1 via websearch"
+      );
     });
 
     it("bounds and scrolls a tall action rail so controls remain reachable for https://github.com/logancyang/obsidian-copilot/issues/2948", () => {

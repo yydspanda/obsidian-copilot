@@ -59,7 +59,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates one strict pending proposal with independently variable durable identity. */
 function createProposal(
   requestRevision = 1,
   pagePath = "Wiki/Topic.md",
@@ -136,7 +135,6 @@ function createProposal(
   });
 }
 
-/** Creates one coherent current-source acceptance tuple for a proposal. */
 function createAppliedAuthority(
   proposal: ReturnType<typeof createProposal>,
   runtimeRevision = 20
@@ -173,7 +171,6 @@ function createAppliedAuthority(
   };
 }
 
-/** Creates strict command and validation receipt material for one accepted body. */
 function createValidationMaterial(
   proposal: ReturnType<typeof createProposal>,
   proposalDigest: string,
@@ -228,7 +225,6 @@ function createValidationMaterial(
   return { command, validationReceipt, validationReceiptDigest: validationReceipt.receiptDigest };
 }
 
-/** Creates one pending v2 entry at exact Store and Runtime revisions. */
 function createPendingEntry(
   proposal: ReturnType<typeof createProposal>,
   proposalStoreRevision: number,
@@ -241,7 +237,6 @@ function createPendingEntry(
   });
 }
 
-/** Creates one accepted v2 entry at exact publication and decision revisions. */
 function createAcceptedEntry(
   proposal: ReturnType<typeof createProposal>,
   proposalStoreRevision: number,
@@ -279,7 +274,6 @@ function createAcceptedEntry(
   });
 }
 
-/** Creates one rejected v2 entry at exact publication and decision revisions. */
 function createRejectedEntry(
   proposal: ReturnType<typeof createProposal>,
   proposalStoreRevision: number,
@@ -306,12 +300,10 @@ function createRejectedEntry(
   });
 }
 
-/** Produces a mutable JSON clone for stateful descriptor-proxy tests. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Makes the aggregate precheck observe a short body before strict snapshotting sees the real one. */
 function createShortThenFullProposalProxy(
   entry: ReturnType<typeof createPendingEntry>,
   onDeepRead?: () => void

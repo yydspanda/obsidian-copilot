@@ -25,7 +25,6 @@ const DEEPSEEK_ROUTE_IDENTITY = "b".repeat(64);
 const OPENAI_ROUTE_IDENTITY = "c".repeat(64);
 const OLLAMA_ROUTE_IDENTITY = "d".repeat(64);
 
-/** Creates one strict Bundle owned by the default test project. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -38,7 +37,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: PROJECT_ID, config };
 }
 
-/** Creates one plain project snapshot with an exact model key. */
 function createProject(
   overrides: Partial<ProjectKnowledgePipelineProjectInput> = {}
 ): ProjectKnowledgePipelineProjectInput {
@@ -50,7 +48,6 @@ function createProject(
   };
 }
 
-/** Creates one active-model record while permitting ignored provider extras. */
 function createModel(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name: MODEL_NAME,
@@ -61,7 +58,6 @@ function createModel(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
-/** Creates the narrow settings generation consumed by the profile source. */
 function createSettings(
   activeModels: readonly unknown[] = [createModel()],
   overrides: Partial<ProjectKnowledgePipelineSettingsInput> = {}
@@ -76,7 +72,6 @@ function createSettings(
   };
 }
 
-/** Creates stable compiler, parser, language, and provider behavior. */
 function createOptions(
   overrides: Partial<ProjectKnowledgePipelineProfileSourceOptions> = {}
 ): ProjectKnowledgePipelineProfileSourceOptions {
@@ -109,7 +104,6 @@ function createOptions(
   };
 }
 
-/** Resolves a profile from independently replaceable plain snapshots. */
 function resolveProfile(
   options: {
     project?: ProjectKnowledgePipelineProjectInput;
@@ -126,7 +120,6 @@ function resolveProfile(
   return source.resolve(options.owner ?? createOwner());
 }
 
-/** Captures and verifies one sanitized profile-source failure. */
 function expectProfileError(
   action: () => unknown,
   code: ProjectKnowledgePipelineProfileErrorCode
@@ -144,7 +137,6 @@ function expectProfileError(
   return failure;
 }
 
-/** Computes the production pipeline-profile digest for one resolved profile. */
 function createProfileDigest(profile: KnowledgeBundlePipelineProfile): string {
   const owner = createOwner();
   const manifest: SourceManifest = {
@@ -538,7 +530,6 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
   );
 
   describe("DeepSeek production behavior", () => {
-    /** Resolves one direct DeepSeek profile through the production allowlist. */
     function resolveDeepSeekProfile(
       modelOverrides: Record<string, unknown> = {},
       projectOverrides: Partial<ProjectKnowledgePipelineProjectInput> = {}

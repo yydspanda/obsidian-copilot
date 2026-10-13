@@ -56,7 +56,6 @@ const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 const MANIFEST_HASH = "c".repeat(64);
 
-/** Returns the exact Bundle captured by the test adapter generation. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -68,7 +67,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one valid create-only proposal beneath the configured Wiki root. */
 function createProposal(path = "Wiki/Page.md"): KnowledgeChangeSet {
   const afterContent = "# Page\n";
   return {
@@ -95,7 +93,6 @@ function createProposal(path = "Wiki/Page.md"): KnowledgeChangeSet {
   };
 }
 
-/** Creates the exact Manifest projection stored beside a pending proposal. */
 function createManifestCommitPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   return {
     version: 1,
@@ -120,7 +117,6 @@ function createManifestCommitPlan(proposal: KnowledgeChangeSet): ManifestCommitP
   };
 }
 
-/** Creates one exact pending Review record owned by the queue fixture. */
 function createPendingRecord(proposal = createProposal()): PendingChangeSetReviewRecord {
   const manifestCommitPlan = createManifestCommitPlan(proposal);
   return {
@@ -143,7 +139,6 @@ function createPendingRecord(proposal = createProposal()): PendingChangeSetRevie
   };
 }
 
-/** Creates one Queue snapshot with an optional exact durable Review hand-off. */
 function createQueue(
   record?: PendingChangeSetReviewRecord,
   revision = record ? 2 : 0
@@ -201,7 +196,6 @@ function createQueue(
   };
 }
 
-/** Creates one Review snapshot around caller-selected records. */
 function createReview(
   records: ChangeSetReviewSnapshot["records"] = [],
   revision = records.length > 0 ? 1 : 0
@@ -214,7 +208,6 @@ function createReview(
   };
 }
 
-/** Creates one atomic Runtime projection for the Studio adapter. */
 function createProjection(
   runtimeRevision: number,
   queue = createQueue(),
@@ -223,16 +216,13 @@ function createProjection(
   return { bundleId: BUNDLE_ID, runtimeRevision, queue, review };
 }
 
-/** Scriptable Runtime facade whose reads preserve call order. */
 class FakeRuntime implements KnowledgeStudioRuntimePort {
   readonly readCalls: string[] = [];
   readonly subscriptions = new Map<string, () => void>();
   unsubscribed = false;
 
-  /** Captures an ordered list of atomic projections. */
   constructor(private readonly projections: KnowledgeRuntimeStudioBundleSnapshot[]) {}
 
-  /** Returns the next projection, retaining the last for further consistency reads. */
   async readStudioBundle(bundleId: string): Promise<KnowledgeRuntimeStudioBundleSnapshot> {
     this.readCalls.push(bundleId);
     const projection = this.projections.shift() ?? this.lastProjection;
@@ -243,7 +233,6 @@ class FakeRuntime implements KnowledgeStudioRuntimePort {
 
   private lastProjection?: KnowledgeRuntimeStudioBundleSnapshot;
 
-  /** Retains one value-free Runtime hint listener. */
   subscribeStudioBundle(bundleId: string, listener: () => void): () => void {
     this.subscriptions.set(bundleId, listener);
     return () => {
@@ -253,11 +242,9 @@ class FakeRuntime implements KnowledgeStudioRuntimePort {
   }
 }
 
-/** Scriptable target resolver that records the exact read-only requests. */
 class FakeTargetResolver implements CompilerTargetResolver {
   readonly calls: CompilerTargetRequest[][] = [];
 
-  /** Captures one handler for every resolver call. */
   constructor(
     private readonly handler: (
       requests: readonly CompilerTargetRequest[],
@@ -265,14 +252,12 @@ class FakeTargetResolver implements CompilerTargetResolver {
     ) => Promise<unknown>
   ) {}
 
-  /** Records and delegates one target observation. */
   async resolve(requests: readonly CompilerTargetRequest[], signal: AbortSignal): Promise<unknown> {
     this.calls.push([...requests]);
     return this.handler(requests, signal);
   }
 }
 
-/** Creates the default strict missing-target resolver. */
 function createMissingResolver(): FakeTargetResolver {
   return new FakeTargetResolver(async (requests) =>
     requests.map((request) => ({
@@ -283,7 +268,6 @@ function createMissingResolver(): FakeTargetResolver {
   );
 }
 
-/** Creates a read-only adapter around scripted Runtime and target state. */
 function createAdapter(
   runtime: KnowledgeStudioRuntimePort,
   resolver: CompilerTargetResolver = createMissingResolver(),
@@ -306,7 +290,6 @@ function createAdapter(
   });
 }
 
-/** Creates one empty grounded result accepted by the Studio Query boundary. */
 function createQueryResult(): KnowledgeGroundedRetrievalResult {
   return {
     mode: "grounded_retrieval",
@@ -318,7 +301,6 @@ function createQueryResult(): KnowledgeGroundedRetrievalResult {
   };
 }
 
-/** Creates an authentic command adapter whose narrow reviewed-apply capability is enabled. */
 async function createAcceptEnabledCommands(
   reanalyzeCompletedSource?: (command: KnowledgeCompletedSourceReanalysisCommand) => Promise<void>
 ): Promise<KnowledgeStudioRuntimeCommandAdapter> {
@@ -339,7 +321,6 @@ async function createAcceptEnabledCommands(
   });
 }
 
-/** Creates one opaque command for fail-closed command tests. */
 function createReviewCommand(record: PendingChangeSetReviewRecord): KnowledgeReviewCommand {
   return {
     changeSetId: record.changeSetId,
@@ -356,7 +337,6 @@ interface PendingWriteback {
   reject(error: Error): void;
 }
 
-/** Retains independent Bundle subscriptions and caller-controlled save completions. */
 function createWritebackHintFixture(commands?: KnowledgeStudioRuntimeCommandAdapter) {
   const subscriptions = {
     runtime: new Map<string, Set<() => void>>(),

@@ -26,7 +26,6 @@ import {
   hasAmbiguousPersistedChatModelSelection,
 } from "@/modelManagement";
 
-/** Knowledge-owned defaults retained after ordinary Chat retired its global output cap. */
 export const KNOWLEDGE_CONFIGURED_MODEL_DEFAULTS = Object.freeze({
   // Knowledge fingerprints require one explicit output budget even though ordinary
   // Chat no longer persists a global maxTokens cap.
@@ -36,15 +35,13 @@ export const KNOWLEDGE_CONFIGURED_MODEL_DEFAULTS = Object.freeze({
   verbosity: "medium" as const,
 });
 
-/** One Project model selection captured for a configured Knowledge generation. */
 export interface KnowledgeConfiguredModelProjectInput {
   id: string;
-  /** Configured-model id for V4 writes; legacy `model|provider` values remain readable. */
+
   modelSelection: string;
   modelConfigs: unknown;
 }
 
-/** Secret-free registry snapshots consumed by the pure projection boundary. */
 export interface KnowledgeConfiguredModelProjectionInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   projects: readonly KnowledgeConfiguredModelProjectInput[];
@@ -54,13 +51,11 @@ export interface KnowledgeConfiguredModelProjectionInput {
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
 }
 
-/** Credential lookup retained separately from the behavior-only active-model projection. */
 export interface KnowledgeConfiguredModelCredentialBinding {
   activeModelIndex: number;
   providerId: string;
 }
 
-/** Ephemeral compatibility shape accepted by the existing Knowledge profile source. */
 export interface KnowledgeConfiguredModelProjection {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   projects: readonly ProjectKnowledgePipelineProjectInput[];
@@ -69,7 +64,6 @@ export interface KnowledgeConfiguredModelProjection {
   credentialBindings: readonly KnowledgeConfiguredModelCredentialBinding[];
 }
 
-/** Stable, value-free failures emitted before a private route can be constructed. */
 export type KnowledgeConfiguredModelBridgeDiagnosticCode =
   | "input_invalid"
   | "project_missing"
@@ -80,12 +74,10 @@ export type KnowledgeConfiguredModelBridgeDiagnosticCode =
   | `profile_${ProjectKnowledgePipelineProfileErrorCode}`
   | KnowledgeProductionPreflightDiagnosticCode;
 
-/** Pure configured-model projection result. */
 export type KnowledgeConfiguredModelProjectionResult =
   | Readonly<{ kind: "ready"; projection: KnowledgeConfiguredModelProjection }>
   | Readonly<{ kind: "diagnostic"; code: KnowledgeConfiguredModelBridgeDiagnosticCode }>;
 
-/** Inputs required to hydrate credentials and construct a zero-network preflight. */
 export interface PrepareKnowledgeConfiguredModelPreflightInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   projects: readonly KnowledgeConfiguredModelProjectInput[];
@@ -98,7 +90,6 @@ export interface PrepareKnowledgeConfiguredModelPreflightInput {
   signal: AbortSignal;
 }
 
-/** Prepared private-route generation or one credential-free diagnostic. */
 export type PreparedKnowledgeConfiguredModelPreflight =
   | Readonly<{
       kind: "ready";
@@ -113,7 +104,6 @@ interface ProjectedActiveModel {
   value: Readonly<Record<string, unknown>>;
 }
 
-/** Internal sanitized projection failure. */
 class KnowledgeConfiguredModelProjectionFailure extends TypeError {
   constructor(public readonly code: KnowledgeConfiguredModelBridgeDiagnosticCode) {
     super("The configured Knowledge model projection is unavailable");
@@ -217,16 +207,6 @@ function classifyProjectionFailure(error: unknown): KnowledgeConfiguredModelBrid
   return profileCode === undefined ? "input_invalid" : `profile_${profileCode}`;
 }
 
-/**
- * Resolves exact Project selections against V4 enabled Provider/ConfiguredModel rows.
- *
- * The returned profile source and settings projection contain behavior only. They
- * are ephemeral compatibility inputs for existing Knowledge Core and must never be
- * persisted back into upstream settings.
- *
- * @param input - Bundle owners, Project selections, enabled chat registry rows, and profile policy
- * @returns A frozen secret-free projection or one stable diagnostic
- */
 export function createKnowledgeConfiguredModelProjection(
   input: KnowledgeConfiguredModelProjectionInput
 ): KnowledgeConfiguredModelProjectionResult {
@@ -326,17 +306,6 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
 }
 
-/**
- * Hydrates selected DeepSeek credentials through V4 model management and hands
- * them directly to the existing private-route preflight constructor.
- *
- * The returned profile source is the secret-free instance created before any
- * keychain read. Plaintext credentials are not returned or retained outside the
- * private routes owned by the returned preflight.
- *
- * @param input - Current generation snapshots, model-management API, fetch capability, and cancellation
- * @returns A ready profile/preflight pair or one credential-free diagnostic
- */
 export async function prepareKnowledgeConfiguredModelPreflight(
   input: PrepareKnowledgeConfiguredModelPreflightInput
 ): Promise<PreparedKnowledgeConfiguredModelPreflight> {

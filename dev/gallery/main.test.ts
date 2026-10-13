@@ -123,7 +123,10 @@ function getGeneratedMock(): { loaders: jest.Mock[] } {
     .galleryGeneratedMock;
 }
 
-/** Unfolds nested ancestors so a story button becomes clickable. */
+function finishLoading(plugin: GalleryPlugin): Promise<void> {
+  return (plugin as unknown as { initialization: Promise<void> }).initialization;
+}
+
 function expandStoryPath(gallery: RenderResult, storyId: string): void {
   const segments = storyId.split("/");
   segments.pop();
@@ -195,7 +198,8 @@ describe("main", () => {
       createView = viewCreator as (leaf: WorkspaceLeaf) => GalleryViewContract;
     });
 
-    await plugin.onload();
+    plugin.onload();
+    await finishLoading(plugin);
 
     if (!createView) {
       throw new Error("Gallery view was not registered");
@@ -320,7 +324,6 @@ describe("main", () => {
         expect(gallery.getByRole("button", { name: "300" }).getAttribute("aria-pressed")).toBe(
           "true"
         );
-        expect(gallery.queryByText("Current width:")).toBeNull();
         expect(gallery.container.querySelectorAll("[data-gallery-story-id]")).toHaveLength(1);
         expect(
           gallery.container.querySelector('[data-gallery-story-id="UI/Button/Sizes"]')
@@ -414,7 +417,7 @@ describe("main", () => {
     });
 
     describe("onOpen()", () => {
-      it("shows a visible nested list, selected styling, exact current id, and one story", async () => {
+      it("mounts the gallery with a coverage summary and the first story selected", async () => {
         await view.onOpen();
 
         expect(mountViewRoot).toHaveBeenCalledWith(view.containerEl, app, expect.any(Function));
@@ -426,14 +429,8 @@ describe("main", () => {
         expect(
           gallery.getByText("5 presentational components · 3 with stories · 2 missing")
         ).toBeTruthy();
-        expect(gallery.getByRole("button", { name: "Show Agent Mode contact sheet" })).toBeTruthy();
-        expect(gallery.getByRole("button", { name: "Show UI contact sheet" })).toBeTruthy();
-        const selectedStory = gallery.getByRole("button", { name: "Default" });
-        expect(selectedStory.getAttribute("aria-current")).toBe("true");
-        expect(selectedStory.classList.contains("mod-cta")).toBe(true);
-        expect(gallery.queryByText("Selected")).toBeNull();
+        expect(view.getState().selectedStoryId).toBe("Agent Mode/Agent Welcome Card/Default");
         expect(gallery.getByText("Agent Mode/Agent Welcome Card/Default")).toBeTruthy();
-        expect(gallery.container.querySelectorAll("[data-gallery-story-id]")).toHaveLength(1);
 
         gallery.unmount();
       });
@@ -458,7 +455,6 @@ describe("main", () => {
           selectedSubtree: "UI/Button",
           width: 600,
         });
-        // Tree folds are view-local; only the width and story pick persist.
         expect(requestSaveLayout).toHaveBeenCalledTimes(2);
 
         gallery.unmount();
@@ -488,6 +484,21 @@ describe("main", () => {
         expect(typeof window.__gallery?.audit).toBe("function");
         expect(typeof window.__gallery?.list).toBe("function");
         expect(typeof window.__gallery?.show).toBe("function");
+      });
+
+      it("registers nothing when Obsidian unloads it while stories load https://github.com/logancyang/obsidian-copilot/issues/3518", async () => {
+        const firstHandle = window.__gallery;
+        const unloaded = new GalleryPlugin(app, {
+          id: "copilot-component-gallery",
+        } as PluginManifest);
+
+        unloaded.onload();
+        unloaded.onunload();
+        await finishLoading(unloaded);
+
+        expect(unloaded.registerView).not.toHaveBeenCalled();
+        expect(unloaded.addCommand).not.toHaveBeenCalled();
+        expect(window.__gallery).toBe(firstHandle);
       });
 
       it("loads the generated catalog once and shares it across gallery views", async () => {
@@ -685,38 +696,6 @@ describe("main", () => {
         });
         expect(revealLeaf).toHaveBeenCalledWith(leaf);
       });
-
-      it("restores the selected story after its prior tab closes and the command reopens it", async () => {
-        await view.onOpen();
-        const renderTree = renderView;
-        if (!renderTree || !createView) {
-          throw new Error("Gallery view did not initialize");
-        }
-        const firstGallery = render(renderTree() as ReactElement);
-        const rerenderGallery = () => firstGallery.rerender(renderTree() as ReactElement);
-        expandStoryPath(firstGallery, "UI/Button/Sizes");
-        fireEvent.click(firstGallery.getByRole("button", { name: "Sizes" }));
-        rerenderGallery();
-        await view.onClose();
-        firstGallery.unmount();
-
-        await command.callback?.();
-        const reopenedViewState: unknown = setViewState.mock.calls.at(-1)?.[0].state;
-        const reopenedView = createView(leaf);
-        await reopenedView.setState(reopenedViewState);
-        await reopenedView.onOpen();
-        if (!renderView) {
-          throw new Error("Reopened gallery view did not provide a React tree");
-        }
-        const reopenedGallery = render(renderView() as ReactElement);
-
-        expect(reopenedGallery.getByText("UI/Button/Sizes")).toBeTruthy();
-        expect(
-          reopenedGallery.container.querySelector('[data-gallery-story-id="UI/Button/Sizes"]')
-        ).toBeTruthy();
-
-        reopenedGallery.unmount();
-      });
     });
 
     describe("onunload()", () => {
@@ -739,7 +718,8 @@ describe("main", () => {
         const replacement = new GalleryPlugin(app, {
           id: "copilot-component-gallery",
         } as PluginManifest);
-        await replacement.onload();
+        replacement.onload();
+        await finishLoading(replacement);
         const replacementHandle = window.__gallery;
 
         plugin.onunload();

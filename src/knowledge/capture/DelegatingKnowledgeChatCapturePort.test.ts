@@ -6,7 +6,6 @@ import {
   type KnowledgeChatDraftReceipt,
 } from "@/knowledge/capture/KnowledgeChatCapturePort";
 
-/** Creates a delegate returning one stable test receipt. */
 function createDelegate(bundleId: string): KnowledgeChatCapturePort {
   return {
     addVaultSource: async (): Promise<KnowledgeChatCaptureReceipt> => ({

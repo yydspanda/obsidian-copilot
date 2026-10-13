@@ -87,7 +87,6 @@ const MAX_WIKI_PAGE_BYTES = 8_000_000;
 const MAX_WIKI_PAGE_CHARACTERS = 2_000_000;
 const MAX_VALIDATION_DIAGNOSTICS = 10_000;
 
-/** Stable value-free failures exposed before a durable forward Apply journal exists. */
 export type KnowledgeForwardRevisionApplyCoordinatorErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -99,10 +98,8 @@ export type KnowledgeForwardRevisionApplyCoordinatorErrorCode =
   | "resource_limit"
   | "aborted";
 
-/** Scalar-only request selecting one exact accepted decision and Apply claim. */
 export type KnowledgeForwardRevisionApplyRequest = KnowledgeForwardRevisionApplyAuthorityQuery;
 
-/** Complete detached material bound by one newly minted process-local Apply capability. */
 export interface KnowledgeForwardRevisionApplyCapabilityProjectionV1 {
   readonly version: 1;
   readonly kind: "forward_revision_apply_capability_projection";
@@ -126,14 +123,12 @@ export interface KnowledgeForwardRevisionApplyCapabilityProjectionV1 {
   readonly revalidationReceiptDigest: string;
 }
 
-/** Content-free file observation retained by a post-journal transition proof. */
 export type KnowledgeForwardRevisionApplyTransitionObservationV1 =
   | Readonly<{ kind: "missing" }>
   | Readonly<{ kind: "directory" }>
   | Readonly<{ kind: "oversized_file" }>
   | Readonly<{ kind: "file"; contentHash: string }>;
 
-/** Exact durable transition or finalization authorized by one physical observation. */
 export type KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1 =
   | Readonly<{
       version: 1;
@@ -174,7 +169,6 @@ export type KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1 =
       observedAt: number;
     }>;
 
-/** Scalar-only outcome of converging one already-durable forward Apply journal. */
 export type KnowledgeProductionForwardRevisionApplyRecoveryResult =
   | Readonly<{ kind: "idle" }>
   | Readonly<{
@@ -259,9 +253,7 @@ let mintTransitionCapability:
     ) => KnowledgeForwardRevisionApplyTransitionCapability)
   | undefined;
 
-/** Sanitized pre-journal failure that never retains candidate or Vault content. */
 export class KnowledgeForwardRevisionApplyCoordinatorError extends Error {
-  /** Creates an authentic value-free failure only for this module. */
   private constructor(token: symbol, code: KnowledgeForwardRevisionApplyCoordinatorErrorCode) {
     super(`Forward revision Apply preparation failed: ${code}`);
     this.name = "KnowledgeForwardRevisionApplyCoordinatorError";
@@ -269,14 +261,12 @@ export class KnowledgeForwardRevisionApplyCoordinatorError extends Error {
     Object.freeze(this);
   }
 
-  /** Returns the stable code only for a module-authentic error. */
   static inspect(value: unknown): KnowledgeForwardRevisionApplyCoordinatorErrorCode | undefined {
     return (typeof value === "object" || typeof value === "function") && value !== null
       ? errorCodes.get(value)
       : undefined;
   }
 
-  /** Mints one internal sanitized error. */
   static create(
     token: symbol,
     code: KnowledgeForwardRevisionApplyCoordinatorErrorCode
@@ -289,17 +279,14 @@ export class KnowledgeForwardRevisionApplyCoordinatorError extends Error {
 Object.freeze(KnowledgeForwardRevisionApplyCoordinatorError.prototype);
 Object.freeze(KnowledgeForwardRevisionApplyCoordinatorError);
 
-/** Throws one authentic fixed coordinator failure. */
 function fail(code: KnowledgeForwardRevisionApplyCoordinatorErrorCode): never {
   throw KnowledgeForwardRevisionApplyCoordinatorError.create(CAPABILITY_TOKEN, code);
 }
 
-/** Stops pre-journal work without retaining an arbitrary AbortSignal reason. */
 function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) fail("aborted");
 }
 
-/** Re-proves all same-owner process-local dependencies around every await. */
 function assertCoordinatorCurrent(state: Readonly<CoordinatorState>): void {
   try {
     state.assertCurrent();
@@ -327,7 +314,6 @@ function assertCoordinatorCurrent(state: Readonly<CoordinatorState>): void {
   }
 }
 
-/** Re-proves the owner-bound physical store retained after a durable begin. */
 function assertTransactionRunnerCurrent(state: Readonly<TransactionRunnerState>): void {
   try {
     KnowledgeRuntimeForwardRevisionApplyRecoveryPort.assert(state.recovery);
@@ -346,7 +332,6 @@ function assertTransactionRunnerCurrent(state: Readonly<TransactionRunnerState>)
   }
 }
 
-/** Returns hidden recovery dependencies only for one exact runner. */
 function requireTransactionRunnerState(value: unknown): Readonly<TransactionRunnerState> {
   let prototype: object | null;
   try {
@@ -367,7 +352,6 @@ function requireTransactionRunnerState(value: unknown): Readonly<TransactionRunn
   return state;
 }
 
-/** Returns hidden dependencies only for one exact coordinator instance. */
 function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   let prototype: object | null;
   try {
@@ -387,7 +371,6 @@ function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   return state;
 }
 
-/** Detaches and cross-validates one genuine Runtime Apply authority projection. */
 function snapshotAuthority(
   value: unknown,
   request: Readonly<KnowledgeForwardRevisionApplyRequest>
@@ -400,7 +383,6 @@ function snapshotAuthority(
   }
 }
 
-/** Removes only enclosing Runtime volatility before a two-read semantic comparison. */
 function projectAuthoritySemantics(
   authority: Readonly<KnowledgeForwardRevisionApplyAuthority>
 ): JsonValue {
@@ -427,7 +409,6 @@ function projectAuthoritySemantics(
   };
 }
 
-/** Requires a later Runtime read to preserve every Apply-relevant semantic fact. */
 function assertAuthoritySandwich(
   before: Readonly<KnowledgeForwardRevisionApplyAuthority>,
   after: Readonly<KnowledgeForwardRevisionApplyAuthority>
@@ -443,7 +424,6 @@ function assertAuthoritySandwich(
   }
 }
 
-/** Requires parser preparation to identify the exact current accepted source base. */
 function assertPreparationAuthority(
   preparation: Readonly<KnowledgeSourceParsePreparation>,
   authority: Readonly<KnowledgeForwardRevisionApplyAuthority>
@@ -484,7 +464,6 @@ function assertPreparationAuthority(
   }
 }
 
-/** Creates the exact single-page update validated for this accepted decision. */
 function createForwardApplyChange(
   authority: Readonly<KnowledgeForwardRevisionApplyAuthority>,
   commandDigest: string
@@ -512,7 +491,6 @@ function createForwardApplyChange(
   });
 }
 
-/** Reads one bounded exact Wiki target through the genuine owner-bound visitor. */
 async function readCurrentPage(
   state: Readonly<CoordinatorState>,
   path: string,
@@ -562,7 +540,6 @@ async function readCurrentPage(
   return content;
 }
 
-/** Rebuilds the exact accepted Review command retained by the durable validation receipt. */
 function createAcceptedCommand(
   accepted: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
 ): Readonly<KnowledgeForwardRevisionReviewCommandV1> {
@@ -590,9 +567,7 @@ function createAcceptedCommand(
   return command;
 }
 
-/** Opaque process-local proof minted only by a complete fresh Apply revalidation. */
 export class KnowledgeForwardRevisionApplyCapability {
-  /** Installs fully detached hidden state behind the private module token. */
   private constructor(token: symbol, state: Readonly<CapabilityState>) {
     if (token !== CAPABILITY_TOKEN) fail("dependency_invalid");
     capabilityStates.set(this, state);
@@ -604,7 +579,6 @@ export class KnowledgeForwardRevisionApplyCapability {
       new KnowledgeForwardRevisionApplyCapability(CAPABILITY_TOKEN, state);
   }
 
-  /** Requires one exact-prototype current capability minted in this process. */
   static assert(value: unknown): asserts value is KnowledgeForwardRevisionApplyCapability {
     let prototype: object | null;
     try {
@@ -623,7 +597,6 @@ export class KnowledgeForwardRevisionApplyCapability {
     }
   }
 
-  /** Requires this proof to belong to one exact live execution owner. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     KnowledgeForwardRevisionApplyCapability.assert(value);
     try {
@@ -637,7 +610,6 @@ export class KnowledgeForwardRevisionApplyCapability {
     }
   }
 
-  /** Projects immutable accepted bytes and revalidation facts for the Runtime begin CAS. */
   static project(value: unknown): Readonly<KnowledgeForwardRevisionApplyCapabilityProjectionV1> {
     KnowledgeForwardRevisionApplyCapability.assert(value);
     const state = capabilityStates.get(value);
@@ -649,16 +621,7 @@ export class KnowledgeForwardRevisionApplyCapability {
 Object.freeze(KnowledgeForwardRevisionApplyCapability.prototype);
 Object.freeze(KnowledgeForwardRevisionApplyCapability);
 
-/**
- * Opaque process-local proof of one post-journal physical observation.
- *
- * Unlike the pre-journal Apply capability, this proof deliberately does not
- * depend on the workflow lease remaining live. Once a prepared journal is
- * durable, recovery must converge according to the observed file state even
- * after the originating UI generation is revoked.
- */
 export class KnowledgeForwardRevisionApplyTransitionCapability {
-  /** Installs one detached transition behind the private module token. */
   private constructor(token: symbol, state: Readonly<TransitionCapabilityState>) {
     if (token !== TRANSITION_CAPABILITY_TOKEN) fail("dependency_invalid");
     transitionCapabilityStates.set(this, state);
@@ -670,7 +633,6 @@ export class KnowledgeForwardRevisionApplyTransitionCapability {
       new KnowledgeForwardRevisionApplyTransitionCapability(TRANSITION_CAPABILITY_TOKEN, state);
   }
 
-  /** Requires one exact-prototype current transition proof minted by this module. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeForwardRevisionApplyTransitionCapability {
@@ -695,7 +657,6 @@ export class KnowledgeForwardRevisionApplyTransitionCapability {
     }
   }
 
-  /** Requires this proof to belong to one exact execution owner. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     KnowledgeForwardRevisionApplyTransitionCapability.assert(value);
     try {
@@ -709,7 +670,6 @@ export class KnowledgeForwardRevisionApplyTransitionCapability {
     }
   }
 
-  /** Projects the exact journal transition authorized by the physical observation. */
   static project(
     value: unknown
   ): Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1> {
@@ -723,7 +683,6 @@ export class KnowledgeForwardRevisionApplyTransitionCapability {
 Object.freeze(KnowledgeForwardRevisionApplyTransitionCapability.prototype);
 Object.freeze(KnowledgeForwardRevisionApplyTransitionCapability);
 
-/** Returns a monotonic safe transition timestamp from the retained clock. */
 function readTransitionTime(
   state: Readonly<TransactionRunnerState>,
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
@@ -738,7 +697,6 @@ function readTransitionTime(
   return Math.max(value, journal.updatedAt);
 }
 
-/** Creates one frozen content-free physical observation. */
 function snapshotTransitionObservation(
   value: KnowledgeForwardRevisionApplyTransitionObservationV1
 ): KnowledgeForwardRevisionApplyTransitionObservationV1 {
@@ -756,7 +714,6 @@ function snapshotTransitionObservation(
   }
 }
 
-/** Mints one exact journal-advance proof from detached strict material. */
 function mintJournalAdvanceCapability(
   state: Readonly<TransactionRunnerState>,
   transition: "applying" | "committed" | "recovery_required",
@@ -792,7 +749,6 @@ function mintJournalAdvanceCapability(
   return capability;
 }
 
-/** Mints the dedicated recovery-to-committed proof after a fresh exact-after observation. */
 function mintRecoveryCommittedCapability(
   state: Readonly<TransactionRunnerState>,
   previousValue: unknown,
@@ -839,7 +795,6 @@ function mintRecoveryCommittedCapability(
   return capability;
 }
 
-/** Mints one exact committed-journal finalization proof. */
 function mintJournalFinalizeCapability(
   state: Readonly<TransactionRunnerState>,
   journalValue: unknown
@@ -873,7 +828,6 @@ function mintJournalFinalizeCapability(
   return capability;
 }
 
-/** Mints one exact no-write terminalization proof from a fresh physical observation. */
 function mintJournalTerminalizationCapability(
   state: Readonly<TransactionRunnerState>,
   journalValue: unknown,
@@ -913,7 +867,6 @@ function mintJournalTerminalizationCapability(
   return capability;
 }
 
-/** Observes one journal target without retaining oversized or conflicting bytes. */
 async function observeJournalTarget(
   state: Readonly<TransactionRunnerState>,
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
@@ -950,7 +903,6 @@ async function observeJournalTarget(
   }
 }
 
-/** Projects one durable sticky conflict matching an exact physical observation. */
 async function persistRecoveryRequired(
   state: Readonly<TransactionRunnerState>,
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>,
@@ -971,7 +923,6 @@ async function persistRecoveryRequired(
   );
 }
 
-/** Projects one content-free committed result from a strict durable ledger. */
 function projectCommittedResult(
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
 ): Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult> {
@@ -985,7 +936,6 @@ function projectCommittedResult(
   });
 }
 
-/** Projects one content-free sticky-recovery result. */
 function projectRecoveryResult(
   journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
 ): Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult> {
@@ -999,16 +949,7 @@ function projectRecoveryResult(
   });
 }
 
-/**
- * Genuine post-journal runner for forward Apply and startup recovery.
- *
- * Construction authenticates a live paired Runtime generation, but the runner
- * intentionally retains only the recovery facade, Vault store, and execution
- * owner. Once a prepared journal is durable, caller abort and workflow-lease
- * revocation cannot cancel the commit-wins recovery protocol.
- */
 export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
-  /** Captures one exact Runtime/Vault pair without retaining a UI workflow lease. */
   constructor(
     recovery: KnowledgeRuntimeForwardRevisionApplyRecoveryPort,
     fileStore: ObsidianKnowledgeFileStore,
@@ -1030,14 +971,12 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
     }
   }
 
-  /** Requires one exact-prototype runner with current Runtime/Vault dependencies. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeProductionForwardRevisionApplyTransactionRunner {
     requireTransactionRunnerState(value);
   }
 
-  /** Reports whether a runner is paired with one exact Runtime and Vault. */
   static matchesRuntimeAndVault(value: unknown, runtime: unknown, vault: unknown): boolean {
     try {
       const state = requireTransactionRunnerState(value);
@@ -1050,7 +989,6 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
     }
   }
 
-  /** Reports whether this runner belongs to one exact execution owner. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
@@ -1060,14 +998,6 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
     }
   }
 
-  /**
-   * Rechecks one sticky conflict and performs only the explicitly selected safe action.
-   *
-   * Exact-after bytes converge to ledger finalization without another Wiki write.
-   * Exact-before bytes may retry the original exact CAS only for recovery revisions
-   * one and two. `keep_current` never mutates the Wiki and terminalizes only an
-   * externally superseded state.
-   */
   async resolveRecovery(
     expectationValue: unknown,
     action: "retry_exact" | "keep_current",
@@ -1160,14 +1090,6 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
     });
   }
 
-  /**
-   * Converges the active journal without parser, model, source, or network work.
-   *
-   * Cancellation is honored only while discovering whether a durable journal
-   * exists. After a journal is returned, the method follows commit-wins rules:
-   * applying is persisted before Wiki CAS, exact after bytes become committed,
-   * and any unrecognizable state becomes a sticky content-free conflict.
-   */
   async recoverActive(
     signal: AbortSignal
   ): Promise<Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult>> {
@@ -1317,9 +1239,7 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
 Object.freeze(KnowledgeProductionForwardRevisionApplyTransactionRunner.prototype);
 Object.freeze(KnowledgeProductionForwardRevisionApplyTransactionRunner);
 
-/** Genuine no-model coordinator that freshly validates one accepted body before journaling. */
 export class KnowledgeProductionForwardRevisionApplyCoordinator {
-  /** Captures one exact Runtime/parser/Vault generation and no structural mutation authority. */
   constructor(
     runtime: KnowledgeRuntimeForwardRevisionApplyPort,
     transactionRunner: KnowledgeProductionForwardRevisionApplyTransactionRunner,
@@ -1355,7 +1275,6 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
     }
   }
 
-  /** Requires one live exact coordinator owned by the supplied execution lifecycle. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
@@ -1368,14 +1287,6 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
     }
   }
 
-  /**
-   * Freshly revalidates, durably journals, and converges one accepted update.
-   *
-   * Calls on one coordinator are serialized to make double-clicks deterministic.
-   * Caller cancellation and generation revocation are honored through the begin
-   * CAS. Once begin returns a durable journal, a private non-aborted recovery
-   * signal is used and the operation follows commit-wins to a final or sticky state.
-   */
   async apply(
     requestValue: unknown,
     signal: AbortSignal
@@ -1392,7 +1303,6 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
         assertNotAborted(signal);
         await state.runtime.begin(ready.capability, signal);
 
-        // The prepared journal is now the only cancellation boundary that matters.
         return state.transactionRunner.recoverActive(new AbortController().signal);
       });
     coordinatorOperationTails.set(
@@ -1405,7 +1315,6 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
     return operation;
   }
 
-  /** Serializes one explicit sticky-recovery recheck with every Apply operation. */
   async resolveRecovery(
     expectationValue: unknown,
     action: "retry_exact" | "keep_current",
@@ -1436,12 +1345,6 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
     return operation;
   }
 
-  /**
-   * Performs Runtime→Vault/source validation→Vault/source→Runtime reproof.
-   *
-   * This method performs no mutation. A successful result is process-local and
-   * must still be consumed by the owner-bound Runtime begin CAS before any Wiki write.
-   */
   async revalidate(
     requestValue: unknown,
     signal: AbortSignal

@@ -10,12 +10,10 @@ import {
 
 type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
 
-/** Creates one complete inert delegate for lease identity tests. */
 function createDelegate(): KnowledgeStudioPort {
   return new UnavailableKnowledgeStudioPort("Test-only delegate");
 }
 
-/** Requires one synchronous action to throw the sanitized cancellation category. */
 function expectAbortError(action: () => void): void {
   let captured: unknown;
   try {

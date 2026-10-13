@@ -15,22 +15,18 @@ const DEFAULT_MAX_CHARACTERS_PER_OUTPUT = 2_000_000;
 const DEFAULT_MAX_TOTAL_BYTES = 8_000_000;
 const DEFAULT_MAX_TOTAL_CHARACTERS = 8_000_000;
 
-/** One Runtime-authorized generated page whose current bytes must be re-proved. */
 export interface KnowledgeExpectedOutputPage {
   path: string;
   contentHash: string;
 }
 
-/** Narrow read-only port consumed by source-freshness admission. */
 export interface KnowledgeOutputObservationReaderPort {
-  /** Reads only the supplied authorized paths and returns exact path/hash observations. */
   observe(
     outputs: readonly KnowledgeExpectedOutputPage[],
     signal: AbortSignal
   ): Promise<readonly OutputObservation[]>;
 }
 
-/** Resource limits for one generated-output observation batch. */
 export interface ObsidianKnowledgeOutputObservationReaderOptions {
   maxOutputs?: number;
   maxBytesPerOutput?: number;
@@ -39,7 +35,6 @@ export interface ObsidianKnowledgeOutputObservationReaderOptions {
   maxTotalCharacters?: number;
 }
 
-/** Stable sanitized generated-output reader failures. */
 export type KnowledgeOutputObservationReaderErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -48,40 +43,33 @@ export type KnowledgeOutputObservationReaderErrorCode =
   | "resolver_unavailable"
   | "aborted";
 
-/** Sanitized failure that never retains an output path or file content. */
 export class KnowledgeOutputObservationReaderError extends Error {
-  /** Creates one stable output-observation failure. */
   constructor(public readonly code: KnowledgeOutputObservationReaderErrorCode) {
     super("The generated knowledge output could not be verified");
     this.name = "KnowledgeOutputObservationReaderError";
     Object.freeze(this);
   }
 
-  /** Returns whether an unknown error belongs to this boundary. */
   static inspect(value: unknown): value is KnowledgeOutputObservationReaderError {
     return value instanceof KnowledgeOutputObservationReaderError;
   }
 }
 
-/** Creates one sanitized reader error without retaining its cause. */
 function createReaderError(
   code: KnowledgeOutputObservationReaderErrorCode
 ): KnowledgeOutputObservationReaderError {
   return new KnowledgeOutputObservationReaderError(code);
 }
 
-/** Throws the boundary-standard cancellation error. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw createReaderError("aborted");
 }
 
-/** Validates one positive bounded integer option. */
 function requirePositiveLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) throw createReaderError("dependency_invalid");
   return value;
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) throw createReaderError("response_invalid");
   try {
@@ -96,7 +84,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Checks an exact own string-key set without reading values. */
 function hasExactDataKeys(value: unknown, expected: readonly string[]): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -112,7 +99,6 @@ function hasExactDataKeys(value: unknown, expected: readonly string[]): boolean 
   }
 }
 
-/** Snapshots a bounded dense array through data descriptors only. */
 function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown[] {
   if (!Array.isArray(value)) throw createReaderError("response_invalid");
   try {
@@ -142,7 +128,6 @@ function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown
   }
 }
 
-/** Snapshots and validates the complete Runtime-authorized output set. */
 function snapshotExpectedOutputs(
   value: readonly KnowledgeExpectedOutputPage[],
   maxOutputs: number
@@ -172,7 +157,6 @@ function snapshotExpectedOutputs(
   return Object.freeze(outputs);
 }
 
-/** Captures the sequential visitor method with its exact receiver. */
 function captureVisitor(
   resolver: ObsidianKnowledgeCompilerTargetVisitPort
 ): (
@@ -198,7 +182,6 @@ function captureVisitor(
   };
 }
 
-/** Creates the strict authorized resolver requests for one output set. */
 function createTargetRequests(
   outputs: readonly Readonly<KnowledgeExpectedOutputPage>[]
 ): readonly Readonly<CompilerTargetRequest>[] {
@@ -214,7 +197,6 @@ function createTargetRequests(
   );
 }
 
-/** Strictly projects one resolver response without returning file content. */
 function projectObservation(
   raw: unknown,
   fileByteSize: number | undefined,
@@ -295,12 +277,6 @@ function projectObservation(
   });
 }
 
-/**
- * Adapts the compiler's exact read-only Vault resolver to hash-only output observations.
- *
- * The adapter never returns file content and has no write capability. Requests
- * are limited to paths supplied by the Runtime freshness authority.
- */
 export class ObsidianKnowledgeOutputObservationReader implements KnowledgeOutputObservationReaderPort {
   private readonly visit: ReturnType<typeof captureVisitor>;
   private readonly maxOutputs: number;
@@ -309,7 +285,6 @@ export class ObsidianKnowledgeOutputObservationReader implements KnowledgeOutput
   private readonly maxTotalBytes: number;
   private readonly maxTotalCharacters: number;
 
-  /** Captures one exact resolver and immutable resource limits. */
   constructor(
     resolver: ObsidianKnowledgeCompilerTargetVisitPort,
     options: ObsidianKnowledgeOutputObservationReaderOptions = {}
@@ -329,7 +304,6 @@ export class ObsidianKnowledgeOutputObservationReader implements KnowledgeOutput
     Object.freeze(this);
   }
 
-  /** Reads only authorized paths and returns detached exact hash observations. */
   async observe(
     outputs: readonly KnowledgeExpectedOutputPage[],
     signal: AbortSignal

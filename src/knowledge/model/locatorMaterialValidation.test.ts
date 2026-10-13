@@ -9,7 +9,6 @@ import type { SourceLocator } from "@/knowledge/model/types";
 
 const ARTIFACT_HASH = "a".repeat(64);
 
-/** Creates fields shared by material locator fixtures. */
 function createLocatorBase(excerpt: string) {
   return {
     sourceId: "source-1",
@@ -20,7 +19,6 @@ function createLocatorBase(excerpt: string) {
   };
 }
 
-/** Creates a parsed Markdown observation with duplicate headings and CRLF text. */
 function createMarkdownArtifact(): MarkdownArtifactObservation {
   return {
     kind: "markdown",
@@ -35,7 +33,6 @@ function createMarkdownArtifact(): MarkdownArtifactObservation {
   };
 }
 
-/** Extracts stable material-validation codes. */
 function diagnosticCodes(result: { diagnostics: { code: string }[] }): string[] {
   return result.diagnostics.map((diagnostic) => diagnostic.code);
 }

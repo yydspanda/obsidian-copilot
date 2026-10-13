@@ -7,12 +7,10 @@ import {
 import type { SourceManifest, SourceManifestEntry } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Creates one detached Manifest around the supplied entries. */
 function createManifest(entries: SourceManifestEntry[] = []): SourceManifest {
   return { version: 1, bundleId: "personal", revision: 0, entries };
 }
 
-/** Creates one valid registered entry. */
 function createEntry(
   sourceId: string,
   sourcePath: string,

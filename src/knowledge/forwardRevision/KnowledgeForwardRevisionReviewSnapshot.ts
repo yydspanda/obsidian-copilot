@@ -13,39 +13,34 @@ import type {
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of the dedicated forward-revision Review snapshot. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_VERSION = 1 as const;
 
-/** Defensive persisted-record bound below the enclosing Runtime text limit. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxRecords: 10_000,
   maxTotalSelectedContentCharacters: 16_000_000,
 });
 
-/** Runtime-owned publication envelope around one immutable pending proposal. */
 export interface KnowledgeForwardRevisionPublishedProposalV1 {
   readonly version: 1;
   readonly kind: "forward_revision_published_proposal";
   readonly proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>;
   readonly proposalDigest: string;
-  /** Original outer Runtime revision committed by the publication CAS. */
+
   readonly publishedRuntimeRevision: number;
-  /** Original dedicated Review Store revision committed by the publication CAS. */
+
   readonly proposalStoreRevision: number;
 }
 
-/** Complete append-only pending-proposal namespace for one Bundle. */
 export interface KnowledgeForwardRevisionReviewSnapshotV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_VERSION;
   readonly bundleId: string;
   readonly revision: number;
-  /** Highest Runtime-allocated request revision; zero only before first publication. */
+
   readonly lastRequestRevision: number;
   readonly records: readonly Readonly<KnowledgeForwardRevisionPublishedProposalV1>[];
 }
 
-/** Runtime-only input for one publication wrapper. */
 export interface CreateKnowledgeForwardRevisionPublishedProposalInput {
   readonly proposal: unknown;
   readonly publishedRuntimeRevision: number;
@@ -69,9 +64,7 @@ const SNAPSHOT_KEYS = [
   "records",
 ] as const;
 
-/** Fixed value-free failure for malformed forward Review persistence. */
 export class KnowledgeForwardRevisionReviewSnapshotValidationError extends TypeError {
-  /** Creates a sanitized strict-contract failure. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Review snapshot does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionReviewSnapshotValidationError";
@@ -83,7 +76,6 @@ const VALIDATION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionReviewSnapshotVal
 const authenticValidationErrors =
   new WeakSet<KnowledgeForwardRevisionReviewSnapshotValidationError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -117,7 +109,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense array without invoking element accessors. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -144,7 +135,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Reports whether a value is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -156,7 +146,6 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -172,7 +161,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -181,29 +169,24 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether a value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether a value is a positive safe integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Throws one fixed strict-contract failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionReviewSnapshotValidationError(VALIDATION_ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether a caught strict-contract failure was minted by this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionReviewSnapshotValidationError {
@@ -214,7 +197,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -227,7 +209,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Bounds retained proposal bodies before deep strict snapshotting. */
 function requireBoundedSelectedContent(records: readonly unknown[]): void {
   let characters = 0;
   for (const published of records) {
@@ -245,7 +226,6 @@ function requireBoundedSelectedContent(records: readonly unknown[]): void {
   }
 }
 
-/** Strictly snapshots records while enforcing the authoritative aggregate incrementally. */
 function snapshotBoundedPublishedProposals(
   values: readonly unknown[]
 ): readonly Readonly<KnowledgeForwardRevisionPublishedProposalV1>[] {
@@ -266,7 +246,6 @@ function snapshotBoundedPublishedProposals(
   return Object.freeze(records);
 }
 
-/** Strictly snapshots one Runtime-owned published-proposal wrapper. */
 export function snapshotKnowledgeForwardRevisionPublishedProposal(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionPublishedProposalV1> {
@@ -305,7 +284,6 @@ export function snapshotKnowledgeForwardRevisionPublishedProposal(
   }
 }
 
-/** Creates one strict Runtime-owned published-proposal wrapper. */
 export function createKnowledgeForwardRevisionPublishedProposal(
   value: CreateKnowledgeForwardRevisionPublishedProposalInput
 ): Readonly<KnowledgeForwardRevisionPublishedProposalV1> {
@@ -326,7 +304,6 @@ export function createKnowledgeForwardRevisionPublishedProposal(
   });
 }
 
-/** Creates an empty strict forward Review snapshot without persistence. */
 export function createEmptyKnowledgeForwardRevisionReviewSnapshot(
   bundleId: string
 ): Readonly<KnowledgeForwardRevisionReviewSnapshotV1> {
@@ -339,7 +316,6 @@ export function createEmptyKnowledgeForwardRevisionReviewSnapshot(
   });
 }
 
-/** Strictly snapshots and semantically validates one forward Review snapshot. */
 export function snapshotKnowledgeForwardRevisionReviewSnapshot(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewSnapshotV1> {
@@ -415,7 +391,6 @@ export function snapshotKnowledgeForwardRevisionReviewSnapshot(
   }
 }
 
-/** Parses one unknown snapshot into a detached value or one safe diagnostic. */
 export function parseKnowledgeForwardRevisionReviewSnapshot(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionReviewSnapshotV1>> {
@@ -436,7 +411,6 @@ export function parseKnowledgeForwardRevisionReviewSnapshot(
   }
 }
 
-/** Validates one unknown snapshot without retaining rejected data. */
 export function validateKnowledgeForwardRevisionReviewSnapshot(
   value: unknown
 ): KnowledgeValidationResult {
@@ -446,7 +420,6 @@ export function validateKnowledgeForwardRevisionReviewSnapshot(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Computes the canonical namespaced digest of one strict snapshot. */
 export function createKnowledgeForwardRevisionReviewSnapshotDigest(value: unknown): string {
   const snapshot = snapshotKnowledgeForwardRevisionReviewSnapshot(value);
   return sha256(
@@ -456,7 +429,6 @@ export function createKnowledgeForwardRevisionReviewSnapshotDigest(value: unknow
   );
 }
 
-/** Detaches one fixed diagnostic returned by the parser. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

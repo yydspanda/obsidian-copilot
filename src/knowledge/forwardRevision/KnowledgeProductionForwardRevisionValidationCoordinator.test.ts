@@ -5,7 +5,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
     private readonly responses: unknown[];
     private readonly executionOwner: unknown;
 
-    /** Captures scripted read-only Runtime responses for coordinator unit tests. */
     constructor(responses: unknown[], executionOwner: unknown) {
       this.responses = responses;
       this.executionOwner = executionOwner;
@@ -13,7 +12,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
       Object.freeze(this);
     }
 
-    /** Requires one mock-module-minted exact base instance. */
     static assert(value: unknown): void {
       if (
         typeof value !== "object" ||
@@ -25,7 +23,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
       }
     }
 
-    /** Reports exact mock lifecycle ownership without exposing it. */
     static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
       return (
         typeof value === "object" &&
@@ -35,7 +32,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => {
       );
     }
 
-    /** Returns the next scripted authority while retaining the detached query. */
     async readForwardRevisionValidationAuthority(query: unknown): Promise<unknown> {
       this.calls.push(query);
       const response = this.responses.shift();
@@ -57,7 +53,6 @@ jest.mock("@/knowledge/ingest/KnowledgeSourceWorkflowPlan", () => {
       executionOwner: unknown;
     };
 
-    /** Captures scripted authentic-plan material for deterministic coordinator tests. */
     constructor(config: {
       digests: string[];
       profile: unknown;
@@ -70,12 +65,10 @@ jest.mock("@/knowledge/ingest/KnowledgeSourceWorkflowPlan", () => {
       Object.freeze(this);
     }
 
-    /** Reports exact mock workflow lifecycle ownership. */
     matchesExecutionOwner(executionOwner: unknown): boolean {
       return this.config.executionOwner === executionOwner;
     }
 
-    /** Requires one mock-module-minted exact base plan. */
     static assert(value: unknown): void {
       if (
         typeof value !== "object" ||
@@ -87,19 +80,16 @@ jest.mock("@/knowledge/ingest/KnowledgeSourceWorkflowPlan", () => {
       }
     }
 
-    /** Returns the next generation digest, retaining the last stable value. */
     getDigest(): string {
       return this.config.digests.length > 1
         ? (this.config.digests.shift() as string)
         : this.config.digests[0];
     }
 
-    /** Returns the exact configured Bundle profile. */
     getBundlePipelineProfile(): unknown {
       return this.config.profile;
     }
 
-    /** Returns the exact parser preparation without performing external work. */
     async prepare(job: unknown, signal: AbortSignal): Promise<unknown> {
       if (signal.aborted) throw new DOMException("aborted", "AbortError");
       this.prepareCalls.push(job);
@@ -117,14 +107,12 @@ jest.mock("@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver", () => 
   const errorCodes = new WeakMap<object, string>();
 
   class ObsidianKnowledgeCompilerTargetResolverError extends Error {
-    /** Creates one sanitized mock production-reader failure. */
     constructor(code: string) {
       super("target resolver failed");
       errorCodes.set(this, code);
       Object.freeze(this);
     }
 
-    /** Inspects only mock-module-minted target failures. */
     static inspect(value: unknown): string | undefined {
       return typeof value === "object" && value !== null ? errorCodes.get(value) : undefined;
     }
@@ -135,7 +123,6 @@ jest.mock("@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver", () => 
     private readonly observations: unknown[];
     private readonly executionOwner: unknown;
 
-    /** Captures sequential bounded page observations. */
     constructor(observations: unknown[], executionOwner: unknown) {
       this.observations = observations;
       this.executionOwner = executionOwner;
@@ -143,7 +130,6 @@ jest.mock("@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver", () => 
       Object.freeze(this);
     }
 
-    /** Requires one mock-module-minted exact base resolver. */
     static assert(value: unknown): void {
       if (
         typeof value !== "object" ||
@@ -155,7 +141,6 @@ jest.mock("@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver", () => 
       }
     }
 
-    /** Reports exact mock Vault lifecycle ownership without exposing it. */
     static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
       return (
         typeof value === "object" &&
@@ -165,7 +150,6 @@ jest.mock("@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver", () => 
       );
     }
 
-    /** Visits exactly one scripted current-page observation. */
     async visit(
       requests: readonly { targetId: string; path: string }[],
       signal: AbortSignal,
@@ -244,7 +228,6 @@ interface MockResolver {
   readonly calls: unknown[];
 }
 
-/** Creates one strict production Bundle boundary. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -256,7 +239,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the exact current Manifest re-proved by the mock execution plan. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -286,7 +268,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates one complete historical citation revalidated against parser material. */
 function createCitation(): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -303,7 +284,6 @@ function createCitation(): ClaimCitation {
   };
 }
 
-/** Creates one strict pending proposal over distinct historical/current bytes. */
 function createProposal(manifest: SourceManifest) {
   const manifestDigest = createSourceManifestDigest(manifest);
   const historicalHash = createFileContentHash(HISTORICAL_CONTENT);
@@ -376,7 +356,6 @@ function createProposal(manifest: SourceManifest) {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates one exact decision-time Runtime/source authority. */
 function createAcceptanceAuthority(
   proposal: ReturnType<typeof createProposal>,
   runtimeRevision: number,
@@ -414,7 +393,6 @@ function createAcceptanceAuthority(
   };
 }
 
-/** Creates a strict Runtime validation proof at one enclosing revision. */
 function createAuthority(
   proposal: ReturnType<typeof createProposal>,
   runtimeRevision: number,
@@ -448,7 +426,6 @@ function createAuthority(
   });
 }
 
-/** Creates one exact read-only parser preparation and behavior profile. */
 function createPreparation(manifest: SourceManifest) {
   const bundle = createBundle();
   const profile = {
@@ -492,7 +469,6 @@ function createPreparation(manifest: SourceManifest) {
   };
 }
 
-/** Creates one exact scripted coordinator fixture. */
 function createFixture(options?: {
   commandContent?: string;
   pages?: string[];
@@ -580,7 +556,6 @@ function createFixture(options?: {
   };
 }
 
-/** Expects one sanitized coordinator error with the supplied closed code. */
 async function expectCode(promise: Promise<unknown>, code: string): Promise<void> {
   try {
     await promise;

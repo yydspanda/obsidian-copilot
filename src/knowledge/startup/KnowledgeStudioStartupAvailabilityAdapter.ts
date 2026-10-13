@@ -6,12 +6,6 @@ import type { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKno
 import { UnavailableKnowledgeStudioPort } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 
-/**
- * Maps one safe startup state to a user-facing fail-closed Studio explanation.
- *
- * @param state - Sanitized plugin startup observation
- * @returns Notice containing no project paths, raw configuration, or error text
- */
 export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): string {
   switch (state.status) {
     case "waiting_for_layout":
@@ -46,7 +40,6 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
   }
 }
 
-/** Selects one exact configured Bundle for an unavailable recovery/workflow state. */
 function selectUnavailableBundleId(state: KnowledgePluginStartupState): string | undefined {
   if (
     (state.status === "recovery_attention_required" || state.status === "recovery_blocked") &&
@@ -73,20 +66,7 @@ function selectUnavailableBundleId(state: KnowledgePluginStartupState): string |
   return undefined;
 }
 
-/**
- * Fail-closed adapter from safe startup observations to stable Studio boundaries.
- *
- * It can only install unavailable delegates. Exactly one validated Bundle becomes
- * the current session identity; zero or multiple Bundles clear selection instead
- * of inventing a default.
- */
 export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudioStartupAvailabilityPort {
-  /**
-   * Creates the one-way unavailable adapter.
-   *
-   * @param port - Stable delegate-replacement boundary retained by every View
-   * @param sessions - Dynamic exact Bundle selection observed by every View
-   */
   constructor(
     private readonly port: Pick<DelegatingKnowledgeStudioPort, "replaceDelegate">,
     private readonly sessions: Pick<
@@ -95,12 +75,6 @@ export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudi
     >
   ) {}
 
-  /**
-   * Revokes the prior delegate before publishing either transient refresh or durable failure.
-   *
-   * Only layout-waiting is transient. Every runtime, project, configuration,
-   * recovery, and workflow failure remains an explicit unavailable selection.
-   */
   setUnavailable(state: KnowledgePluginStartupState): void {
     const notice = getKnowledgeStartupNotice(state);
     this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
@@ -111,7 +85,6 @@ export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudi
     this.sessions.replaceSelection(selectUnavailableBundleId(state), notice);
   }
 
-  /** Publishes one exact Studio-ready Bundle after its live delegate was staged. */
   setReadReady(
     state: Extract<KnowledgePluginStartupState, { status: "workflow_read_ready" }>
   ): void {
@@ -124,7 +97,6 @@ export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudi
     this.sessions.replaceSelection(state.bundleIds[0], notice);
   }
 
-  /** Publishes one staged recovery-only delegate for the exact stopped Bundle. */
   setRecoveryReady(
     state: Extract<
       KnowledgePluginStartupState,
@@ -140,7 +112,6 @@ export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudi
     this.sessions.replaceSelection(state.recoveryBundleId, notice);
   }
 
-  /** Publishes one staged source-lifecycle-only delegate for the exact stopped Bundle. */
   setSourceRecoveryReady(
     state: Extract<KnowledgePluginStartupState, { status: "source_recovery_required" }>
   ): void {

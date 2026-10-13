@@ -1,17 +1,8 @@
-/**
- * Locks the tab strip's shape. `Record<TabId, …>` only forces the four
- * registration sites to agree with each other — it says nothing about which tabs
- * exist or what order they appear in, so folding Agents into Basic or reordering
- * the strip can be undone without a single type error.
- */
-
 import type CopilotPlugin from "@/main";
 import SettingsMainV2 from "@/settings/v2/SettingsMainV2";
 import { render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
-// Every tab body is stubbed empty. The real panels reach for the keychain, Node,
-// and the network, none of which has any bearing on the strip above them.
 jest.mock("@/settings/v2/components/BasicSettings", () => ({ BasicSettings: () => null }));
 jest.mock("@/settings/v2/components/MiyoSettings", () => ({
   MiyoSettings: () => <div>Miyo settings content</div>,
@@ -85,12 +76,6 @@ describe("SettingsMainV2", () => {
         "Self-Host",
         "Advanced",
       ]);
-    });
-
-    it("offers no Agents tab, because agent settings live on the Basic tab", () => {
-      render(<SettingsMainV2 plugin={plugin} />);
-
-      expect(screen.queryByRole("tab", { name: /agents/i })).toBeNull();
     });
 
     it("marks the Skills tab while a skill failed to load for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", () => {

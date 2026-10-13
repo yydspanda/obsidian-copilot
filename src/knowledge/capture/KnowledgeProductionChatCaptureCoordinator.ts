@@ -27,12 +27,10 @@ import { TFile, type Vault } from "obsidian";
 const MANAGED_CHAT_DRAFT_PREFIX = "Knowledge Draft ";
 const MAX_WINDOWS_DESTINATION_PATH_LENGTH = 240;
 
-/** Read-only Vault capability used to re-prove a Chat-selected source path. */
 export interface KnowledgeVaultSourcePresencePort {
   isFile(sourcePath: string): boolean;
 }
 
-/** Exact production dependencies retained by one released capture generation. */
 export interface KnowledgeProductionChatCaptureCoordinatorInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   parserProfiles: readonly KnowledgeSourceParserProfile[];
@@ -44,12 +42,10 @@ export interface KnowledgeProductionChatCaptureCoordinatorInput {
   retainDrain?: (drain: Promise<void>) => void;
 }
 
-/** Creates the standard cancellation category for stale production capture work. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Requires the owning released production generation around each side-effect boundary. */
 function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void): void {
   if (signal.aborted) throw createAbortError();
   try {
@@ -60,12 +56,10 @@ function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void)
   if (signal.aborted) throw createAbortError();
 }
 
-/** Reports whether an unknown failure is the standard cancellation category. */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-/** Returns the exact lower-case path suffix beginning with its final dot. */
 function getPathSuffix(sourcePath: string): string | undefined {
   const fileName = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
   const dotIndex = fileName.lastIndexOf(".");
@@ -73,7 +67,6 @@ function getPathSuffix(sourcePath: string): string | undefined {
   return toWindowsPathKey(fileName.slice(dotIndex));
 }
 
-/** Proves that exactly one current production parser owns the candidate suffix. */
 function hasSingleParserOwner(
   suffix: string,
   profiles: readonly KnowledgeSourceParserProfile[]
@@ -85,38 +78,20 @@ function hasSingleParserOwner(
   );
 }
 
-/** Read-only Obsidian adapter that resolves only an exact existing Vault file. */
 export class ObsidianKnowledgeVaultSourcePresence implements KnowledgeVaultSourcePresencePort {
-  /** Creates a source-presence adapter without exposing file reads. */
   constructor(private readonly vault: Pick<Vault, "getAbstractFileByPath">) {}
 
-  /** Returns whether the exact Vault-relative path still names a file. */
   isFile(sourcePath: string): boolean {
     const file = this.vault.getAbstractFileByPath(sourcePath);
     return file instanceof TFile && file.path === sourcePath;
   }
 }
 
-/**
- * Generation-bound production adapter for explicit Chat Add-to-Knowledge choices.
- *
- * This adapter can register only an existing parser-supported Vault source under one uniquely
- * configured Bundle/root. It never attaches Chat context and never writes Queue
- * state directly; a fresh production generation performs authoritative ingest.
- */
 export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatCapturePort {
   private readonly draftSessions = new WeakSet<object>();
 
-  /** Creates one exact released-generation capture adapter. */
   constructor(private readonly input: KnowledgeProductionChatCaptureCoordinatorInput) {}
 
-  /**
-   * Durably registers one explicit Vault source and requests a full workflow rebuild.
-   *
-   * @param request - Opaque Chat request containing only a Vault-relative path
-   * @param signal - Linked caller and delegate-generation cancellation
-   * @returns Truthful Manifest registration receipt
-   */
   async addVaultSource(
     request: Readonly<KnowledgeChatCaptureRequest>,
     signal: AbortSignal
@@ -164,7 +139,6 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
     }
   }
 
-  /** Captures one exact current draft destination before the user starts editing. */
   prepareKnowledgeDraft(): Readonly<KnowledgeChatDraftSession> | null {
     try {
       this.input.assertCurrent();
@@ -180,13 +154,6 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
     }
   }
 
-  /**
-   * Persists one edited assistant response as a managed Markdown Source.
-   *
-   * A successful receipt proves only exclusive file publication and Manifest
-   * registration. The replacement generation still owns Activity, compilation,
-   * Review, and Apply; this method never writes Wiki files or Queue state.
-   */
   createKnowledgeDraft(
     session: Readonly<KnowledgeChatDraftSession>,
     request: Readonly<KnowledgeChatDraftRequest>,
@@ -202,7 +169,6 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
     return operation;
   }
 
-  /** Performs one retained, retry-safe draft publication and registration sequence. */
   private async performCreateKnowledgeDraft(
     session: Readonly<KnowledgeChatDraftSession>,
     request: Readonly<KnowledgeChatDraftRequest>,
@@ -218,6 +184,7 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
         this.input.onGenerationRefreshRequired();
       } catch {
         // Durable file/Manifest state wins; the next startup or exact replay converges it.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     };
 
@@ -320,7 +287,6 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
     }
   }
 
-  /** Requires exactly one production Bundle for implicit Chat capture. */
   private resolveOwner(): ConfiguredProjectKnowledgeBundle {
     if (this.input.owners.length !== 1) {
       throw new KnowledgeChatCaptureError("ambiguous_bundle");
@@ -328,7 +294,6 @@ export class KnowledgeProductionChatCaptureCoordinator implements KnowledgeChatC
     return this.input.owners[0];
   }
 
-  /** Requires exactly one source root so Chat never guesses a durable destination. */
   private resolveSourceRoot(owner: ConfiguredProjectKnowledgeBundle): string {
     if (owner.config.sourceRoots.length !== 1) {
       throw new KnowledgeChatCaptureError("ambiguous_source_root");

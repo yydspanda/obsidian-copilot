@@ -83,7 +83,6 @@ interface IngestExecutionClaimState {
 
 const ingestExecutionClaimStates = new WeakMap<object, IngestExecutionClaimState>();
 
-/** Returns hidden state only for a Queue-issued execution claim. */
 function requireIngestExecutionClaimState(value: unknown): IngestExecutionClaimState {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("The ingest execution claim is invalid");
@@ -95,16 +94,6 @@ function requireIngestExecutionClaimState(value: unknown): IngestExecutionClaimS
   return state;
 }
 
-/**
- * Creates one in-process claim owned by the exact Queue controller.
- *
- * @param job - Frozen durable processing attempt
- * @param signal - Queue-owned cancellation signal
- * @param reportStage - Exact reporter closed over the same Queue claim
- * @param storage - Exact persistence facade that issued the claim
- * @param isCurrent - Synchronous controller ownership check
- * @returns Opaque claim that cannot be reconstructed from the job DTO
- */
 function createIngestExecutionClaim(
   job: Readonly<ProcessingIngestJob>,
   signal: AbortSignal,
@@ -124,22 +113,11 @@ function createIngestExecutionClaim(
   return claim;
 }
 
-/** Revokes a claim synchronously before its Queue controller is released. */
 function revokeIngestExecutionClaim(claim: IngestExecutionClaim | undefined): void {
   if (!claim) return;
   requireIngestExecutionClaimState(claim).revoked = true;
 }
 
-/**
- * Compares an authentic claim with the exact QueueStorage instance that issued it.
- *
- * This narrow predicate lets the Runtime proof facade verify composition without
- * exposing the storage capability retained in Queue-private claim state.
- *
- * @param claim - Candidate Queue-issued execution claim
- * @param storage - Candidate exact Queue persistence facade
- * @returns Whether both identities belong to the same exact Queue storage facade
- */
 export function ingestExecutionClaimMatchesQueueStorage(claim: unknown, storage: unknown): boolean {
   try {
     return requireIngestExecutionClaimState(claim).storage === storage;
@@ -148,15 +126,7 @@ export function ingestExecutionClaimMatchesQueueStorage(claim: unknown, storage:
   }
 }
 
-/**
- * Queue-issued, process-local authority for one exact active ingest attempt.
- *
- * Durable consumers must still reprove this claim against Runtime state. The
- * capability only prevents a plain or frozen job DTO from impersonating the
- * Queue-owned controller and its exact AbortSignal.
- */
 export class IngestExecutionClaim {
-  /** Rejects direct construction without the module-private Queue token. */
   constructor(token: symbol) {
     if (token !== EXECUTION_CLAIM_TOKEN) {
       throw new TypeError("The ingest execution claim is invalid");
@@ -164,33 +134,18 @@ export class IngestExecutionClaim {
     Object.freeze(this);
   }
 
-  /** Requires an authentic Queue-issued claim. */
   static assert(value: unknown): asserts value is IngestExecutionClaim {
     requireIngestExecutionClaimState(value);
   }
 
-  /** Returns the exact immutable processing job captured by the Queue. */
   getJob(): Readonly<ProcessingIngestJob> {
     return requireIngestExecutionClaimState(this).job;
   }
 
-  /** Returns the Queue-owned signal; callers cannot substitute another signal. */
   getSignal(): AbortSignal {
     return requireIngestExecutionClaimState(this).signal;
   }
 
-  /**
-   * Checks that a proposed executor context is the exact Queue-issued triplet.
-   *
-   * The stage reporter is identity-bound because it closes over this claim and
-   * the Queue's active controller. A copied job DTO or substituted reporter
-   * therefore cannot be joined to an otherwise authentic claim.
-   *
-   * @param job - Candidate exact processing-job object
-   * @param signal - Candidate exact Queue AbortSignal
-   * @param reportStage - Candidate exact Queue stage reporter
-   * @returns Whether all three references belong to this active claim
-   */
   matchesExecutionContext(job: unknown, signal: unknown, reportStage: unknown): boolean {
     const state = requireIngestExecutionClaimState(this);
     return (
@@ -201,7 +156,6 @@ export class IngestExecutionClaim {
     );
   }
 
-  /** Reports whether the same local controller still owns this exact attempt. */
   isCurrent(): boolean {
     const state = requireIngestExecutionClaimState(this);
     if (state.revoked || state.signal.aborted) return false;
@@ -216,25 +170,22 @@ export class IngestExecutionClaim {
 Object.freeze(IngestExecutionClaim.prototype);
 Object.freeze(IngestExecutionClaim);
 
-/** Input required to enqueue one exact source and pipeline version. */
 export interface EnqueueIngestRequest {
   bundleId: string;
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
-  /** Durable, per-source monotonic revision allocated before enqueue. */
+
   inputRevision: number;
-  /** Opaque Runtime capability required by the production Queue adapter. */
+
   observationToken?: string;
 }
 
-/** Observable result of durable source-level enqueue deduplication. */
 export interface EnqueueIngestResult {
   kind: "enqueued" | "deduplicated" | "updated" | "rerun_scheduled";
   job: KnowledgeIngestJob;
 }
 
-/** Exact source observation submitted to the freshness admission boundary. */
 export interface IngestSourceFreshnessAdmissionRequest {
   bundleId: string;
   sourceId: string;
@@ -243,26 +194,14 @@ export interface IngestSourceFreshnessAdmissionRequest {
   inputRevision: number;
 }
 
-/** Identity-bound freshness result returned by the production admission adapter. */
 export interface IngestSourceFreshnessAdmission extends IngestSourceFreshnessAdmissionRequest {
   decision: SourceFreshnessDecision;
 }
 
-/** Read-only admission port that reproves whether terminal source output may be reused. */
 export interface IngestSourceFreshnessAdmissionPort {
-  /**
-   * Evaluates one detached exact observation against current durable output evidence.
-   *
-   * The return type is deliberately unknown: Queue owns descriptor-safe parsing,
-   * identity correlation, and fail-closed validation before any durable write.
-   *
-   * @param request - Frozen exact source observation being considered for reuse
-   * @returns Unknown adapter result to validate at the Queue trust boundary
-   */
   evaluate(request: Readonly<IngestSourceFreshnessAdmissionRequest>): Promise<unknown>;
 }
 
-/** Exact queue attempt retained by a durable terminal review record. */
 export interface IngestReviewDecisionJobClaim {
   jobId: string;
   sourceId: string;
@@ -272,7 +211,6 @@ export interface IngestReviewDecisionJobClaim {
   attempt: number;
 }
 
-/** Durable pending-record receipt required before a queue may await review. */
 export interface IngestPendingReviewDecisionReceipt {
   outcome: "pending";
   bundleId: string;
@@ -283,7 +221,6 @@ export interface IngestPendingReviewDecisionReceipt {
   jobClaim: IngestReviewDecisionJobClaim;
 }
 
-/** Durable accepted-record receipt required before review apply may begin. */
 export interface IngestAcceptedReviewDecisionReceipt {
   outcome: "accepted";
   bundleId: string;
@@ -296,7 +233,6 @@ export interface IngestAcceptedReviewDecisionReceipt {
   jobClaim: IngestReviewDecisionJobClaim;
 }
 
-/** Durable rejected-record receipt required before a review job may be cancelled. */
 export interface IngestRejectedReviewDecisionReceipt {
   outcome: "rejected";
   bundleId: string;
@@ -307,50 +243,39 @@ export interface IngestRejectedReviewDecisionReceipt {
   jobClaim: IngestReviewDecisionJobClaim;
 }
 
-/** Successful executor outcome that waits for review, changes nothing, or commits pages. */
 export type IngestExecutionResult =
   | {
       kind: "awaiting_review";
       changeSetId: string;
       reviewDecision: IngestPendingReviewDecisionReceipt;
     }
-  /** Terminal compile outcome that intentionally produced no file mutation. */
   | {
       kind: "no_changes";
       changeSetId: string;
-      /** Production-only exact Manifest read-set committed with Queue completion. */
+
       manifestCommitPlan?: NoChangesManifestCommitPlan;
-      /** Canonical identity of the exact no-change commit plan. */
+
       manifestCommitPlanDigest?: string;
     }
   | {
       kind: "completed";
       changeSetId: string;
-      /** Durable apply proof retained until manifest/queue/journal reconciliation finishes. */
+
       commitReceipt: TransactionCommitReceipt;
     };
 
-/** Context passed to a provider-neutral ingest executor. */
 export interface IngestExecutionContext {
   job: Readonly<ProcessingIngestJob>;
-  /** Opaque, revocable claim bound to this exact job and Queue AbortSignal. */
+
   executionClaim: IngestExecutionClaim;
   signal: AbortSignal;
   reportStage(stage: KnowledgeIngestWorkStage): Promise<void>;
 }
 
-/** Provider-neutral port that performs one already-claimed ingest job. */
 export interface IngestExecutor {
-  /**
-   * Executes one job and cooperatively observes cancellation.
-   *
-   * @param context - Claimed job, abort signal, and durable stage reporter
-   * @returns Review or committed completion outcome
-   */
   execute(context: IngestExecutionContext): Promise<IngestExecutionResult>;
 }
 
-/** Serializable failure details deliberately supplied by an executor adapter. */
 export interface IngestExecutorFailureDetails {
   code: string;
   message: string;
@@ -361,14 +286,7 @@ export interface IngestExecutorFailureDetails {
 
 const ingestExecutorErrorSignals = new WeakMap<object, AbortSignal>();
 
-/** Typed executor failure safe for retry classification and persistence. */
 export class IngestExecutorError extends Error {
-  /**
-   * Creates a structured executor failure.
-   *
-   * @param details - Serializable failure and rate-limit metadata
-   * @param signal - Exact Queue-owned signal for the current execution attempt
-   */
   constructor(
     public readonly details: IngestExecutorFailureDetails,
     signal: AbortSignal
@@ -382,7 +300,6 @@ export class IngestExecutorError extends Error {
   }
 }
 
-/** Cause attached to a post-commit queue notification. */
 export type IngestQueueEventCause =
   | "enqueue"
   | "deduplicate"
@@ -404,7 +321,6 @@ export type IngestQueueEventCause =
   | "apply_commit_pending"
   | "apply_commit_finalized";
 
-/** Best-effort notification emitted only after durable state is known. */
 export interface IngestQueueEvent {
   type: "queue_changed";
   cause: IngestQueueEventCause;
@@ -413,17 +329,10 @@ export interface IngestQueueEvent {
   jobId?: string;
 }
 
-/** Non-authoritative notification port for future UI and activity surfaces. */
 export interface EventSink {
-  /**
-   * Observes a committed queue mutation without owning queue state.
-   *
-   * @param event - Post-commit reload hint
-   */
   emit(event: IngestQueueEvent): void | Promise<void>;
 }
 
-/** Exact user-authored Activity command bound to one observed Queue revision. */
 export type IngestQueueActivityCommand =
   | {
       kind: "pause_bundle";
@@ -445,25 +354,22 @@ export type IngestQueueActivityCommand =
       expectedQueueRevision: number;
     };
 
-/** Durable outcome of one exact Activity command. */
 export interface IngestQueueActivityCommandResult {
   kind: "committed" | "unchanged";
   command: IngestQueueActivityCommand["kind"];
   snapshot: IngestQueueSnapshot;
 }
 
-/** Queue construction dependencies with deterministic test seams. */
 export interface IngestQueueOptions {
   clock?: () => number;
   jobIdFactory?: () => string;
   retryPolicy?: RetryPolicy;
   eventSink?: EventSink;
-  /** Optional compatibility seam; production enqueue composition injects this port. */
+
   sourceFreshnessAdmission?: IngestSourceFreshnessAdmissionPort;
   maxWriteAttempts?: number;
 }
 
-/** Result returned when the queue attempts to execute one eligible job. */
 export type RunNextResult =
   | { kind: "idle" }
   | { kind: "paused"; reason: IngestQueuePauseReason; resumeAt?: number }
@@ -483,14 +389,7 @@ export type RunNextResult =
       generationEffect?: "manifest_no_changes_committed";
     };
 
-/** Reports persisted queue JSON that cannot satisfy the current contract. */
 export class IngestQueueValidationError extends Error {
-  /**
-   * Creates a queue validation failure without retaining raw persisted data.
-   *
-   * @param bundleId - Bundle whose queue failed validation
-   * @param diagnostics - Stable structural or semantic issues
-   */
   constructor(
     public readonly bundleId: string,
     public readonly diagnostics: readonly KnowledgeDiagnostic[]
@@ -500,14 +399,7 @@ export class IngestQueueValidationError extends Error {
   }
 }
 
-/** Reports a persisted queue version that this runtime cannot safely read. */
 export class IngestQueueIncompatibleVersionError extends Error {
-  /**
-   * Creates an incompatible queue version failure.
-   *
-   * @param bundleId - Bundle whose queue uses an unsupported version
-   * @param version - Unknown persisted version value
-   */
   constructor(
     public readonly bundleId: string,
     public readonly version: unknown
@@ -517,14 +409,7 @@ export class IngestQueueIncompatibleVersionError extends Error {
   }
 }
 
-/** Reports a storage key whose queue claims to belong to another Bundle. */
 export class IngestQueueBundleMismatchError extends Error {
-  /**
-   * Creates a Bundle identity mismatch.
-   *
-   * @param requestedBundleId - Bundle used to read storage
-   * @param storedBundleId - Bundle declared by persisted queue state
-   */
   constructor(
     public readonly requestedBundleId: string,
     public readonly storedBundleId: string
@@ -534,14 +419,7 @@ export class IngestQueueBundleMismatchError extends Error {
   }
 }
 
-/** Reports a terminal review receipt loaded from another Bundle. */
 export class IngestQueueReviewBundleMismatchError extends Error {
-  /**
-   * Creates a review-to-queue Bundle mismatch.
-   *
-   * @param requestedBundleId - Queue Bundle receiving the decision
-   * @param reviewBundleId - Bundle that owns the durable Review Store record
-   */
   constructor(
     public readonly requestedBundleId: string,
     public readonly reviewBundleId: string
@@ -551,14 +429,7 @@ export class IngestQueueReviewBundleMismatchError extends Error {
   }
 }
 
-/** Reports a queue revision that cannot advance without precision loss. */
 export class IngestQueueRevisionOverflowError extends Error {
-  /**
-   * Creates a safe-integer revision overflow failure.
-   *
-   * @param bundleId - Bundle whose revision reached the safe integer limit
-   * @param revision - Last safely represented revision
-   */
   constructor(
     public readonly bundleId: string,
     public readonly revision: number
@@ -568,15 +439,7 @@ export class IngestQueueRevisionOverflowError extends Error {
   }
 }
 
-/** Reports optimistic write conflicts that exceeded bounded retries. */
 export class IngestQueueWriteConflictExhaustedError extends Error {
-  /**
-   * Creates an exhausted queue write conflict.
-   *
-   * @param bundleId - Bundle whose queue could not converge
-   * @param attempts - Attempted read-transform-write cycles
-   * @param conflict - Last observed storage conflict
-   */
   constructor(
     public readonly bundleId: string,
     public readonly attempts: number,
@@ -587,14 +450,7 @@ export class IngestQueueWriteConflictExhaustedError extends Error {
   }
 }
 
-/** Reports an operation targeting an unknown durable job id. */
 export class IngestQueueJobNotFoundError extends Error {
-  /**
-   * Creates a missing queue job failure.
-   *
-   * @param bundleId - Bundle expected to contain the job
-   * @param jobId - Missing job identifier
-   */
   constructor(
     public readonly bundleId: string,
     public readonly jobId: string
@@ -604,15 +460,7 @@ export class IngestQueueJobNotFoundError extends Error {
   }
 }
 
-/** Reports a fail-closed illegal queue state transition. */
 export class IngestQueueTransitionError extends Error {
-  /**
-   * Creates an illegal state transition failure.
-   *
-   * @param jobId - Durable job identifier
-   * @param from - Current persisted status and stage
-   * @param action - Rejected operation
-   */
   constructor(
     public readonly jobId: string,
     public readonly from: string,
@@ -623,14 +471,7 @@ export class IngestQueueTransitionError extends Error {
   }
 }
 
-/** Reports a non-empty id factory collision with persisted queue history. */
 export class IngestQueueJobIdConflictError extends Error {
-  /**
-   * Creates a generated job id collision.
-   *
-   * @param bundleId - Bundle containing the conflicting id
-   * @param jobId - Generated duplicate id
-   */
   constructor(
     public readonly bundleId: string,
     public readonly jobId: string
@@ -640,15 +481,7 @@ export class IngestQueueJobIdConflictError extends Error {
   }
 }
 
-/** Reports distinct source inputs that claim the same monotonic input revision. */
 export class IngestQueueObservationConflictError extends Error {
-  /**
-   * Creates an unordered same-time source observation conflict.
-   *
-   * @param bundleId - Bundle containing the source
-   * @param sourceId - Stable source identifier
-   * @param inputRevision - Source revision shared by different exact inputs
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -659,14 +492,7 @@ export class IngestQueueObservationConflictError extends Error {
   }
 }
 
-/** Reports malformed or identity-conflicting source freshness admission data. */
 export class IngestQueueFreshnessAdmissionError extends Error {
-  /**
-   * Creates a freshness admission boundary failure without retaining raw adapter data.
-   *
-   * @param bundleId - Bundle whose source reuse could not be authorized
-   * @param sourceId - Source whose exact output freshness was being evaluated
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string
@@ -676,40 +502,21 @@ export class IngestQueueFreshnessAdmissionError extends Error {
   }
 }
 
-/** Reports a queue blocked on a future recoverable apply transaction. */
 export class IngestQueueRecoveryRequiredError extends Error {
-  /**
-   * Creates a recovery-required queue gate failure.
-   *
-   * @param bundleId - Bundle whose interrupted apply is not safe to resume
-   */
   constructor(public readonly bundleId: string) {
     super(`Bundle queue '${bundleId}' requires apply transaction recovery before resume`);
     this.name = "IngestQueueRecoveryRequiredError";
   }
 }
 
-/** Reports an attempt to bypass the shared-runtime startup release authority. */
 export class IngestQueueStartupReleaseRequiredError extends Error {
-  /**
-   * Creates a startup conditional-release gate failure.
-   *
-   * @param bundleId - Bundle whose startup pause requires atomic Runtime release
-   */
   constructor(public readonly bundleId: string) {
     super(`Bundle queue '${bundleId}' requires atomic startup release before resume`);
     this.name = "IngestQueueStartupReleaseRequiredError";
   }
 }
 
-/** Reports an apply receipt that cannot own the selected durable queue job. */
 export class IngestQueueApplyCommitConflictError extends Error {
-  /**
-   * Creates an apply-commit correlation failure.
-   *
-   * @param bundleId - Bundle whose receipt cannot be reconciled
-   * @param jobId - Job claimed by the receipt
-   */
   constructor(
     public readonly bundleId: string,
     public readonly jobId: string
@@ -719,27 +526,14 @@ export class IngestQueueApplyCommitConflictError extends Error {
   }
 }
 
-/** Reports a queue still waiting for its committed journal to be acknowledged. */
 export class IngestQueueApplyCommitPendingError extends Error {
-  /**
-   * Creates a commit-pending execution gate failure.
-   *
-   * @param bundleId - Bundle whose journal acknowledgement is incomplete
-   */
   constructor(public readonly bundleId: string) {
     super(`Bundle queue '${bundleId}' is waiting for apply journal acknowledgement`);
     this.name = "IngestQueueApplyCommitPendingError";
   }
 }
 
-/** Reports an applying execution that did not provide durable transaction proof. */
 export class IngestQueueApplyReceiptRequiredError extends Error {
-  /**
-   * Creates a missing or misplaced apply-receipt protocol failure.
-   *
-   * @param bundleId - Bundle whose applying claim cannot be completed safely
-   * @param jobId - Exact queue job at the applying boundary
-   */
   constructor(
     public readonly bundleId: string,
     public readonly jobId: string
@@ -749,14 +543,7 @@ export class IngestQueueApplyReceiptRequiredError extends Error {
   }
 }
 
-/** Reports queue persistence failures separately from executor failures. */
 export class IngestQueueInfrastructureError extends Error {
-  /**
-   * Creates an infrastructure boundary failure that must not be persisted as a provider error.
-   *
-   * @param operation - Queue infrastructure operation that failed
-   * @param cause - Original storage, validation, or concurrency error
-   */
   constructor(
     public readonly operation: string,
     public readonly cause: unknown
@@ -766,24 +553,14 @@ export class IngestQueueInfrastructureError extends Error {
   }
 }
 
-/** Reports an execution/enqueue request after the owning workflow generation closed. */
 export class IngestQueueClosedError extends Error {
-  /** Creates one value-free lifecycle closure failure. */
   constructor() {
     super("The ingest queue execution generation is closed");
     this.name = "IngestQueueClosedError";
   }
 }
 
-/** Reports an Activity command issued from a stale durable Queue projection. */
 export class IngestQueueActivityCommandStaleError extends Error {
-  /**
-   * Creates an exact Queue revision conflict without retaining command content.
-   *
-   * @param bundleId - Bundle whose Queue changed
-   * @param expectedQueueRevision - Revision observed by Knowledge Studio
-   * @param actualQueueRevision - Revision observed at the command boundary
-   */
   constructor(
     public readonly bundleId: string,
     public readonly expectedQueueRevision: number,
@@ -856,26 +633,10 @@ interface ExactClaimRecoveryValue {
   kind: "recovered" | "stale";
 }
 
-/**
- * Checks whether an unknown value is a non-null record.
- *
- * @param value - Runtime value to inspect
- * @returns Whether fields can be read safely
- */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Snapshots one plain record entirely through own enumerable data descriptors.
- *
- * Each untrusted descriptor is read exactly once. The returned null-prototype
- * record is detached from accessors and proxies before any semantic validation
- * or durable finalization can observe it again.
- *
- * @param value - Unknown executor-owned value
- * @returns Frozen data-only record, or undefined for any exotic shape
- */
 function snapshotDataRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -908,13 +669,6 @@ function snapshotDataRecord(value: unknown): Readonly<Record<string, unknown>> |
   }
 }
 
-/**
- * Checks whether a detached record has exactly one expected string-key set.
- *
- * @param value - Trusted record returned by snapshotDataRecord
- * @param expected - Complete contract field set
- * @returns Whether no required or unexpected field is present
- */
 function hasExactDataKeys(
   value: Readonly<Record<string, unknown>>,
   expected: readonly string[]
@@ -927,12 +681,6 @@ function hasExactDataKeys(
   );
 }
 
-/**
- * Snapshots a dense executor-owned array without iteration or property reads.
- *
- * @param value - Unknown array candidate
- * @returns Frozen detached element-reference array, or undefined when malformed
- */
 function snapshotDenseDataArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -966,37 +714,14 @@ function snapshotDenseDataArray(value: unknown): readonly unknown[] | undefined 
   }
 }
 
-/**
- * Reports whether a job remains eligible for source-level deduplication.
- *
- * @param job - Durable queue job
- * @returns Whether the job is non-terminal
- */
 function isActiveJob(job: KnowledgeIngestJob): boolean {
   return !["failed", "completed", "cancelled"].includes(job.status);
 }
 
-/**
- * Returns a stable status/stage label for transition errors.
- *
- * @param job - Durable queue job
- * @returns Combined state label
- */
 function jobState(job: KnowledgeIngestJob): string {
   return `${job.status}/${job.stage}`;
 }
 
-/**
- * Checks whether processing state still belongs to one exact claimed execution.
- *
- * Attempt is incremented on every durable claim, so it prevents a late result
- * from an aborted predecessor from finalizing a subsequently resumed attempt.
- *
- * @param job - Current durable job state
- * @param attempt - Completed-execution count captured at claim time
- * @param startedAt - Start timestamp captured at claim time
- * @returns Whether the current processing state is the same claim
- */
 function isSameClaim(
   job: KnowledgeIngestJob,
   attempt: number,
@@ -1005,13 +730,6 @@ function isSameClaim(
   return job.status === "processing" && job.attempt === attempt && job.startedAt === startedAt;
 }
 
-/**
- * Finds a durable job or throws a typed not-found error.
- *
- * @param snapshot - Current validated queue snapshot
- * @param jobId - Stable job identifier
- * @returns Matching durable job
- */
 function requireJob(snapshot: IngestQueueSnapshot, jobId: string): KnowledgeIngestJob {
   const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
   if (!job) {
@@ -1020,13 +738,6 @@ function requireJob(snapshot: IngestQueueSnapshot, jobId: string): KnowledgeInge
   return job;
 }
 
-/**
- * Replaces one durable job without mutating the parsed snapshot.
- *
- * @param snapshot - Current validated queue snapshot
- * @param nextJob - Complete replacement job
- * @returns Immutable queue proposal
- */
 function replaceJob(
   snapshot: IngestQueueSnapshot,
   nextJob: KnowledgeIngestJob
@@ -1037,12 +748,6 @@ function replaceJob(
   };
 }
 
-/**
- * Creates an empty, unpersisted Bundle queue.
- *
- * @param bundleId - Stable Bundle identifier
- * @returns Revision-zero running queue
- */
 function createEmptyQueue(bundleId: string): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -1058,13 +763,6 @@ function createEmptyQueue(bundleId: string): IngestQueueSnapshot {
   };
 }
 
-/**
- * Checks whether a job matches one exact source and pipeline input.
- *
- * @param job - Durable queue job
- * @param request - Requested source input
- * @returns Whether both behavior-defining hashes match
- */
 function jobMatchesRequest(job: KnowledgeIngestJob, request: EnqueueIngestRequest): boolean {
   return (
     job.sourceContentHash === request.sourceContentHash &&
@@ -1072,13 +770,6 @@ function jobMatchesRequest(job: KnowledgeIngestJob, request: EnqueueIngestReques
   );
 }
 
-/**
- * Checks whether a rerun payload matches one exact source and pipeline input.
- *
- * @param rerun - Durable latest rerun request
- * @param request - Requested source input
- * @returns Whether both behavior-defining hashes match
- */
 function rerunMatchesRequest(rerun: IngestRerunRequest, request: EnqueueIngestRequest): boolean {
   return (
     rerun.sourceContentHash === request.sourceContentHash &&
@@ -1086,15 +777,6 @@ function rerunMatchesRequest(rerun: IngestRerunRequest, request: EnqueueIngestRe
   );
 }
 
-/**
- * Checks whether a freshness decision still reports generated-output drift.
- *
- * Source or pipeline reasons may legitimately compile to no target changes;
- * only output evidence makes a no-change repair result self-contradictory.
- *
- * @param decision - Strictly parsed freshness decision
- * @returns Whether at least one generated output remains stale or unverifiable
- */
 function hasOutputRepairStaleReason(decision: SourceFreshnessDecision): boolean {
   return (
     decision.kind === "needs_ingest" &&
@@ -1102,17 +784,6 @@ function hasOutputRepairStaleReason(decision: SourceFreshnessDecision): boolean 
   );
 }
 
-/**
- * Checks whether one terminal failure is the unresolved repair blocker for a high-watermark.
- *
- * Keeping the blocker bound to the exact high-watermark suppresses automatic
- * restart loops. A later up-to-date observation advances the high-watermark,
- * settling this blocker without rewriting terminal history.
- *
- * @param job - Latest durable source job
- * @param highWatermark - Current exact source observation
- * @returns Whether the same input already terminated as an unresolved output repair
- */
 function isCurrentOutputRepairBlocker(
   job: KnowledgeIngestJob,
   highWatermark: IngestSourceHighWatermark
@@ -1126,13 +797,6 @@ function isCurrentOutputRepairBlocker(
   );
 }
 
-/**
- * Checks whether a source high-watermark represents the requested compile input.
- *
- * @param highWatermark - Latest durable observation for one source
- * @param request - Candidate source observation
- * @returns Whether content and pipeline identity are unchanged
- */
 function highWatermarkMatchesRequest(
   highWatermark: IngestSourceHighWatermark,
   request: EnqueueIngestRequest
@@ -1143,14 +807,6 @@ function highWatermarkMatchesRequest(
   );
 }
 
-/**
- * Records one strictly newer source observation outside any claimed job identity.
- *
- * @param snapshot - Current validated queue state
- * @param request - New highest source observation
- * @param timestamp - Validated observation time
- * @returns Snapshot containing the replaced or appended high-watermark
- */
 function recordSourceHighWatermark(
   snapshot: IngestQueueSnapshot,
   request: EnqueueIngestRequest,
@@ -1176,13 +832,6 @@ function recordSourceHighWatermark(
   };
 }
 
-/**
- * Finds the newest retained job for a source high-watermark result.
- *
- * @param snapshot - Current validated queue state
- * @param sourceId - Source whose observation was deduplicated
- * @returns Newest retained job for the source
- */
 function requireLatestSourceJob(
   snapshot: IngestQueueSnapshot,
   sourceId: string
@@ -1208,14 +857,6 @@ function requireLatestSourceJob(
   return job;
 }
 
-/**
- * Converts a reserved rerun payload into one new pending job.
- *
- * @param bundleId - Containing Bundle identity
- * @param rerun - Latest durable rerun input
- * @param timestamp - Non-regressing promotion timestamp
- * @returns Pending job with a fresh attempt budget
- */
 function createJobFromRerun(
   bundleId: string,
   rerun: IngestRerunRequest,
@@ -1237,14 +878,6 @@ function createJobFromRerun(
   };
 }
 
-/**
- * Promotes a latest rerun payload after its predecessor becomes terminal.
- *
- * @param snapshot - Snapshot already containing the terminal predecessor
- * @param sourceId - Source whose rerun may be promoted
- * @param timestamp - Non-regressing promotion timestamp
- * @returns Queue with zero or one newly pending rerun job
- */
 function promoteRerun(
   snapshot: IngestQueueSnapshot,
   sourceId: string,
@@ -1264,20 +897,6 @@ function promoteRerun(
   };
 }
 
-/**
- * Retires output-repair work already satisfied by a successful Apply.
- *
- * When the latest source high-watermark still names the committed source bytes
- * and pipeline, an unstarted successor and its rerun only exist to repair the
- * output that Apply has just rebuilt. They become cancelled/removed together.
- * A divergent latest source or pipeline remains new compile work and follows
- * the ordinary promotion rules.
- *
- * @param snapshot - Snapshot already containing the completed Apply job
- * @param appliedJob - Exact job whose transaction committed successfully
- * @param timestamp - Non-regressing promotion timestamp
- * @returns Queue with a divergent rerun promoted or a satisfied repair removed
- */
 function settleRerunAfterSuccessfulApply(
   snapshot: IngestQueueSnapshot,
   appliedJob: KnowledgeIngestJob,
@@ -1329,36 +948,18 @@ function settleRerunAfterSuccessfulApply(
   return promoteRerun(snapshot, appliedJob.sourceId, timestamp);
 }
 
-/**
- * Requires a non-whitespace identifier at the queue boundary.
- *
- * @param value - Identifier supplied by orchestration
- * @param field - Field name used by the thrown error
- */
 function assertIdentifier(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must contain non-whitespace text`);
   }
 }
 
-/**
- * Requires one exact, non-negative Queue revision without numeric coercion.
- *
- * @param value - Revision supplied by an Activity projection
- * @param field - Field name used by the thrown error
- */
 function assertQueueRevision(value: unknown, field: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new TypeError(`${field} must be a non-negative safe integer`);
   }
 }
 
-/**
- * Detaches and validates one Activity command before it reaches Queue state.
- *
- * @param value - Command supplied by the Studio orchestration boundary
- * @returns Frozen command containing only the supported authority fields
- */
 function snapshotActivityCommand(value: unknown): Readonly<IngestQueueActivityCommand> {
   const command = snapshotDataRecord(value);
   if (!command) {
@@ -1398,17 +999,6 @@ function snapshotActivityCommand(value: unknown): Readonly<IngestQueueActivityCo
   }
 }
 
-/**
- * Compares complete validated Queue snapshots independently of key insertion order.
- *
- * The revision participates in this proof. A later snapshot that merely appears
- * to contain the requested effect is not sufficient to acknowledge an ambiguous
- * write as this exact command.
- *
- * @param left - First strict Queue snapshot
- * @param right - Second strict Queue snapshot
- * @returns Whether both are the same complete durable candidate
- */
 function sameQueueSnapshot(left: IngestQueueSnapshot, right: IngestQueueSnapshot): boolean {
   return (
     canonicalizeJson(left as unknown as JsonValue) ===
@@ -1416,24 +1006,12 @@ function sameQueueSnapshot(left: IngestQueueSnapshot, right: IngestQueueSnapshot
   );
 }
 
-/**
- * Requires a lowercase SHA-256 value at the queue boundary.
- *
- * @param value - Hash supplied by orchestration
- * @param field - Field name used by the thrown error
- */
 function assertHash(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || !HASH_PATTERN.test(value)) {
     throw new TypeError(`${field} must be a lowercase SHA-256 hex digest`);
   }
 }
 
-/**
- * Detaches an enqueue request before any asynchronous storage or admission work.
- *
- * @param value - Source observation supplied by orchestration
- * @returns Frozen exact request with no accessor or caller-mutation authority
- */
 function snapshotEnqueueIngestRequest(value: unknown): Readonly<EnqueueIngestRequest> {
   const request = snapshotDataRecord(value);
   const keys = request ? Object.keys(request) : [];
@@ -1475,12 +1053,6 @@ function snapshotEnqueueIngestRequest(value: unknown): Readonly<EnqueueIngestReq
   });
 }
 
-/**
- * Builds the frozen identity sent to a freshness admission adapter.
- *
- * @param request - Detached enqueue observation
- * @returns Exact identity without the Queue storage capability
- */
 function createSourceFreshnessAdmissionRequest(
   request: Readonly<EnqueueIngestRequest>
 ): Readonly<IngestSourceFreshnessAdmissionRequest> {
@@ -1493,13 +1065,6 @@ function createSourceFreshnessAdmissionRequest(
   });
 }
 
-/**
- * Parses and correlates unknown freshness admission data without invoking getters.
- *
- * @param value - Unknown adapter result
- * @param request - Exact identity the Queue submitted for evaluation
- * @returns Frozen, detached, identity-bound admission
- */
 function snapshotSourceFreshnessAdmission(
   value: unknown,
   request: Readonly<IngestSourceFreshnessAdmissionRequest>
@@ -1562,11 +1127,6 @@ function snapshotSourceFreshnessAdmission(
   return Object.freeze({ ...request, decision });
 }
 
-/**
- * Recursively freezes one detached JSON-compatible Queue result.
- *
- * @param value - Detached data node to freeze in place
- */
 function freezeDetachedData(value: unknown): void {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
     return;
@@ -1577,24 +1137,12 @@ function freezeDetachedData(value: unknown): void {
   Object.freeze(value);
 }
 
-/**
- * Clones and freezes a validated durable job before exposing it to a caller.
- *
- * @param job - Job selected from a detached validated Queue snapshot
- * @returns Deeply frozen JSON clone
- */
 function snapshotEnqueueResultJob(job: KnowledgeIngestJob): KnowledgeIngestJob {
   const detached = JSON.parse(canonicalizeJson(job as unknown as JsonValue)) as KnowledgeIngestJob;
   freezeDetachedData(detached);
   return detached;
 }
 
-/**
- * Snapshots and validates the queue claim carried by a durable review decision.
- *
- * @param value - Unknown claim supplied by the review orchestration boundary
- * @returns Detached exact queue-attempt identity
- */
 function snapshotReviewDecisionJobClaim(value: unknown): IngestReviewDecisionJobClaim {
   const claim = snapshotDataRecord(value);
   if (
@@ -1630,12 +1178,6 @@ function snapshotReviewDecisionJobClaim(value: unknown): IngestReviewDecisionJob
   });
 }
 
-/**
- * Snapshots the pending fields proven by a strict durable Review Store record.
- *
- * @param value - Runtime receipt supplied by the ingest executor
- * @returns Detached pending decision identity
- */
 function snapshotPendingReviewDecision(value: unknown): IngestPendingReviewDecisionReceipt {
   const decision = snapshotDataRecord(value);
   if (
@@ -1673,12 +1215,6 @@ function snapshotPendingReviewDecision(value: unknown): IngestPendingReviewDecis
   });
 }
 
-/**
- * Snapshots the accepted fields proven by a strict durable Review Store record.
- *
- * @param value - Runtime receipt supplied by review orchestration
- * @returns Detached accepted decision identity
- */
 function snapshotAcceptedReviewDecision(value: unknown): IngestAcceptedReviewDecisionReceipt {
   if (!isRecord(value) || value.outcome !== "accepted") {
     throw new TypeError("reviewDecision must be a durable accepted record");
@@ -1707,12 +1243,6 @@ function snapshotAcceptedReviewDecision(value: unknown): IngestAcceptedReviewDec
   });
 }
 
-/**
- * Snapshots the rejected fields proven by a strict durable Review Store record.
- *
- * @param value - Runtime receipt supplied by review orchestration
- * @returns Detached rejected decision identity
- */
 function snapshotRejectedReviewDecision(value: unknown): IngestRejectedReviewDecisionReceipt {
   if (!isRecord(value) || value.outcome !== "rejected") {
     throw new TypeError("reviewDecision must be a durable rejected record");
@@ -1737,13 +1267,6 @@ function snapshotRejectedReviewDecision(value: unknown): IngestRejectedReviewDec
   });
 }
 
-/**
- * Checks whether a durable job is owned by one exact Review Store claim.
- *
- * @param job - Current queue job
- * @param claim - Review decision's queue-attempt identity
- * @returns Whether every immutable job field matches
- */
 function jobMatchesReviewDecisionClaim(
   job: KnowledgeIngestJob,
   claim: IngestReviewDecisionJobClaim
@@ -1758,11 +1281,6 @@ function jobMatchesReviewDecisionClaim(
   );
 }
 
-/**
- * Validates the receipt fields needed for durable queue reconciliation.
- *
- * @param value - Runtime receipt returned by the ChangeSet transaction layer
- */
 function assertTransactionCommitReceipt(value: unknown): asserts value is TransactionCommitReceipt {
   const jobClaim = isRecord(value) && isRecord(value.jobClaim) ? value.jobClaim : null;
   if (
@@ -1815,12 +1333,6 @@ function assertTransactionCommitReceipt(value: unknown): asserts value is Transa
   }
 }
 
-/**
- * Snapshots one transaction target without retaining executor-owned objects.
- *
- * @param value - Unknown committed-target candidate
- * @returns Frozen exact target identity
- */
 function snapshotTransactionCommittedTarget(
   value: unknown
 ): TransactionCommitReceipt["targets"][number] {
@@ -1843,12 +1355,6 @@ function snapshotTransactionCommittedTarget(
   return Object.freeze({ path: target.path, kind: "file", contentHash: target.contentHash });
 }
 
-/**
- * Creates a deeply detached transaction receipt from executor-owned data.
- *
- * @param value - Unknown transaction proof returned by an executor
- * @returns Deeply frozen receipt safe to retain and return to coordination
- */
 function snapshotTransactionCommitReceipt(value: unknown): TransactionCommitReceipt {
   const receipt = snapshotDataRecord(value);
   if (
@@ -1908,12 +1414,6 @@ function snapshotTransactionCommitReceipt(value: unknown): TransactionCommitRece
   return snapshot;
 }
 
-/**
- * Extracts the queue-owned durable marker from a committed transaction receipt.
- *
- * @param receipt - Strictly validated transaction commit receipt
- * @returns Marker retained until the journal slot is durably cleared
- */
 function createApplyCommitMarker(receipt: TransactionCommitReceipt): IngestApplyCommitMarker {
   return {
     transactionId: receipt.transactionId,
@@ -1931,13 +1431,6 @@ function createApplyCommitMarker(receipt: TransactionCommitReceipt): IngestApply
   };
 }
 
-/**
- * Compares all queue-persisted receipt correlation fields.
- *
- * @param left - Existing durable apply marker
- * @param right - Candidate marker derived from a receipt
- * @returns Whether both markers identify one exact commit
- */
 function sameApplyCommitMarker(
   left: IngestApplyCommitMarker,
   right: IngestApplyCommitMarker
@@ -1958,13 +1451,6 @@ function sameApplyCommitMarker(
   );
 }
 
-/**
- * Captures the exact applying claim when work crosses the durable write boundary.
- *
- * @param job - Durable processing job at the applying boundary
- * @param reviewedChangeSet - Optional exact reviewed payload that this claim may apply
- * @returns Claim marker retained until coordinated commit completion
- */
 function createApplyClaimMarker(
   job: ProcessingIngestJob,
   reviewedChangeSet?: IngestReviewedChangeSetIdentity,
@@ -1983,13 +1469,6 @@ function createApplyClaimMarker(
   };
 }
 
-/**
- * Checks one queue job against every immutable field in a committed apply marker.
- *
- * @param job - Durable queue job
- * @param marker - Marker derived from transaction commit proof
- * @returns Whether the transaction belongs to the exact queue input and attempt
- */
 function jobMatchesApplyMarker(job: KnowledgeIngestJob, marker: IngestApplyCommitMarker): boolean {
   return (
     job.id === marker.jobId &&
@@ -2001,13 +1480,6 @@ function jobMatchesApplyMarker(job: KnowledgeIngestJob, marker: IngestApplyCommi
   );
 }
 
-/**
- * Compares a retained applying claim with one committed transaction marker.
- *
- * @param claim - Exact claim captured at the applying boundary
- * @param committed - Exact claim carried by the committed transaction
- * @returns Whether both claims identify the same applying execution
- */
 function applyClaimMatchesCommit(
   claim: IngestApplyClaimMarker,
   committed: IngestApplyCommitMarker
@@ -2026,16 +1498,6 @@ function applyClaimMatchesCommit(
   );
 }
 
-/**
- * Proves that one committed receipt can safely own the current durable queue state.
- *
- * This read-only check is shared by pre-manifest verification and the later
- * marker mutation so identity rules cannot drift between the two phases.
- *
- * @param snapshot - Current validated Bundle queue
- * @param marker - Commit marker derived from the exact transaction receipt
- * @returns Queue job owned by the committed transaction
- */
 function requireApplyRecoveryJob(
   snapshot: IngestQueueSnapshot,
   marker: IngestApplyCommitMarker
@@ -2071,13 +1533,6 @@ function requireApplyRecoveryJob(
   return job;
 }
 
-/**
- * Adds a validated delay without exceeding JavaScript's exact integer range.
- *
- * @param timestamp - Non-negative safe-integer timestamp
- * @param delayMs - Non-negative safe-integer delay
- * @returns Saturated safe-integer timestamp
- */
 function addSafeDelay(timestamp: number, delayMs: number): number {
   if (delayMs > Number.MAX_SAFE_INTEGER - timestamp) {
     return Number.MAX_SAFE_INTEGER;
@@ -2085,13 +1540,6 @@ function addSafeDelay(timestamp: number, delayMs: number): number {
   return timestamp + delayMs;
 }
 
-/**
- * Persists and executes isolated durable ingest queues for knowledge Bundles.
- *
- * Storage CAS protects independent queue instances. Per-Bundle mutexes only
- * serialize operations within this object; executor work always runs outside
- * the mutex so user pause and cancellation remain responsive.
- */
 export class IngestQueue {
   private readonly clock: () => number;
   private readonly jobIdFactory: () => string;
@@ -2103,13 +1551,6 @@ export class IngestQueue {
   private readonly activeControllers = new Map<string, ActiveController>();
   private executionClosed = false;
 
-  /**
-   * Creates a queue over injected persistence and execution ports.
-   *
-   * @param storage - Complete queue snapshot persistence port
-   * @param executor - Provider-neutral work executor
-   * @param options - Deterministic clock, ids, retries, events, and CAS bound
-   */
   constructor(
     private readonly storage: QueueStorage,
     private readonly executor: IngestExecutor,
@@ -2140,13 +1581,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Synchronously closes this execution generation and aborts only safe active work.
-   *
-   * Applying is protected before its first asynchronous boundary and therefore
-   * continues to a commit/recovery point. Every other exact Queue controller is
-   * marked for lifecycle recovery before its signal is aborted.
-   */
   close(): void {
     if (this.executionClosed) return;
     this.executionClosed = true;
@@ -2158,28 +1592,12 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Loads and validates one Bundle queue without creating storage eagerly.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Detached persisted state or an empty revision-zero queue
-   */
   async load(bundleId: string): Promise<IngestQueueSnapshot> {
     assertIdentifier(bundleId, "bundleId");
     const loaded = await this.loadForMutation(bundleId);
     return this.cloneValidatedSnapshot(bundleId, loaded.snapshot);
   }
 
-  /**
-   * Enqueues one source version with source-level deduplication.
-   *
-   * Pending inputs are updated in place before their first execution. If an
-   * older input is processing or awaiting review, only one latest rerun payload
-   * is retained durably regardless of how many further source changes arrive.
-   *
-   * @param request - Exact source and pipeline input to schedule
-   * @returns Durable enqueue, update, rerun, or deduplication result
-   */
   async enqueue(candidateRequest: EnqueueIngestRequest): Promise<EnqueueIngestResult> {
     this.assertExecutionOpen();
     const request = snapshotEnqueueIngestRequest(candidateRequest);
@@ -2214,8 +1632,7 @@ export class IngestQueue {
         const currentInputMatchesRequest = active
           ? jobMatchesRequest(active, request)
           : highWatermark !== undefined && highWatermarkMatchesRequest(highWatermark, request);
-        // Apply may publish shared-page bytes before its atomic Manifest hash.
-        // The required generation refresh will recheck every source afterward.
+
         if (!active && bundleApplyInProgress && currentInputMatchesRequest) {
           const deduplicatedJob = active ?? requireLatestSourceJob(current, request.sourceId);
           return {
@@ -2470,12 +1887,6 @@ export class IngestQueue {
     return Object.freeze({ kind: mutation.value.kind, job });
   }
 
-  /**
-   * Claims and executes at most one eligible job for a Bundle.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Queue availability or final durable status of the claimed job
-   */
   async runNext(bundleId: string): Promise<RunNextResult> {
     this.assertExecutionOpen();
     assertIdentifier(bundleId, "bundleId");
@@ -2484,14 +1895,6 @@ export class IngestQueue {
     return this.executeClaim(bundleId, claim);
   }
 
-  /**
-   * Executes one exact pending job without releasing the user-paused backlog.
-   *
-   * @param bundleId - Bundle containing the selected material
-   * @param jobId - Exact pending job chosen from Activity
-   * @param expectedQueueRevision - Queue revision the user selected from
-   * @returns Availability or outcome of this single attempt, never another job
-   */
   async runSelected(
     bundleId: string,
     jobId: string,
@@ -2700,15 +2103,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Reloads ambiguous storage state and prevents an orphaned processing claim.
-   *
-   * The original infrastructure error remains authoritative. If storage is
-   * still unavailable, startup recovery will retry this same operation later.
-   *
-   * @param bundleId - Bundle whose live worker unwound unexpectedly
-   * @param job - Exact durable claim owned by the unwinding worker
-   */
   private async recoverAfterInfrastructureFailure(
     bundleId: string,
     job: Readonly<ProcessingIngestJob>
@@ -2720,14 +2114,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Converges one exact lifecycle-aborted non-applying claim through startup recovery.
-   *
-   * @param bundleId - Bundle owning the active Queue controller
-   * @param job - Immutable processing claim captured before executor invocation
-   * @param active - Exact local controller paired with the claim
-   * @returns Queue-safe recovered result, or undefined when this is not a lifecycle abort
-   */
   private async recoverLifecycleAbort(
     bundleId: string,
     job: Readonly<ProcessingIngestJob>,
@@ -2751,19 +2137,6 @@ export class IngestQueue {
       : { kind: "executed", jobId: job.id, status };
   }
 
-  /**
-   * Recovers only the exact durable claim captured by one unwinding worker.
-   *
-   * The identity check is repeated inside every storage CAS attempt. A late
-   * worker therefore cannot pause or rewrite a newer claim created while its
-   * executor was still settling. Applying recovery is reserved for ambiguous
-   * infrastructure failures; lifecycle cancellation never crosses that bound.
-   *
-   * @param bundleId - Bundle owning the captured claim
-   * @param claim - Immutable job identity captured at claim time
-   * @param recoverApplying - Whether an exact applying claim may fail into recovery-required
-   * @returns Committed exact recovery, or a stale no-op snapshot
-   */
   private async recoverExactClaimAfterUnwind(
     bundleId: string,
     claim: Readonly<ProcessingIngestJob>,
@@ -2850,16 +2223,6 @@ export class IngestQueue {
     return mutation;
   }
 
-  /**
-   * Executes one Studio Activity command against the exact observed Queue revision.
-   *
-   * This path never rebases a stale user command. If storage reports failure
-   * after committing, the complete predicted candidate is reread before the
-   * same local abort or worker-wakeup side effect is performed.
-   *
-   * @param command - Content-free Activity intent and exact Queue authority
-   * @returns Confirmed committed or durable no-op Queue state
-   */
   async executeActivityCommand(
     command: IngestQueueActivityCommand
   ): Promise<IngestQueueActivityCommandResult> {
@@ -2911,17 +2274,6 @@ export class IngestQueue {
     };
   }
 
-  /**
-   * Pauses new claims and cooperatively stops non-applying active work.
-   *
-   * Applying is an explicit no-abort boundary: the execution gate is paused,
-   * but a future recoverable transaction must reach a safe commit or recovery
-   * point before the job itself can stop.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param detail - Optional user-facing pause detail
-   * @returns Detached committed queue snapshot
-   */
   async pause(bundleId: string, detail?: string): Promise<IngestQueueSnapshot> {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
@@ -2950,12 +2302,6 @@ export class IngestQueue {
     return mutation.snapshot;
   }
 
-  /**
-   * Resumes a Bundle queue and requeues every safely paused job.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Detached committed queue snapshot
-   */
   async resume(bundleId: string): Promise<IngestQueueSnapshot> {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
@@ -2969,16 +2315,6 @@ export class IngestQueue {
     return mutation.snapshot;
   }
 
-  /**
-   * Resumes only an expired automatic provider rate-limit gate.
-   *
-   * User, startup-recovery, apply-recovery, and commit-acknowledgement pauses
-   * are never released here. The due check and paused-job requeue share one
-   * storage CAS mutation so another Queue instance cannot broaden the release.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Current snapshot, whether changed or not
-   */
   async resumeRateLimitIfDue(bundleId: string): Promise<IngestQueueSnapshot> {
     this.assertExecutionOpen();
     assertIdentifier(bundleId, "bundleId");
@@ -3026,21 +2362,6 @@ export class IngestQueue {
     return mutation.snapshot;
   }
 
-  /**
-   * Cancels a pending, paused, or non-applying processing job and its reserved rerun.
-   *
-   * Applying cannot be cancelled at the queue boundary because aborting a
-   * multi-file write without its transaction journal could corrupt user data.
-   * Awaiting-review jobs require {@link rejectReview} so their exact durable
-   * proposal outcome and latest rerun cannot be orphaned. This is source-work
-   * cancellation, so the one coalesced rerun is discarded.
-   * Cancellation only updates queue state and signals the executor; it has no
-   * page-deletion capability, including for shared or user-owned pages.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param jobId - Durable job identifier
-   * @returns Detached cancelled job
-   */
   async cancel(bundleId: string, jobId: string): Promise<KnowledgeIngestJob> {
     assertIdentifier(jobId, "jobId");
     const timestamp = this.now();
@@ -3060,13 +2381,6 @@ export class IngestQueue {
     return requireJob(mutation.snapshot, jobId);
   }
 
-  /**
-   * Explicitly retries one retryable terminal failure.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param jobId - Failed job identifier
-   * @returns Detached pending job
-   */
   async retryFailed(bundleId: string, jobId: string): Promise<KnowledgeIngestJob> {
     assertIdentifier(jobId, "jobId");
     const timestamp = this.now();
@@ -3081,17 +2395,6 @@ export class IngestQueue {
     return requireJob(mutation.snapshot, jobId);
   }
 
-  /**
-   * Reconciles a durable pending Review Store record after a hand-off interruption.
-   *
-   * This closes the crash window between proposal persistence and the queue's
-   * awaiting-review transition. It never runs the executor or writes pages and
-   * may safely convert the matching live or startup-recovered attempt.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param reviewDecision - Strict durable pending Review Store record receipt
-   * @returns Detached awaiting-review job
-   */
   async reconcilePendingReview(
     bundleId: string,
     reviewDecision: IngestPendingReviewDecisionReceipt
@@ -3228,18 +2531,6 @@ export class IngestQueue {
     return requireJob(mutation.snapshot, jobId);
   }
 
-  /**
-   * Durably rejects one exact awaiting-review ChangeSet without touching pages.
-   *
-   * Review persistence must precede this queue transition. The durable rejection
-   * marker makes an identical retry safe after a crash while preventing another
-   * ChangeSet from being attributed to the cancelled job. A retained latest
-   * rerun is promoted atomically after its predecessor becomes terminal.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param reviewDecision - Strict durable rejected Review Store record receipt
-   * @returns Detached cancelled predecessor job
-   */
   async rejectReview(
     bundleId: string,
     reviewDecision: IngestRejectedReviewDecisionReceipt
@@ -3343,17 +2634,6 @@ export class IngestQueue {
     return requireJob(mutation.snapshot, jobId);
   }
 
-  /**
-   * Converts an accepted review into a durable applying claim.
-   *
-   * Review acceptance is not job success. The caller must apply the accepted
-   * ChangeSet through ChangeSetTransaction and pass its receipt to the
-   * ApplyCommitCoordinator before the queue can become completed.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param reviewDecision - Strict durable accepted Review Store record receipt
-   * @returns Detached processing job containing the exact apply claim
-   */
   async beginReviewApply(
     bundleId: string,
     reviewDecision: IngestAcceptedReviewDecisionReceipt
@@ -3506,17 +2786,6 @@ export class IngestQueue {
     return applying;
   }
 
-  /**
-   * Recovers interrupted work once during startup and leaves backlog paused.
-   *
-   * Non-applying processing becomes pending in the same durable mutation as
-   * the startup-recovery gate. An interrupted apply fails closed behind a
-   * recovery-required gate until Commit E's write journal can prove its state.
-   * Recovery itself never increments an execution attempt.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Detached recovered queue snapshot
-   */
   async recoverOnStartup(bundleId: string): Promise<IngestQueueSnapshot> {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
@@ -3603,16 +2872,6 @@ export class IngestQueue {
     return mutation.snapshot;
   }
 
-  /**
-   * Verifies the exact queue job and apply claim before Manifest success is written.
-   *
-   * This method never mutates queue state. The coordinator must call it before
-   * its idempotent Manifest write, then call {@link resolveApplyRecovery}; the
-   * latter repeats the same proof inside the queue CAS mutation.
-   *
-   * @param receipt - Durable transaction proof proposed for reconciliation
-   * @returns Detached exact queue job owned by the receipt
-   */
   async verifyApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     assertTransactionCommitReceipt(receipt);
     const marker = createApplyCommitMarker(receipt);
@@ -3622,17 +2881,6 @@ export class IngestQueue {
     });
   }
 
-  /**
-   * Reconciles a committed transaction receipt with an interrupted applying job.
-   *
-   * The manifest success record MUST already be durable before this method is
-   * called. The queue job becomes completed, but execution remains blocked by a
-   * durable `commit_pending_ack` marker until the global transaction journal is
-   * cleared and {@link finalizeApplyRecovery} removes that marker.
-   *
-   * @param receipt - Durable proof returned by ChangeSet transaction recovery
-   * @returns Detached completed queue job
-   */
   async resolveApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     assertTransactionCommitReceipt(receipt);
     const bundleId = receipt.bundleId;
@@ -3705,27 +2953,11 @@ export class IngestQueue {
     return requireJob(mutation.snapshot, marker.jobId);
   }
 
-  /**
-   * Reads the durable queue marker waiting for journal acknowledgement.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Detached pending marker, or null when none exists
-   */
   async getPendingApplyCommit(bundleId: string): Promise<IngestApplyCommitMarker | null> {
     const snapshot = await this.load(bundleId);
     return snapshot.applyCommit ? { ...snapshot.applyCommit } : null;
   }
 
-  /**
-   * Releases a commit-pending queue only after the journal slot is durably clear.
-   *
-   * A user pause remains intact. Other commits leave the backlog under
-   * `startup_recovery`, requiring a fresh Gate observation and conditional release.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param transactionId - Exact acknowledged transaction identifier
-   * @returns Detached reconciled queue snapshot
-   */
   async finalizeApplyRecovery(
     bundleId: string,
     transactionId: string
@@ -3778,13 +3010,6 @@ export class IngestQueue {
     return mutation.snapshot;
   }
 
-  /**
-   * Claims one due pending job under the Bundle mutex and creates its controller.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param selection - Exact user selection, otherwise the oldest due job
-   * @returns Claimed snapshot or a durable availability result
-   */
   private async claimNext(
     bundleId: string,
     selection?: { jobId: string; expectedQueueRevision: number }
@@ -3924,15 +3149,6 @@ export class IngestQueue {
     });
   }
 
-  /**
-   * Persists a monotonic forward work-stage transition reported by the executor.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param jobId - Claimed job identifier
-   * @param stage - Current executor stage
-   * @param signal - Controller signal paired with the claim
-   * @param executionClaim - Revocable capability paired with this reporter
-   */
   private async reportStage(
     bundleId: string,
     jobId: string,
@@ -4003,14 +3219,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Persists a non-applying outcome or returns committed apply proof for coordination.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param jobId - Claimed job identifier
-   * @param result - Review or completed executor outcome
-   * @returns Final durable status, stale claim, or unacknowledged commit proof
-   */
   private async finalizeSuccess(
     bundleId: string,
     jobId: string,
@@ -4186,16 +3394,6 @@ export class IngestQueue {
     return this.toRunStatus(finalJob);
   }
 
-  /**
-   * Persists retry, rate-limit pause, or terminal failure after executor rejection.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param jobId - Claimed job identifier
-   * @param error - Unknown executor rejection
-   * @param signal - Controller signal paired with the claim
-   * @param discardSameInputRerun - Whether an unresolved repair folds its identical successor
-   * @returns Final durable job status
-   */
   private async finalizeFailure(
     bundleId: string,
     jobId: string,
@@ -4407,17 +3605,6 @@ export class IngestQueue {
     return this.toRunStatus(finalJob);
   }
 
-  /**
-   * Normalizes only explicitly typed executor errors; unknown errors remain generic.
-   *
-   * Avoiding raw unknown error messages prevents provider payloads or credentials
-   * from being copied into durable queue JSON accidentally.
-   *
-   * @param error - Unknown executor rejection
-   * @param occurredAt - Queue-owned failure timestamp
-   * @param signal - Exact Queue-owned signal paired with the current claim
-   * @returns Serializable failure and explicit retry classification
-   */
   private normalizeExecutorFailure(
     error: unknown,
     occurredAt: number,
@@ -4466,15 +3653,6 @@ export class IngestQueue {
     };
   }
 
-  /**
-   * Selects a stable retry decision and fails closed for malformed custom policies.
-   *
-   * The decision is computed once outside the CAS-replayed transform so jitter
-   * cannot change merely because an unrelated concurrent queue write won first.
-   *
-   * @param context - Completed-attempt and normalized failure classification
-   * @returns Valid retry, rate-limit pause, or terminal failure decision
-   */
   private decideRetrySafely(context: {
     attempt: number;
     retryable: boolean;
@@ -4509,12 +3687,6 @@ export class IngestQueue {
     return { kind: "fail", reason: "not_retryable" };
   }
 
-  /**
-   * Snapshots and validates an executor outcome before durable finalization.
-   *
-   * @param value - Runtime result returned through the executor port
-   * @returns Deeply detached frozen result safe for later asynchronous reads
-   */
   private snapshotExecutionResult(value: unknown): IngestExecutionResult {
     const result = snapshotDataRecord(value);
     if (!result || typeof result.kind !== "string") {
@@ -4582,12 +3754,6 @@ export class IngestQueue {
     throw new TypeError("executor result does not satisfy the ingest outcome contract");
   }
 
-  /**
-   * Narrows a durable state to the statuses exposed by runNext.
-   *
-   * @param job - Durable job after success/failure finalization
-   * @returns Legal externally observable execution status
-   */
   private toRunStatus(job: KnowledgeIngestJob): ExecutedJobStatus | "stale" {
     if (job.status === "processing") {
       return "stale";
@@ -4595,19 +3761,12 @@ export class IngestQueue {
     return job.status;
   }
 
-  /** Throws before a closed workflow generation can enqueue or claim more work. */
   private assertExecutionOpen(): void {
     if (this.executionClosed) {
       throw new IngestQueueClosedError();
     }
   }
 
-  /**
-   * Evaluates and strictly correlates one source-output freshness admission.
-   *
-   * @param request - Detached exact Queue observation
-   * @returns Frozen identity-bound admission decision
-   */
   private async evaluateSourceFreshness(
     request: Readonly<EnqueueIngestRequest>
   ): Promise<Readonly<IngestSourceFreshnessAdmission>> {
@@ -4620,11 +3779,6 @@ export class IngestQueue {
     return snapshotSourceFreshnessAdmission(rawAdmission, admissionRequest);
   }
 
-  /**
-   * Reads a validated non-negative safe-integer timestamp from the injected clock.
-   *
-   * @returns Current deterministic queue time
-   */
   private now(): number {
     const timestamp = this.clock();
     if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
@@ -4633,23 +3787,12 @@ export class IngestQueue {
     return timestamp;
   }
 
-  /**
-   * Reads and validates one non-whitespace id from the injected factory.
-   *
-   * @returns Candidate durable job id
-   */
   private nextJobId(): string {
     const jobId = this.jobIdFactory();
     assertIdentifier(jobId, "generated jobId");
     return jobId;
   }
 
-  /**
-   * Rejects a candidate id already used by job history or a reserved rerun.
-   *
-   * @param snapshot - Current validated queue snapshot
-   * @param jobId - Candidate durable id
-   */
   private assertJobIdAvailable(snapshot: IngestQueueSnapshot, jobId: string): void {
     if (
       snapshot.jobs.some((job) => job.id === jobId) ||
@@ -4659,12 +3802,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Returns the in-process mutex dedicated to one Bundle identity.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Reused Bundle mutex
-   */
   private getBundleMutex(bundleId: string): Mutex {
     const existing = this.bundleMutexes.get(bundleId);
     if (existing) {
@@ -4675,16 +3812,6 @@ export class IngestQueue {
     return mutex;
   }
 
-  /**
-   * Emits a best-effort post-commit reload hint.
-   *
-   * Queue storage remains authoritative: observer failure never rolls back or
-   * changes the success result of the durable operation it follows.
-   *
-   * @param snapshot - Current committed or validated no-op snapshot
-   * @param cause - Operation that produced the observable state
-   * @param jobId - Optional affected job id
-   */
   private emit(snapshot: IngestQueueSnapshot, cause: IngestQueueEventCause, jobId?: string): void {
     if (!this.eventSink) {
       return;
@@ -4703,12 +3830,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Loads unknown queue JSON and enforces version and Bundle identity.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Validated snapshot and expected write revision
-   */
   private async loadForMutation(bundleId: string): Promise<LoadedQueue> {
     const raw = await this.storage.read(bundleId);
     if (raw === null) {
@@ -4731,13 +3852,6 @@ export class IngestQueue {
     return { snapshot, expectedRevision: snapshot.revision };
   }
 
-  /**
-   * Applies one enqueue mutation with its out-of-band observation capability.
-   *
-   * @param request - Source observation carrying Bundle and optional Runtime token
-   * @param transform - Deterministic Queue transform
-   * @returns Detached current or newly persisted snapshot and operation value
-   */
   private mutateSourceObservation<T>(
     request: Pick<EnqueueIngestRequest, "bundleId" | "observationToken">,
     transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T> | Promise<QueueMutation<T>>
@@ -4749,14 +3863,6 @@ export class IngestQueue {
     return this.mutate(request.bundleId, transform, authority);
   }
 
-  /**
-   * Projects one exact Activity intent without reading external state.
-   *
-   * @param current - Exact Queue revision authorized by the caller
-   * @param command - Detached Activity command
-   * @param timestamp - Command timestamp captured before the mutation
-   * @returns Immutable Queue proposal and local side-effect metadata
-   */
   private projectActivityMutation(
     current: IngestQueueSnapshot,
     command: Readonly<ActivityMutationCommand>,
@@ -4949,18 +4055,6 @@ export class IngestQueue {
     }
   }
 
-  /**
-   * Applies one Activity mutation exactly once without CAS replay.
-   *
-   * A failed write is acknowledged only when a durable reread equals the full
-   * predicted candidate. This captures a real atomic-file commit-then-throw
-   * while refusing to infer success from a later merely compatible state.
-   *
-   * @param bundleId - Bundle authorized by the command
-   * @param expectedQueueRevision - Exact revision observed by the caller
-   * @param transform - Deterministic Activity transform
-   * @returns Confirmed current or newly committed Queue and mutation metadata
-   */
   private async mutateExactActivity<T>(
     bundleId: string,
     expectedQueueRevision: number,
@@ -5019,13 +4113,6 @@ export class IngestQueue {
     };
   }
 
-  /**
-   * Applies one immutable mutation with bounded optimistic conflict retries.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param transform - Deterministic transform replayed after CAS conflicts
-   * @returns Detached current or newly persisted snapshot and operation value
-   */
   private async mutate<T>(
     bundleId: string,
     transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T> | Promise<QueueMutation<T>>,
@@ -5071,13 +4158,6 @@ export class IngestQueue {
     );
   }
 
-  /**
-   * Strictly parses, semantically validates, and clones a queue snapshot.
-   *
-   * @param bundleId - Bundle used for safe error reporting
-   * @param value - Unknown or typed queue value
-   * @returns Detached validated queue snapshot
-   */
   private cloneValidatedSnapshot(bundleId: string, value: unknown): IngestQueueSnapshot {
     const parsed = parseIngestQueueSnapshot(value);
     if (!parsed.ok) {

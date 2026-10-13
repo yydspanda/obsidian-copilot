@@ -11,7 +11,6 @@ const PAGE_HASH = "d".repeat(64);
 const SOURCE_REF = "b".repeat(64);
 const EVIDENCE_REF = "c".repeat(64);
 
-/** Creates one valid delegate-owned session DTO. */
 function createSession(pagePath = "Wiki/Applied.md"): KnowledgeAppliedWikiPageInspectionSession {
   return {
     pageRef: PAGE_REF,
@@ -43,7 +42,6 @@ function createSession(pagePath = "Wiki/Applied.md"): KnowledgeAppliedWikiPageIn
   };
 }
 
-/** Creates a delegate and records exact session identity used for opening. */
 function createDelegate(pagePath = "Wiki/Applied.md"): KnowledgeAppliedWikiPageInspectorPort & {
   delegateSession: KnowledgeAppliedWikiPageInspectionSession;
   openEvidence: jest.Mock<Promise<KnowledgeAppliedWikiEvidenceOpenResult>>;

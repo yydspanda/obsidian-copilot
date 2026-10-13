@@ -28,14 +28,6 @@ import {
 } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { sha256 } from "@/utils/hash";
 
-/**
- * Creates an exact Runtime-authorized no-change result for a legacy test executor outcome.
- *
- * @param result - Bare no-change result returned by the test-specific executor
- * @param context - Exact claimed Queue attempt that produced the result
- * @param manifest - Detached current Manifest snapshot read after executor completion
- * @returns No-change result carrying a strict Manifest commit plan and digest
- */
 function createAuthorizedNoChangesResult(
   result: Extract<IngestExecutionResult, { kind: "no_changes" }>,
   context: IngestExecutionContext,
@@ -84,23 +76,19 @@ function createAuthorizedNoChangesResult(
   };
 }
 
-/** In-memory atomic boundary used by authentic execution-authority tests. */
 export class KnowledgeExecutionMemoryRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
 
-  /** Initializes the memory file without replacing existing bytes. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) this.content = initialContent;
   }
 
-  /** Reads the exact current memory bytes. */
   async read(): Promise<string> {
     if (this.content === undefined) throw new Error("The test Runtime is not initialized");
     return this.content;
   }
 
-  /** Serializes one synchronous atomic transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     const previous = this.tail;
     let release: () => void = () => undefined;
@@ -117,12 +105,10 @@ export class KnowledgeExecutionMemoryRuntimeFile implements AtomicRuntimeFile {
     }
   }
 
-  /** Replaces persisted bytes to exercise fail-closed proof drift and corruption paths. */
   replaceContent(content: string): void {
     this.content = content;
   }
 
-  /** Replaces one Manifest slot while retaining a structurally valid Runtime envelope. */
   async replaceManifest(manifest: SourceManifest): Promise<void> {
     const state = JSON.parse(await this.read()) as KnowledgeRuntimeStoreSnapshot;
     state.revision += 1;
@@ -133,7 +119,6 @@ export class KnowledgeExecutionMemoryRuntimeFile implements AtomicRuntimeFile {
   }
 }
 
-/** Inputs needed to create one real Runtime-backed Queue execution attempt. */
 export interface KnowledgeExecutionTestHarnessOptions {
   manifest: SourceManifest;
   sourceId: string;
@@ -146,7 +131,6 @@ export interface KnowledgeExecutionTestHarnessOptions {
   retryPolicy?: RetryPolicy;
 }
 
-/** Real Runtime, Queue, observation, Manifest, and proof capabilities for one test attempt. */
 export interface KnowledgeExecutionTestHarness {
   file: KnowledgeExecutionMemoryRuntimeFile;
   runtime: KnowledgeRuntimeStore;
@@ -156,12 +140,6 @@ export interface KnowledgeExecutionTestHarness {
   queue: IngestQueue;
 }
 
-/**
- * Creates one authentic Runtime-backed Queue attempt with a consumed observation.
- *
- * @param options - Exact Manifest, source identity, and executor
- * @returns Initialized test capabilities with the job ready to claim
- */
 export async function createKnowledgeExecutionTestHarness(
   options: KnowledgeExecutionTestHarnessOptions
 ): Promise<KnowledgeExecutionTestHarness> {

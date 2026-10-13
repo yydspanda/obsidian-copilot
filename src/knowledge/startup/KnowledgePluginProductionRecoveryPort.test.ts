@@ -5,13 +5,11 @@ import {
 } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
 import type { KnowledgeProductionRecoveryState } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 
-/** Promise controls used to hold a durable recovery await across closure. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
 }
 
-/** Creates one externally settled Promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -20,7 +18,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one observable composer with a replaceable public state. */
 function createComposer(
   state: KnowledgeProductionRecoveryState,
   start: () => Promise<void> = async () => undefined

@@ -28,15 +28,14 @@ import type {
 } from "@/knowledge/setup/KnowledgeSetupReadiness";
 import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 
-/** Props for the local-only guided Knowledge setup and status surface. */
 export interface KnowledgeSetupPanelProps {
   readiness: KnowledgeSetupReadinessStore;
   navigation: KnowledgeSetupNavigationPort;
   setupPort: KnowledgeSetupPort;
   onConfigured?: () => void;
-  /** Safe startup notice retained for context when Studio cannot open. */
+
   unavailableNotice?: string;
-  /** Presence turns the full-page setup surface into a reversible Studio overlay. */
+
   onBack?: () => void;
 }
 
@@ -139,7 +138,6 @@ const CHAT_MODEL_REASON_COPY: Readonly<Record<KnowledgeSetupChatModelReason, str
     "The ordinary Chat model is configured locally. It remains separate from the Knowledge model.",
 };
 
-/** Subscribes React to the immutable local readiness projection. */
 function useKnowledgeSetupReadiness(
   store: KnowledgeSetupReadinessStore
 ): KnowledgeSetupReadinessProjection {
@@ -148,7 +146,6 @@ function useKnowledgeSetupReadiness(
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/** Returns the status icon associated with one closed readiness level. */
 function getLevelIcon(
   level: KnowledgeSetupReadinessLevel
 ): React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" | "false" }> {
@@ -166,7 +163,6 @@ function getLevelIcon(
   }
 }
 
-/** Returns restrained Obsidian-theme styling for one readiness level. */
 function getLevelClasses(level: KnowledgeSetupReadinessLevel): string {
   switch (level) {
     case "locally_ready":
@@ -181,16 +177,15 @@ function getLevelClasses(level: KnowledgeSetupReadinessLevel): string {
   }
 }
 
-/** Invokes one least-authority navigation action without leaking adapter failures. */
 function invokeNavigation(action: () => void | Promise<void>): void {
   try {
     void Promise.resolve(action()).catch(() => undefined);
   } catch {
     // The adapter owns user-visible navigation feedback; the panel retains no error detail.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Renders one plain-language readiness card and its narrow navigation actions. */
 function SetupCard<Reason extends string>({
   title,
   summary,
@@ -239,7 +234,6 @@ function SetupCard<Reason extends string>({
   );
 }
 
-/** Chooses safe workspace navigation without presenting recovery failures as setup prompts. */
 function getWorkspaceActions(
   item: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupWorkspaceReason>>,
   navigation: KnowledgeSetupNavigationPort
@@ -297,7 +291,6 @@ function getWorkspaceActions(
   }
 }
 
-/** Chooses Knowledge-model navigation while keeping provider credentials out of the panel. */
 function getKnowledgeModelActions(
   item: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupKnowledgeModelReason>>,
   navigation: KnowledgeSetupNavigationPort
@@ -342,7 +335,6 @@ function getKnowledgeModelActions(
   }
 }
 
-/** Chooses optional Chat navigation without making Chat a Knowledge startup requirement. */
 function getChatModelActions(
   item: Readonly<KnowledgeSetupReadinessItem<KnowledgeSetupChatModelReason>>,
   navigation: KnowledgeSetupNavigationPort
@@ -363,12 +355,6 @@ function getChatModelActions(
   ];
 }
 
-/**
- * Renders local readiness plus an explicit first-time configuration form.
- *
- * Viewing status performs no writes; setup has separate user-confirmed authority.
- * Neither surface contacts a provider.
- */
 export function KnowledgeSetupPanel({
   readiness,
   navigation,

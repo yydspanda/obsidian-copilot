@@ -239,7 +239,6 @@ interface ParsedMarkdown {
   hasFrontmatter: boolean;
 }
 
-/** Adds one bounded, fixed-message diagnostic without retaining untrusted material. */
 function addDiagnostic(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -250,7 +249,6 @@ function addDiagnostic(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/** Prefixes trusted internal diagnostics while replacing their messages. */
 function appendSafeDiagnostics(
   diagnostics: KnowledgeDiagnostic[],
   prefix: string,
@@ -267,12 +265,10 @@ function appendSafeDiagnostics(
   }
 }
 
-/** Checks whether a detached value is a plain string-keyed record. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Recursively snapshots JSON-compatible data without invoking property accessors. */
 function snapshotData(value: unknown, budget: SnapshotBudget, depth = 0): JsonValue {
   if (depth > MAX_SNAPSHOT_DEPTH || budget.nodes >= MAX_SNAPSHOT_NODES) {
     throw new TypeError("Candidate input exceeds its structural budget");
@@ -336,7 +332,6 @@ function snapshotData(value: unknown, budget: SnapshotBudget, depth = 0): JsonVa
   return Object.freeze(snapshot);
 }
 
-/** Creates one exact all-false result for a malformed or unavailable candidate. */
 function createInvalidResult(
   code: string,
   field: string,
@@ -352,7 +347,6 @@ function createInvalidResult(
   });
 }
 
-/** Extracts a bounded YAML frontmatter block without accepting partial delimiters. */
 function parseMarkdown(content: string): ParsedMarkdown {
   const opening = content.startsWith("---\n") || content.startsWith("---\r\n");
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -387,7 +381,6 @@ function parseMarkdown(content: string): ParsedMarkdown {
   });
 }
 
-/** Returns one Wiki-relative canonical path using the already validated Bundle depth. */
 function toRelativeWikiPath(wikiRoot: string, path: string): string {
   const rootSegments = wikiRoot.split("/");
   const pathSegments = path.split("/");
@@ -397,7 +390,6 @@ function toRelativeWikiPath(wikiRoot: string, path: string): string {
   return pathSegments.slice(rootSegments.length).join("/");
 }
 
-/** Detects link syntax unsupported by the first fail-closed production generation. */
 function containsUnsupportedLink(content: string): boolean {
   return (
     /!?\[\[[\s\S]*?\]\]/.test(content) ||
@@ -412,22 +404,18 @@ function containsUnsupportedLink(content: string): boolean {
   );
 }
 
-/** Compares two canonical string arrays without silently normalizing their order. */
 function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-/** Compares strict parsed JSON material independently of object key insertion order. */
 function sameJson(left: unknown, right: unknown): boolean {
   return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
 }
 
-/** Sorts canonical identifiers using the Compiler's locale-independent text order. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Checks the immutable approved fields retained by one runtime-bound target. */
 function matchesApprovedProjection(
   approved: CompilerApprovedTarget,
   bound: CompilerBoundTarget
@@ -446,7 +434,6 @@ function matchesApprovedProjection(
   );
 }
 
-/** Checks one runtime-owned change against the exact bound target it projects. */
 function matchesBoundChange(change: KnowledgeFileChange, target: CompilerBoundTarget): boolean {
   if (
     change.path !== target.path ||
@@ -460,7 +447,6 @@ function matchesBoundChange(change: KnowledgeFileChange, target: CompilerBoundTa
   return target.operation === change.operation && change.beforeHash === target.beforeHash;
 }
 
-/** Validates claim, target, citation, change, and source-union relationships. */
 function validateCandidateRelationships(
   input: z.infer<typeof candidateInputSchema>,
   diagnostics: KnowledgeDiagnostic[]
@@ -530,8 +516,7 @@ function validateCandidateRelationships(
   });
   input.analysis.targets.forEach((target, index) => {
     const matches = boundById.get(target.targetId) ?? [];
-    // A missing approved delete is a legitimate no-op and is intentionally absent
-    // from the bound set. Every write and every present delete remains one-to-one.
+
     if ((target.intent === "write" && matches.length !== 1) || matches.length > 1) {
       addDiagnostic(
         diagnostics,
@@ -568,14 +553,8 @@ function validateCandidateRelationships(
       "Draft source references must equal the canonical primary, change, and citation union"
     );
   }
-
-  // targetSetDigest is deliberately format-validated only. Recomputing its
-  // authorized identity also requires compileContextDigest and analysisDigest,
-  // which the Compiler does not expose to this adapter. The Compiler validates
-  // the generation echo before constructing this candidate input.
 }
 
-/** Copies known frontmatter fields while retaining JSON-compatible extensions. */
 function createConceptDocument(
   path: string,
   markdown: ParsedMarkdown,
@@ -602,7 +581,6 @@ function createConceptDocument(
   };
 }
 
-/** Converts one generated Markdown file into the path-selected OKF document kind. */
 function createOkfDocument(
   bundleWikiRoot: string,
   change: Exclude<KnowledgeFileChange, { operation: "delete" }>,
@@ -637,7 +615,6 @@ function createOkfDocument(
   return createConceptDocument(relativePath, markdown, citations);
 }
 
-/** Validates artifact identities and every material citation in the candidate. */
 export function validateProductionCandidateCitations(
   artifacts: readonly SourceArtifactObservation[],
   citations: readonly ClaimCitation[],
@@ -677,7 +654,6 @@ export function validateProductionCandidateCitations(
   return valid;
 }
 
-/** Validates each non-delete file as OKF Markdown and rejects every link in generation one. */
 export function validateProductionGeneratedDocuments(
   bundleWikiRoot: string,
   changes: readonly KnowledgeFileChange[],
@@ -733,7 +709,6 @@ export function validateProductionGeneratedDocuments(
   return { okfValid, linksValid };
 }
 
-/** Performs deterministic candidate checks after the descriptor-only input snapshot. */
 function validateCandidate(
   input: z.infer<typeof candidateInputSchema>
 ): CompilerCandidateValidationResult {
@@ -834,27 +809,11 @@ function validateCandidate(
   };
 }
 
-/**
- * Deterministic first-generation production validator for generated Wiki candidates.
- *
- * The adapter performs no Vault I/O. It snapshots the complete Compiler input,
- * revalidates ChangeSet structure, resolves citations only against parser-owned
- * artifacts, parses generated Markdown into OKF documents, and rejects every
- * link until a projected link resolver is available.
- */
 export class KnowledgeProductionCandidateValidator implements CompilerCandidateValidator {
-  /** Freezes this stateless validation capability against instance mutation. */
   constructor() {
     Object.freeze(this);
   }
 
-  /**
-   * Validates one generated candidate without exposing parser or YAML failures.
-   *
-   * @param input - Compiler-owned candidate and complete semantic read context
-   * @param _signal - Exact Queue signal, checked by the generation-owned route wrapper
-   * @returns Exact validation flags and bounded safe diagnostics
-   */
   async validate(
     input: CompilerCandidateValidationInput,
     _signal: AbortSignal

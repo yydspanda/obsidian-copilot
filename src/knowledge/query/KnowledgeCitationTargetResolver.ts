@@ -8,13 +8,11 @@ import type { ClaimCitation, SourceLocator } from "@/knowledge/model/types";
 import { validateClaimCitation } from "@/knowledge/model/validation";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 
-/** Zero-based position accepted by Obsidian's Editor API. */
 export interface KnowledgeCitationEditorPosition {
   line: number;
   ch: number;
 }
 
-/** Exact Markdown selection target proven against the current source content. */
 export interface KnowledgeCitationMarkdownRangeTarget {
   kind: "markdown_range";
   sourcePath: string;
@@ -22,14 +20,12 @@ export interface KnowledgeCitationMarkdownRangeTarget {
   to: KnowledgeCitationEditorPosition;
 }
 
-/** Sanitized result of resolving one grounded citation against current Markdown. */
 export type KnowledgeCitationTargetResolution =
   | { status: "resolved"; target: KnowledgeCitationMarkdownRangeTarget }
   | { status: "stale" }
   | { status: "unsupported" }
   | { status: "unavailable" };
 
-/** Pure input required to resolve one citation without Vault or UI access. */
 export interface KnowledgeCitationTargetResolverInput {
   sourcePath: string;
   citation: ClaimCitation;
@@ -44,15 +40,6 @@ const STALE_RESULT = Object.freeze({ status: "stale" as const });
 const UNSUPPORTED_RESULT = Object.freeze({ status: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ status: "unavailable" as const });
 
-/**
- * Reads one ATX heading from a Markdown line.
- *
- * Heading-like text inside fenced code is excluded by the caller. This parser
- * deliberately matches the ATX semantics used by scoped knowledge retrieval.
- *
- * @param line - One normalized Markdown line without its newline
- * @returns Heading level and text, or undefined when the line is not an ATX heading
- */
 function parseAtxHeading(line: string): Readonly<{ level: number; heading: string }> | undefined {
   const match = line.match(/^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/);
   if (!match) return undefined;
@@ -61,16 +48,6 @@ function parseAtxHeading(line: string): Readonly<{ level: number; heading: strin
   return Object.freeze({ level: match[1].length, heading });
 }
 
-/**
- * Parses deterministic ATX heading sections and duplicate-heading occurrences.
- *
- * A section extends through nested subsections and ends immediately before the
- * next heading at the same or a higher level. Fenced code blocks never produce
- * headings.
- *
- * @param content - Exact Markdown content whose line endings may be LF or CRLF
- * @returns Material heading observations using 1-based inclusive line bounds
- */
 function parseMarkdownHeadings(content: string): readonly ParsedMarkdownHeading[] {
   const lines = normalizeCitationText(content).split("\n");
   const candidates: Array<Pick<ParsedMarkdownHeading, "heading" | "level" | "startLine">> = [];
@@ -138,13 +115,6 @@ function parseMarkdownHeadings(content: string): readonly ParsedMarkdownHeading[
   );
 }
 
-/**
- * Converts one normalized UTF-16 offset into an Obsidian Editor position.
- *
- * @param content - Markdown with normalized LF line endings
- * @param offset - Inclusive UTF-16 offset within the normalized content
- * @returns Zero-based Editor line and character coordinates
- */
 function offsetToEditorPosition(content: string, offset: number): KnowledgeCitationEditorPosition {
   const before = content.slice(0, offset);
   const lastNewline = before.lastIndexOf("\n");
@@ -153,14 +123,6 @@ function offsetToEditorPosition(content: string, offset: number): KnowledgeCitat
   return Object.freeze({ line, ch });
 }
 
-/**
- * Resolves a 1-based inclusive line range to zero-based Editor coordinates.
- *
- * @param content - Exact Markdown content
- * @param startLine - First 1-based source line
- * @param endLine - Last inclusive 1-based source line
- * @returns Editor selection range, or undefined for out-of-bounds coordinates
- */
 function resolveLineRange(
   content: string,
   startLine: number,
@@ -176,17 +138,6 @@ function resolveLineRange(
   });
 }
 
-/**
- * Locates the one quote occurrence admitted by material validation.
- *
- * Prefix and suffix matching intentionally mirrors
- * `validateSourceLocatorAgainstArtifact`, including whitespace trimming at the
- * context boundary and overlapping occurrence discovery.
- *
- * @param content - Exact Markdown content
- * @param locator - Structurally valid quote locator
- * @returns Exact excerpt offsets, or undefined unless exactly one context match exists
- */
 function resolveQuoteOffsets(
   content: string,
   locator: Extract<SourceLocator, { kind: "quote" }>
@@ -213,13 +164,6 @@ function resolveQuoteOffsets(
   return Object.freeze({ start: matches[0], end: matches[0] + excerpt.length });
 }
 
-/**
- * Builds the parser-neutral Markdown artifact required by material validation.
- *
- * @param content - Exact current Markdown content
- * @param locator - Citation locator supplying durable artifact identity
- * @returns Current material observation with deterministic heading sections
- */
 function createMarkdownArtifactObservation(
   content: string,
   locator: SourceLocator
@@ -234,17 +178,6 @@ function createMarkdownArtifactObservation(
   });
 }
 
-/**
- * Resolves a grounded citation to an exact Markdown Editor range.
- *
- * The exact-content SHA-256 must match before coordinates are trusted. Every
- * supported locator is then checked with the shared material validator. The
- * function performs no I/O and never falls back to a nearby or similarly named
- * source when grounding is stale.
- *
- * @param input - Source path, typed citation, and current exact Markdown content
- * @returns A resolved range or one sanitized failure category
- */
 export function resolveKnowledgeCitationTarget(
   input: KnowledgeCitationTargetResolverInput
 ): KnowledgeCitationTargetResolution {

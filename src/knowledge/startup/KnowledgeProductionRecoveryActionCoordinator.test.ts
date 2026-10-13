@@ -1,18 +1,15 @@
 jest.mock("obsidian", () => {
   class FileSystemAdapter {
-    /** Returns the fake Windows Vault root. */
     getBasePath(): string {
       return "C:\\KnowledgeVault";
     }
 
-    /** Resolves one fake native path without filesystem access. */
     getFullPath(path: string): string {
       return `C:\\KnowledgeVault\\${path.replaceAll("/", "\\")}`;
     }
   }
 
   class TFile {
-    /** Creates one fake loaded file. */
     constructor(public readonly path: string) {}
   }
 
@@ -28,7 +25,6 @@ jest.mock("@/knowledge/runtime/ObsidianKnowledgeFileStore", () => ({
       requiresExistingParentForCreate: false,
     });
 
-    /** Captures the in-memory Vault edge used by coordinator tests. */
     constructor(
       private readonly vault: {
         adapter: {
@@ -41,7 +37,6 @@ jest.mock("@/knowledge/runtime/ObsidianKnowledgeFileStore", () => ({
       }
     ) {}
 
-    /** Observes one exact test Vault path. */
     async observe(path: string) {
       const stat = await this.vault.adapter.stat(path);
       if (stat === null) return { kind: "missing" as const };
@@ -49,7 +44,6 @@ jest.mock("@/knowledge/runtime/ObsidianKnowledgeFileStore", () => ({
       return { kind: "file" as const, content: await this.vault.adapter.read(path) };
     }
 
-    /** Applies one exact create or update against the in-memory Vault. */
     async compareAndSwap(
       path: string,
       before: { kind: string; content?: string },
@@ -161,13 +155,11 @@ Project Atlas launches on 2026-08-01.
 const originalRandomUuidDescriptor = Object.getOwnPropertyDescriptor(window.crypto, "randomUUID");
 let transactionSequence = 0;
 
-/** Creates one mocked loaded file despite Obsidian's opaque public constructor. */
 function createTestFile(path: string): TFile {
   const FileConstructor = TFile as unknown as new (filePath: string) => TFile;
   return new FileConstructor(path);
 }
 
-/** In-memory App/Vault edge supporting exact reads and atomic existing-file updates. */
 class RecoveryVaultHarness {
   readonly files = new Map<string, string>();
   readonly loaded = new Map<string, TFile>();
@@ -215,18 +207,15 @@ class RecoveryVaultHarness {
     process: this.process,
   } as unknown as Vault;
 
-  /** Creates one App identity permanently bound to this Vault. */
   createApp(): App {
     return { vault: this.vault } as App;
   }
 
-  /** Adds one loaded exact text file. */
   add(path: string, content: string): void {
     this.files.set(path, content);
     this.loaded.set(path, createTestFile(path));
   }
 
-  /** Clears all observable Vault access counters without changing bytes. */
   clearCalls(): void {
     this.readBinary.mockClear();
     this.read.mockClear();
@@ -236,7 +225,6 @@ class RecoveryVaultHarness {
   }
 }
 
-/** Creates the configured Bundle used by the authentic production lease. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -248,7 +236,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates already-hydrated settings with inert test-only credentials. */
 function createSettings(): KnowledgeProductionPreflightSettingsInput {
   return {
     temperature: 0,
@@ -270,7 +257,6 @@ function createSettings(): KnowledgeProductionPreflightSettingsInput {
   };
 }
 
-/** Creates a model fetch port that fails if recovery attempts model access. */
 function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   return jest.fn<ReturnType<KnowledgeDeepSeekFetchPort>, Parameters<KnowledgeDeepSeekFetchPort>>(
     async () => {
@@ -279,7 +265,6 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
-/** Mints one authentic production workflow lease. */
 async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
@@ -307,7 +292,6 @@ async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
   return { lifecycle, admission: result.admission, runtimeClaim };
 }
 
-/** Creates the clean registered-source Manifest read-set. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -324,7 +308,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates one grounded create proposal accepted before recovery testing. */
 function createProposal(): KnowledgeChangeSet {
   return {
     id: "changeset-atlas-recovery",
@@ -364,7 +347,6 @@ function createProposal(): KnowledgeChangeSet {
   };
 }
 
-/** Converts one accepted record into the Queue's exact apply receipt. */
 function createAcceptedReceipt(
   record: AcceptedChangeSetReviewRecord
 ): IngestAcceptedReviewDecisionReceipt {
@@ -381,7 +363,6 @@ function createAcceptedReceipt(
   };
 }
 
-/** Loads the current exact recovery snapshot from one Runtime envelope. */
 async function loadRecoverySnapshot(
   runtime: KnowledgeRuntimeStore
 ): Promise<NoJournalApplyRecoverySnapshot> {
@@ -408,7 +389,6 @@ interface RecoveryActionHarness {
   classification: NoJournalApplyRecoveryClassification;
 }
 
-/** Seeds an accepted-not-started or requires-decision production recovery state. */
 async function createHarness(
   startApply: boolean,
   advanceManifestBeforeAcceptance = false
@@ -484,7 +464,6 @@ async function createHarness(
   queue = new IngestQueue(
     new KnowledgeRuntimeQueueStorage(runtime, executionOwner),
     {
-      /** Saves one proposal before returning its exact pending Review receipt. */
       async execute(context) {
         const record = await reviews.saveProposal(BUNDLE_ID, {
           proposal,
@@ -578,7 +557,6 @@ async function createHarness(
   };
 }
 
-/** Returns the opaque id shared by every recovery classification variant. */
 function getRecoveryId(classification: NoJournalApplyRecoveryClassification): string {
   return classification.kind === "requires_decision"
     ? classification.candidate.recoveryId

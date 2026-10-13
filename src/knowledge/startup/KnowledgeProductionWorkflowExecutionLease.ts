@@ -33,9 +33,7 @@ const runtimeBindingStates = new WeakMap<object, Readonly<ExecutionBindingState>
 const preflightBindingStates = new WeakMap<object, Readonly<ExecutionBindingState>>();
 const executionLeaseStates = new WeakMap<object, ExecutionLeaseState>();
 
-/** One-shot claim consumed by the exact Runtime half of a production pairing. */
 export class KnowledgeProductionWorkflowExecutionRuntimeClaim {
-  /** Rejects construction without this leaf module's private issuer token. */
   constructor(token: symbol, root?: object) {
     if (token !== PAIRING_CLAIM_TOKEN || !root) {
       throw new TypeError("The production Runtime execution claim is invalid");
@@ -45,9 +43,7 @@ export class KnowledgeProductionWorkflowExecutionRuntimeClaim {
   }
 }
 
-/** One-shot claim consumed by the exact production-preflight half of a pairing. */
 export class KnowledgeProductionWorkflowExecutionPreflightClaim {
-  /** Rejects construction without this leaf module's private issuer token. */
   constructor(token: symbol, root?: object) {
     if (token !== PAIRING_CLAIM_TOKEN || !root) {
       throw new TypeError("The production preflight execution claim is invalid");
@@ -57,9 +53,7 @@ export class KnowledgeProductionWorkflowExecutionPreflightClaim {
   }
 }
 
-/** Hidden-root binding retained only by one claim-consuming Runtime. */
 export class KnowledgeProductionWorkflowExecutionRuntimeBinding {
-  /** Installs only leaf-module-issued hidden pairing state. */
   constructor(token: symbol, root?: object) {
     if (token !== RUNTIME_BINDING_TOKEN || !root) {
       throw new TypeError("The production Runtime execution binding is invalid");
@@ -68,7 +62,6 @@ export class KnowledgeProductionWorkflowExecutionRuntimeBinding {
     Object.freeze(this);
   }
 
-  /** Reports whether one live lease was minted by the matching preflight half. */
   ownsWorkflowExecutionLease(value: unknown): boolean {
     try {
       requireExactRuntimeBinding(this);
@@ -82,9 +75,7 @@ export class KnowledgeProductionWorkflowExecutionRuntimeBinding {
   }
 }
 
-/** Hidden-root issuer retained only by one claim-consuming production preflight. */
 export class KnowledgeProductionWorkflowExecutionPreflightBinding {
-  /** Installs only leaf-module-issued hidden pairing state. */
   constructor(token: symbol, root?: object) {
     if (token !== PREFLIGHT_BINDING_TOKEN || !root) {
       throw new TypeError("The production preflight execution binding is invalid");
@@ -93,7 +84,6 @@ export class KnowledgeProductionWorkflowExecutionPreflightBinding {
     Object.freeze(this);
   }
 
-  /** Issues one owner-bound workflow lease under this exact hidden pairing root. */
   issueWorkflowExecutionLease(): Readonly<{
     lease: KnowledgeProductionWorkflowExecutionLease;
     executionOwner: KnowledgeExecutionOwner;
@@ -110,7 +100,6 @@ export class KnowledgeProductionWorkflowExecutionPreflightBinding {
     return Object.freeze({ lease, executionOwner });
   }
 
-  /** Synchronously revokes one lease minted by this exact preflight binding. */
   revokeWorkflowExecutionLease(value: KnowledgeProductionWorkflowExecutionLease): void {
     requireExactPreflightBinding(this);
     requireExactWorkflowExecutionLease(value);
@@ -122,7 +111,6 @@ export class KnowledgeProductionWorkflowExecutionPreflightBinding {
     lease.current = false;
   }
 
-  /** Reports whether one live lease was minted by this exact preflight binding. */
   ownsWorkflowExecutionLease(value: unknown): boolean {
     try {
       requireExactPreflightBinding(this);
@@ -136,9 +124,7 @@ export class KnowledgeProductionWorkflowExecutionPreflightBinding {
   }
 }
 
-/** Lightweight module-authentic revocable owner lease with no Runtime imports. */
 export class KnowledgeProductionWorkflowExecutionLease {
-  /** Installs only leaf-module-issued hidden state. */
   constructor(token: symbol, root?: object, executionOwner?: KnowledgeExecutionOwner) {
     if (token !== LEASE_TOKEN || !root || !executionOwner) {
       throw new TypeError("The production workflow execution lease is invalid");
@@ -148,12 +134,10 @@ export class KnowledgeProductionWorkflowExecutionLease {
     Object.freeze(this);
   }
 
-  /** Requires one exact-prototype lease minted by an authentic preflight binding. */
   static assert(value: unknown): asserts value is KnowledgeProductionWorkflowExecutionLease {
     requireExactWorkflowExecutionLease(value);
   }
 
-  /** Throws after synchronous production-generation revocation. */
   assertCurrent(): void {
     requireExactWorkflowExecutionLease(this);
     if (!executionLeaseStates.get(this)?.current) {
@@ -161,7 +145,6 @@ export class KnowledgeProductionWorkflowExecutionLease {
     }
   }
 
-  /** Reports whether this live lease owns one exact opaque execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       requireExactWorkflowExecutionLease(value);
@@ -174,7 +157,6 @@ export class KnowledgeProductionWorkflowExecutionLease {
   }
 }
 
-/** Creates two one-shot claims sharing one otherwise-unobservable pairing root. */
 export function createKnowledgeProductionWorkflowExecutionPairing(): Readonly<{
   runtimeClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim;
   preflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim;
@@ -189,7 +171,6 @@ export function createKnowledgeProductionWorkflowExecutionPairing(): Readonly<{
   });
 }
 
-/** Consumes one exact Runtime claim once and returns its empty opaque binding. */
 export function consumeKnowledgeProductionWorkflowExecutionRuntimeClaim(
   value: unknown
 ): KnowledgeProductionWorkflowExecutionRuntimeBinding {
@@ -199,7 +180,6 @@ export function consumeKnowledgeProductionWorkflowExecutionRuntimeClaim(
   return new KnowledgeProductionWorkflowExecutionRuntimeBinding(RUNTIME_BINDING_TOKEN, state.root);
 }
 
-/** Consumes one exact preflight claim once and returns its empty opaque binding. */
 export function consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
   value: unknown
 ): KnowledgeProductionWorkflowExecutionPreflightBinding {
@@ -212,7 +192,6 @@ export function consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
   );
 }
 
-/** Returns hidden state only for one exact, genuine Runtime claim. */
 function requireExactRuntimeClaim(value: unknown): PairingClaimState {
   try {
     if (
@@ -230,7 +209,6 @@ function requireExactRuntimeClaim(value: unknown): PairingClaimState {
   return state;
 }
 
-/** Returns hidden state only for one exact, genuine preflight claim. */
 function requireExactPreflightClaim(value: unknown): PairingClaimState {
   try {
     if (
@@ -248,7 +226,6 @@ function requireExactPreflightClaim(value: unknown): PairingClaimState {
   return state;
 }
 
-/** Requires one exact leaf-issued Runtime binding. */
 function requireExactRuntimeBinding(value: unknown): void {
   try {
     if (
@@ -265,7 +242,6 @@ function requireExactRuntimeBinding(value: unknown): void {
   }
 }
 
-/** Requires one exact leaf-issued preflight binding. */
 function requireExactPreflightBinding(value: unknown): void {
   try {
     if (
@@ -282,7 +258,6 @@ function requireExactPreflightBinding(value: unknown): void {
   }
 }
 
-/** Requires one exact leaf-issued workflow execution lease. */
 function requireExactWorkflowExecutionLease(
   value: unknown
 ): asserts value is KnowledgeProductionWorkflowExecutionLease {

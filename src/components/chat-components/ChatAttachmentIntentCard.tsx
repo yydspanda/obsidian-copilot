@@ -1,10 +1,10 @@
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/CardTitle";
 import { FileText, LibraryBig, Loader2, MessageSquarePlus, X } from "lucide-react";
 import type { TFile } from "obsidian";
 import React from "react";
 
-/** Explicit actions for Vault files intercepted before Chat context mutation. */
 export interface ChatAttachmentIntentCardProps {
   files: readonly TFile[];
   addingPath?: string;
@@ -13,12 +13,6 @@ export interface ChatAttachmentIntentCardProps {
   onDismiss: (file: TFile) => void;
 }
 
-/**
- * Renders the mandatory one-use versus durable-knowledge choice for dropped files.
- *
- * The component is intentionally callback-only: it owns neither Chat context nor
- * Knowledge capture authority, so a render or dismissal cannot create side effects.
- */
 export function ChatAttachmentIntentCard({
   files,
   addingPath,

@@ -4,7 +4,6 @@ import { validateClaimCitation, validateVaultRelativePath } from "@/knowledge/mo
 import { KNOWLEDGE_GROUNDED_ANSWER_LIMITS } from "@/knowledge/query/KnowledgeGroundedAnswer";
 import { sha256 } from "@/utils/hash";
 
-/** Current immutable format of a grounded-answer source capture. */
 export const KNOWLEDGE_QUERY_WRITEBACK_CAPTURE_VERSION = 1 as const;
 
 const MAX_TITLE_CHARACTERS = 256;
@@ -14,7 +13,6 @@ const MAX_CITATION_REFERENCES =
 const OPAQUE_REFERENCE_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 const authenticQueryWritebackCaptures = new WeakSet<object>();
 
-/** One answer claim selected for a durable query-writeback capture. */
 export interface KnowledgeQueryWritebackClaimInput {
   readonly claimId: string;
   readonly kind: "source_fact" | "inference";
@@ -22,14 +20,12 @@ export interface KnowledgeQueryWritebackClaimInput {
   readonly citationRefs: readonly string[];
 }
 
-/** Exact source evidence retained behind one opaque query citation reference. */
 export interface KnowledgeQueryWritebackEvidenceInput {
   readonly citationRef: string;
   readonly sourcePath: string;
   readonly citation: Readonly<ClaimCitation>;
 }
 
-/** Complete current grounded-answer material accepted by the pure capture Core. */
 export interface KnowledgeQueryWritebackCaptureInput {
   readonly bundleId: string;
   readonly query: string;
@@ -42,7 +38,6 @@ export interface KnowledgeQueryWritebackCaptureInput {
   readonly evidence: readonly Readonly<KnowledgeQueryWritebackEvidenceInput>[];
 }
 
-/** Durable, content-addressed Markdown source produced before background compilation. */
 export interface KnowledgeQueryWritebackCapture {
   readonly version: typeof KNOWLEDGE_QUERY_WRITEBACK_CAPTURE_VERSION;
   readonly bundleId: string;
@@ -51,26 +46,20 @@ export interface KnowledgeQueryWritebackCapture {
   readonly sourceContentHash: string;
 }
 
-/** User-authored fields accepted by the opaque current-query save capability. */
 export interface KnowledgeStudioQueryWritebackRequest {
   readonly title: string;
 }
 
-/** Truthful boundary result: durable capture registration, not a fabricated Queue receipt. */
 export type KnowledgeStudioQueryWritebackResult = Readonly<{ kind: "registered" }>;
 
-/** Production edge that persists and registers an already-proven managed source capture. */
 export interface KnowledgeQueryWritebackSubmissionPort {
-  /** Persists one content-addressed capture and durably registers its exact source identity. */
   submit(
     capture: Readonly<KnowledgeQueryWritebackCapture>,
     signal: AbortSignal
   ): Promise<KnowledgeStudioQueryWritebackResult>;
 }
 
-/** UI-facing capability that accepts only an opaque current query and a display title. */
 export interface KnowledgeStudioQueryWritebackPort {
-  /** Captures the current answer for the normal background Review/Apply pipeline. */
   saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -79,16 +68,13 @@ export interface KnowledgeStudioQueryWritebackPort {
   ): Promise<KnowledgeStudioQueryWritebackResult>;
 }
 
-/** Sanitized capture failure that retains no answer, source path, or excerpt. */
 export class KnowledgeQueryWritebackCaptureError extends Error {
-  /** Creates one value-free writeback capture error. */
   constructor() {
     super("The grounded answer cannot be captured for reviewed Wiki writeback");
     this.name = "KnowledgeQueryWritebackCaptureError";
   }
 }
 
-/** Requires one in-process capture minted by the deterministic Core factory. */
 export function assertKnowledgeQueryWritebackCapture(
   value: unknown
 ): asserts value is KnowledgeQueryWritebackCapture {
@@ -97,7 +83,6 @@ export function assertKnowledgeQueryWritebackCapture(
   }
 }
 
-/** Checks a strict canonical identifier without normalizing caller identity. */
 function isCanonicalIdentifier(value: unknown, maximum = 512): value is string {
   return (
     typeof value === "string" &&
@@ -107,7 +92,6 @@ function isCanonicalIdentifier(value: unknown, maximum = 512): value is string {
   );
 }
 
-/** Captures a dense array without invoking iterators or element accessors. */
 function captureDenseArray(value: unknown, maximum: number): readonly unknown[] {
   try {
     if (!Array.isArray(value)) throw new TypeError("Expected an array");
@@ -136,7 +120,6 @@ function captureDenseArray(value: unknown, maximum: number): readonly unknown[] 
   }
 }
 
-/** Reads one enumerable own data property without evaluating an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -152,7 +135,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Requires one exact enumerable key set without invoking getters. */
 function assertExactKeys(value: unknown, expected: readonly string[]): void {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -172,7 +154,6 @@ function assertExactKeys(value: unknown, expected: readonly string[]): void {
   }
 }
 
-/** Captures one canonical bounded string. */
 function captureText(value: unknown, maximum: number): string {
   if (!isCanonicalIdentifier(value, maximum)) {
     throw new KnowledgeQueryWritebackCaptureError();
@@ -180,7 +161,6 @@ function captureText(value: unknown, maximum: number): string {
   return value;
 }
 
-/** Captures one answer claim and its unique opaque citation references. */
 function captureClaim(value: unknown): Readonly<KnowledgeQueryWritebackClaimInput> {
   assertExactKeys(value, ["claimId", "kind", "text", "citationRefs"]);
   const claimId = captureText(readDataProperty(value, "claimId"), 512);
@@ -207,7 +187,6 @@ function captureClaim(value: unknown): Readonly<KnowledgeQueryWritebackClaimInpu
   return Object.freeze({ claimId, kind, text, citationRefs: Object.freeze(citationRefs) });
 }
 
-/** Captures one exact source-backed evidence record. */
 function captureEvidence(value: unknown): Readonly<KnowledgeQueryWritebackEvidenceInput> {
   assertExactKeys(value, ["citationRef", "sourcePath", "citation"]);
   const citationRef = readDataProperty(value, "citationRef");
@@ -230,7 +209,6 @@ function captureEvidence(value: unknown): Readonly<KnowledgeQueryWritebackEviden
   });
 }
 
-/** Quotes arbitrary multiline material as a Markdown block quote. */
 function quoteMarkdown(value: string): string {
   return value
     .replace(/\r\n?/g, "\n")
@@ -239,7 +217,6 @@ function quoteMarkdown(value: string): string {
     .join("\n");
 }
 
-/** Formats one exact locator without turning it into an actionable link. */
 function formatLocator(citation: Readonly<ClaimCitation>): string {
   const locator = citation.locator;
   switch (locator.kind) {
@@ -256,7 +233,6 @@ function formatLocator(citation: Readonly<ClaimCitation>): string {
   }
 }
 
-/** Produces one deterministic human-readable derived-source document. */
 function renderCaptureSource(
   input: Readonly<KnowledgeQueryWritebackCaptureInput>,
   claims: readonly Readonly<KnowledgeQueryWritebackClaimInput>[],
@@ -336,16 +312,6 @@ function renderCaptureSource(
   return lines.join("\n");
 }
 
-/**
- * Captures one current grounded answer as a deterministic managed Markdown source.
- *
- * The output is not a Wiki mutation. A production edge must first persist it
- * under an authorized source root, register its source identity, and let the
- * normal watcher/Queue/Review pipeline produce a `query_writeback` ChangeSet.
- *
- * @param value - Current validated answer, exact citation targets, and revision read-set
- * @returns Content-addressed source material suitable for idempotent managed capture
- */
 export function createKnowledgeQueryWritebackCapture(
   value: KnowledgeQueryWritebackCaptureInput
 ): KnowledgeQueryWritebackCapture {

@@ -267,17 +267,11 @@ const compilerCandidateValidationResultSchema: z.ZodType<CompilerCandidateValida
   })
   .strict();
 
-/** Model stages that may receive compiler-issued process-local authorization. */
 export type KnowledgeCompilerModelCallStage = "generation";
 
 const modelSessionIdentities = new WeakSet<object>();
 
-/**
- * Fresh opaque identity for the writing call of one compile invocation.
- * A session has no public state and cannot authorize a different invocation.
- */
 export class KnowledgeCompilerModelSession {
-  /** Rejects direct construction without the module-private compiler token. */
   constructor(token: symbol) {
     if (token !== MODEL_SESSION_TOKEN) {
       throw new TypeError("The knowledge compiler model session is invalid");
@@ -285,7 +279,6 @@ export class KnowledgeCompilerModelSession {
     Object.freeze(this);
   }
 
-  /** Requires an authentic session minted by this compiler module. */
   static assert(value: unknown): asserts value is KnowledgeCompilerModelSession {
     if (typeof value !== "object" || value === null || !modelSessionIdentities.has(value)) {
       throw new TypeError("The knowledge compiler model session is invalid");
@@ -296,14 +289,12 @@ export class KnowledgeCompilerModelSession {
 Object.freeze(KnowledgeCompilerModelSession.prototype);
 Object.freeze(KnowledgeCompilerModelSession);
 
-/** Issues one fresh process-local model session for a compile invocation. */
 function createModelSession(): KnowledgeCompilerModelSession {
   const session = new KnowledgeCompilerModelSession(MODEL_SESSION_TOKEN);
   modelSessionIdentities.add(session);
   return session;
 }
 
-/** Exact private compiler state released to an authorized generation adapter. */
 export interface KnowledgeCompilerGenerationModelCall {
   stage: "generation";
   session: KnowledgeCompilerModelSession;
@@ -312,7 +303,6 @@ export interface KnowledgeCompilerGenerationModelCall {
   targets: readonly CompilerBoundTarget[];
 }
 
-/** One-shot compiler call state inspected only by the receiving model adapter. */
 export type KnowledgeCompilerModelCall = KnowledgeCompilerGenerationModelCall;
 
 interface KnowledgeCompilerModelCallAuthorizationState {
@@ -325,7 +315,6 @@ const modelCallAuthorizationStates = new WeakMap<
   KnowledgeCompilerModelCallAuthorizationState
 >();
 
-/** Returns hidden state only for a compiler-issued model-call authorization. */
 function requireModelCallAuthorizationState(
   value: unknown
 ): KnowledgeCompilerModelCallAuthorizationState {
@@ -339,7 +328,6 @@ function requireModelCallAuthorizationState(
   return state;
 }
 
-/** Issues one opaque authorization for an exact compiler-owned model call. */
 function createModelCallAuthorization(
   call: KnowledgeCompilerModelCall
 ): KnowledgeCompilerModelCallAuthorization {
@@ -348,15 +336,7 @@ function createModelCallAuthorization(
   return authorization;
 }
 
-/**
- * Opaque, process-local provenance for one exact compiler-issued model call.
- *
- * The authorization has no public fields and cannot be reconstructed from a
- * structurally equal request. Its receiving adapter must consume it once for
- * the expected stage before using the enclosed exact object identities.
- */
 export class KnowledgeCompilerModelCallAuthorization {
-  /** Rejects direct construction without the module-private compiler token. */
   constructor(token: symbol) {
     if (token !== MODEL_CALL_AUTHORIZATION_TOKEN) {
       throw new TypeError("The knowledge compiler model-call authorization is invalid");
@@ -364,13 +344,6 @@ export class KnowledgeCompilerModelCallAuthorization {
     Object.freeze(this);
   }
 
-  /**
-   * Consumes an authentic authorization once and returns its exact private call state.
-   *
-   * @param value - Candidate opaque authorization received by a model adapter
-   * @param expectedStage - Model stage expected by that adapter
-   * @returns Frozen call envelope retaining the compiler's exact object identities
-   */
   static consume<TStage extends KnowledgeCompilerModelCallStage>(
     value: unknown,
     expectedStage: TStage
@@ -387,17 +360,14 @@ export class KnowledgeCompilerModelCallAuthorization {
 Object.freeze(KnowledgeCompilerModelCallAuthorization.prototype);
 Object.freeze(KnowledgeCompilerModelCallAuthorization);
 
-/** Internal result used while normalizing untrusted analysis semantics. */
 type AnalysisNormalizationResult =
   | { ok: true; analysis: CompilerAnalysis; analysisDigest: string }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
 
-/** Internal result used while binding approved paths to exact file states. */
 type TargetBindingResult =
   | { ok: true; targets: CompilerWritableTarget[]; diagnostics: KnowledgeDiagnostic[] }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
 
-/** Internal result used while projecting written output into file changes. */
 type GenerationProjectionResult =
   | { ok: true; changes: KnowledgeFileChange[]; diagnostics: KnowledgeDiagnostic[] }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
@@ -440,7 +410,6 @@ const KNOWLEDGE_COMPILER_INFRASTRUCTURE_FAILURE_POLICIES: Readonly<
   provider_response_invalid: Object.freeze({ retryable: false, rateLimited: false }),
 });
 
-/** Returns hidden infrastructure-error state only for a Compiler-minted instance. */
 function requireKnowledgeCompilerInfrastructureErrorProjection(
   value: unknown
 ): Readonly<KnowledgeCompilerInfrastructureErrorProjection> {
@@ -454,7 +423,6 @@ function requireKnowledgeCompilerInfrastructureErrorProjection(
   return state.projection;
 }
 
-/** Creates one authentic sanitized Compiler infrastructure failure. */
 function createKnowledgeCompilerInfrastructureError(
   stage: Exclude<KnowledgeCompilerStage, "input">,
   code: KnowledgeCompilerInfrastructureFailureCode,
@@ -468,16 +436,7 @@ function createKnowledgeCompilerInfrastructureError(
   );
 }
 
-/** Sanitized dependency failure that never retains provider output or raw errors. */
 export class KnowledgeCompilerInfrastructureError extends Error {
-  /**
-   * Creates a safe infrastructure failure for one compiler dependency.
-   *
-   * @param token - Module-private construction authority
-   * @param stage - Dependency stage that failed to return a value
-   * @param code - Stable failure classification whose Queue policy is fixed by Core
-   * @param signal - Exact Queue-owned signal associated with the failed attempt
-   */
   constructor(
     token: symbol,
     stage: Exclude<KnowledgeCompilerStage, "input">,
@@ -509,7 +468,6 @@ export class KnowledgeCompilerInfrastructureError extends Error {
     Object.freeze(this);
   }
 
-  /** Reads one authentic error without accepting constructor/prototype forgery. */
   static inspect(
     value: unknown
   ): Readonly<KnowledgeCompilerInfrastructureErrorProjection> | undefined {
@@ -517,28 +475,23 @@ export class KnowledgeCompilerInfrastructureError extends Error {
     return knowledgeCompilerInfrastructureErrorStates.get(value)?.projection;
   }
 
-  /** Returns whether an authentic error belongs to the exact Queue execution signal. */
   static matchesSignal(value: unknown, signal: AbortSignal): boolean {
     if (typeof value !== "object" || value === null) return false;
     return knowledgeCompilerInfrastructureErrorStates.get(value)?.signal === signal;
   }
 
-  /** Returns the dependency stage retained in hidden state. */
   get stage(): Exclude<KnowledgeCompilerStage, "input"> {
     return requireKnowledgeCompilerInfrastructureErrorProjection(this).stage;
   }
 
-  /** Returns the stable provider-neutral classification retained in hidden state. */
   get code(): KnowledgeCompilerInfrastructureFailureCode {
     return requireKnowledgeCompilerInfrastructureErrorProjection(this).code;
   }
 
-  /** Returns the Core-owned retry classification retained in hidden state. */
   get retryable(): boolean {
     return requireKnowledgeCompilerInfrastructureErrorProjection(this).retryable;
   }
 
-  /** Returns the Core-owned rate-limit classification retained in hidden state. */
   get rateLimited(): boolean {
     return requireKnowledgeCompilerInfrastructureErrorProjection(this).rateLimited;
   }
@@ -547,28 +500,13 @@ export class KnowledgeCompilerInfrastructureError extends Error {
 Object.freeze(KnowledgeCompilerInfrastructureError.prototype);
 Object.freeze(KnowledgeCompilerInfrastructureError);
 
-/** Cancellation signal surfaced without retaining an arbitrary signal reason. */
 export class KnowledgeCompilerAbortError extends Error {
-  /**
-   * Creates a safe AbortError compatible with queue cancellation detection.
-   *
-   * @param stage - Compiler stage interrupted by the caller
-   */
   constructor(public readonly stage: Exclude<KnowledgeCompilerStage, "input">) {
     super(`Knowledge compilation was cancelled during ${stage}`);
     this.name = "AbortError";
   }
 }
 
-/**
- * Appends one deterministic diagnostic.
- *
- * @param diagnostics - Mutable destination
- * @param severity - Error or warning classification
- * @param code - Stable machine-readable code
- * @param field - Field associated with the issue
- * @param message - Safe human-readable message
- */
 function addDiagnostic(
   diagnostics: KnowledgeDiagnostic[],
   severity: KnowledgeDiagnostic["severity"],
@@ -579,13 +517,6 @@ function addDiagnostic(
   diagnostics.push({ code, severity, field, message });
 }
 
-/**
- * Prefixes nested diagnostics without exposing an implementation dependency.
- *
- * @param diagnostics - Nested diagnostics to copy
- * @param prefix - Stable parent field path
- * @returns Detached prefixed diagnostics
- */
 function prefixDiagnostics(
   diagnostics: readonly KnowledgeDiagnostic[],
   prefix: string
@@ -596,12 +527,6 @@ function prefixDiagnostics(
   }));
 }
 
-/**
- * Converts a Zod issue path to stable dotted/indexed field notation.
- *
- * @param path - Zod issue path
- * @returns Stable field path
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
@@ -612,12 +537,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/**
- * Maps strict schema issues to safe knowledge diagnostics.
- *
- * @param error - Zod validation error
- * @returns Detached structural diagnostics
- */
 function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.slice(0, MAX_COMPILER_SCHEMA_DIAGNOSTICS).map((issue) => ({
     code: `schema_${issue.code}`,
@@ -627,58 +546,23 @@ function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/**
- * Sorts stable text without locale-dependent behavior.
- *
- * @param left - First value
- * @param right - Second value
- * @returns Standard comparator result
- */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/**
- * Sorts paths by Windows comparison identity and then exact spelling.
- *
- * @param left - First Vault path
- * @param right - Second Vault path
- * @returns Standard comparator result
- */
 function compareVaultPaths(left: string, right: string): number {
   const keyComparison = compareText(toWindowsPathKey(left), toWindowsPathKey(right));
   return keyComparison === 0 ? compareText(left, right) : keyComparison;
 }
 
-/**
- * Produces a namespaced canonical SHA-256 digest.
- *
- * @param namespace - Versioned identity namespace
- * @param value - JSON-compatible semantic payload
- * @returns Lowercase SHA-256 digest
- */
 function digestJson(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/**
- * Produces a readable stable id without trusting a model-local reference.
- *
- * @param prefix - Entity namespace
- * @param value - Canonical semantic payload
- * @returns Prefixed lowercase SHA-256 identity
- */
 function createStableId(prefix: string, value: unknown): string {
   return `${prefix}-${digestJson(`knowledge-${prefix}-v1`, value)}`;
 }
 
-/**
- * Recursively freezes one detached request before it crosses an async port.
- *
- * @param value - Detached plain value
- * @param seen - Objects already visited during this recursion
- * @returns The same deeply frozen value
- */
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
   if (typeof value !== "object" || value === null || seen.has(value)) {
     return value;
@@ -705,7 +589,6 @@ interface CompilerDependencySnapshotBudget {
   seen: Set<object>;
 }
 
-/** Recursively copies only dense arrays and plain enumerable own data records. */
 function snapshotCompilerDependencyValue(
   value: unknown,
   budget: CompilerDependencySnapshotBudget,
@@ -788,17 +671,6 @@ function snapshotCompilerDependencyValue(
   return Object.freeze(snapshot);
 }
 
-/**
- * Snapshots an untrusted dependency payload without invoking data accessors.
- *
- * Exotic, cyclic, sparse, accessor-backed, or over-budget values collapse to
- * `undefined`, which the existing strict schema converts to a controlled
- * non-retryable dependency-output failure.
- *
- * @param value - Unknown target-resolver or candidate-validator payload
- * @param maxArrayItems - Stage-specific maximum dense collection length
- * @returns Detached data-only snapshot or undefined for any unsafe shape
- */
 function snapshotCompilerDependencyPayload(value: unknown, maxArrayItems: number): unknown {
   try {
     const budget: CompilerDependencySnapshotBudget = {
@@ -815,33 +687,14 @@ function snapshotCompilerDependencyPayload(value: unknown, maxArrayItems: number
   }
 }
 
-/**
- * Checks whether a path targets a Markdown file in the Windows-only Wiki.
- *
- * @param path - Canonical Vault-relative path
- * @returns Whether the final segment has a case-insensitive .md extension
- */
 function isMarkdownPath(path: string): boolean {
   return path.toLocaleLowerCase("en-US").endsWith(".md");
 }
 
-/**
- * Checks whether two valid Vault paths overlap as equal or ancestor/descendant.
- *
- * @param left - First path
- * @param right - Second path
- * @returns Whether either path contains the other
- */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/**
- * Copies one locator so no caller-owned object crosses an async boundary.
- *
- * @param locator - Strictly parsed source locator
- * @returns Detached locator preserving the discriminated shape
- */
 function cloneLocator(locator: CompilerEvidence["locator"]): CompilerEvidence["locator"] {
   if (locator.kind === "markdown_lines") {
     const { heading, ...required } = locator;
@@ -861,23 +714,10 @@ function cloneLocator(locator: CompilerEvidence["locator"]): CompilerEvidence["l
   };
 }
 
-/**
- * Creates one stable artifact lookup key.
- *
- * @param sourceId - Owning source id
- * @param artifactId - Parser artifact id
- * @returns Collision-resistant in-memory lookup key
- */
 function createArtifactKey(sourceId: string, artifactId: string): string {
   return `${sourceId.length}:${sourceId}${artifactId}`;
 }
 
-/**
- * Normalizes input collection order after strict parsing.
- *
- * @param input - Detached strict compiler input
- * @returns Detached input with semantically unordered collections sorted
- */
 function normalizeCompileInput(input: KnowledgeCompileInput): KnowledgeCompileInput {
   return {
     ...input,
@@ -913,13 +753,6 @@ function normalizeCompileInput(input: KnowledgeCompileInput): KnowledgeCompileIn
   };
 }
 
-/**
- * Validates semantic relationships in detached compile input.
- *
- * @param input - Strictly parsed and order-normalized input
- * @param limits - Explicit model-context resource bounds
- * @returns Deterministic input diagnostics
- */
 function validateCompileInput(
   input: KnowledgeCompileInput,
   limits: KnowledgeCompilerLimits
@@ -1398,12 +1231,6 @@ function validateCompileInput(
   return diagnostics;
 }
 
-/**
- * Creates an identity for the exact source context and destination authority.
- *
- * @param input - Validated normalized compiler input
- * @returns Stable compile context digest
- */
 function createCompileContextDigest(input: KnowledgeCompileInput): string {
   return digestJson("knowledge-compile-context-v1", {
     bundle: input.bundle,
@@ -1430,14 +1257,6 @@ function createCompileContextDigest(input: KnowledgeCompileInput): string {
   });
 }
 
-/**
- * Checks a model array against an explicitly configured resource bound.
- *
- * @param diagnostics - Mutable analysis diagnostics
- * @param field - Output array field
- * @param actual - Actual item count
- * @param limit - Configured maximum
- */
 function validateCollectionLimit(
   diagnostics: KnowledgeDiagnostic[],
   field: string,
@@ -1455,14 +1274,6 @@ function validateCollectionLimit(
   }
 }
 
-/**
- * Applies the configured character budget to one exact model request.
- *
- * @param value - Frozen provider-neutral request
- * @param limit - Maximum serialized character count
- * @param field - Request stage shown in diagnostics
- * @returns Empty diagnostics or one fail-closed size error
- */
 function validateModelRequestCharacterLimit(
   value: unknown,
   limit: number,
@@ -1481,13 +1292,6 @@ function validateModelRequestCharacterLimit(
   ];
 }
 
-/**
- * Records duplicate local references in one analysis namespace.
- *
- * @param diagnostics - Mutable analysis diagnostics
- * @param namespace - Output collection name
- * @param refs - Model-local refs in collection order
- */
 function validateUniqueRefs(
   diagnostics: KnowledgeDiagnostic[],
   namespace: string,
@@ -1508,14 +1312,6 @@ function validateUniqueRefs(
   });
 }
 
-/**
- * Normalizes the local writing plan and generated claims into stable domain ids.
- *
- * @param output - Compiler-owned targets and claims from strictly parsed generation output
- * @param input - Validated normalized compiler input
- * @param limits - Explicit resource limits
- * @returns Stable analysis or deterministic semantic diagnostics
- */
 function normalizeAnalysis(
   output: CompilerWritingPlan,
   input: KnowledgeCompileInput,
@@ -1860,14 +1656,6 @@ function normalizeAnalysis(
   };
 }
 
-/**
- * Validates a resolver-reported path against its approved Windows identity.
- *
- * @param path - Existing canonical path reported by the resolver
- * @param target - First-stage approved target
- * @param field - Observation field for diagnostics
- * @returns Deterministic path diagnostics
- */
 function validateObservedTargetPath(
   path: string,
   target: CompilerApprovedTarget,
@@ -1895,13 +1683,6 @@ function validateObservedTargetPath(
   return diagnostics;
 }
 
-/**
- * Binds planned intents to runtime-owned file observations.
- *
- * @param analysis - Stable normalized analysis
- * @param observations - Strictly parsed resolver payload
- * @returns Bound writable targets or fail-closed diagnostics
- */
 function bindTargetObservations(
   analysis: CompilerAnalysis,
   observations: CompilerTargetObservation[]
@@ -2030,13 +1811,6 @@ function bindTargetObservations(
   return { ok: true, targets: deepFreeze(boundTargets), diagnostics };
 }
 
-/**
- * Creates an immutable identity for exact runtime-bound target states.
- *
- * @param compileContextDigest - Digest of all model-visible compile context
- * @param targets - Exact sorted runtime-bound targets
- * @returns Target-set digest echoed by the generation response
- */
 function createTargetSetDigest(
   compileContextDigest: string,
   targets: readonly CompilerBoundTarget[]
@@ -2061,16 +1835,6 @@ function createTargetSetDigest(
   });
 }
 
-/**
- * Creates the exact evidence identity for a valid generation with no file changes.
- *
- * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized written-claim and target identity
- * @param targetSetDigest - Exact bound target-set identity
- * @param generationOutput - Strictly parsed writing result
- * @param projection - Runtime-owned generation projection
- * @returns Canonical no-change evidence digest
- */
 function createGeneratedNoChangesEvidenceDigest(
   compileContextDigest: string,
   analysisDigest: string,
@@ -2090,19 +1854,6 @@ function createGeneratedNoChangesEvidenceDigest(
   });
 }
 
-/**
- * Builds one immutable durable no-change result from an exact Compiler read-set.
- *
- * @param input - Validated normalized compile input
- * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized written-claim and target identity
- * @param analysis - Normalized written claims and target authority
- * @param diagnostics - Complete diagnostics for this successful conclusion
- * @param reason - Stable stage-specific no-change reason
- * @param evidenceDigest - Exact evidence identity for that reason
- * @param generationOutcomes - Content-free generation counts, absent for earlier exits
- * @returns Complete no-change result and Manifest commit plan
- */
 function createNoChangesResult(
   input: KnowledgeCompileInput,
   compileContextDigest: string,
@@ -2184,13 +1935,6 @@ function createNoChangesResult(
   };
 }
 
-/**
- * Builds one runtime-owned file change from a writable target and model content.
- *
- * @param target - Exact create or update target
- * @param afterContent - Model-produced content only
- * @returns Fully hashed file change
- */
 function createWritableChange(
   target: Extract<CompilerBoundTarget, { operation: "create" | "update" }>,
   afterContent: string
@@ -2225,15 +1969,6 @@ function createWritableChange(
   };
 }
 
-/**
- * Validates exact writing coverage and creates runtime-owned changes.
- *
- * @param output - Strictly parsed generation output
- * @param targetSetDigest - Digest generation must echo exactly
- * @param targets - Runtime-bound approved targets
- * @param limits - Explicit content resource bounds
- * @returns Stable file changes or fail-closed diagnostics
- */
 function projectGeneration(
   output: CompilerGenerationModelOutput,
   targetSetDigest: string,
@@ -2359,16 +2094,6 @@ function projectGeneration(
   return { ok: true, changes, diagnostics };
 }
 
-/**
- * Creates a stable ChangeSet id from semantic proposal material, excluding time.
- *
- * @param input - Validated normalized compile input
- * @param analysisDigest - Stable analysis digest
- * @param targetSetDigest - Exact target-state digest
- * @param changes - Runtime-owned file changes
- * @param citations - Runtime-owned normalized citations
- * @returns Stable proposal id
- */
 function createChangeSetId(
   input: KnowledgeCompileInput,
   analysisDigest: string,
@@ -2387,14 +2112,6 @@ function createChangeSetId(
   });
 }
 
-/**
- * Derives the complete source reference union without trusting model output.
- *
- * @param primarySourceId - Queue-owned primary source id
- * @param changes - Runtime-owned file changes
- * @param citations - Runtime-owned citations
- * @returns Sorted unique source ids
- */
 function collectSourceRefs(
   primarySourceId: string,
   changes: readonly KnowledgeFileChange[],
@@ -2406,13 +2123,6 @@ function collectSourceRefs(
   return [...sourceRefs].sort(compareText);
 }
 
-/**
- * Builds a controlled deterministic failure result.
- *
- * @param stage - Compiler stage that rejected the value
- * @param diagnostics - Safe structured diagnostics
- * @returns Persistable non-retryable failure
- */
 function createFailure(
   stage: KnowledgeCompilerStage,
   diagnostics: KnowledgeDiagnostic[]
@@ -2420,7 +2130,6 @@ function createFailure(
   return { kind: "failed", stage, retryable: false, diagnostics };
 }
 
-/** Binds model-written statements to trusted evidence without creating a second content gate. */
 function createWrittenAnalysis(
   plan: CompilerWritingPlan,
   targets: readonly CompilerBoundTarget[],
@@ -2462,11 +2171,6 @@ function createWrittenAnalysis(
   };
 }
 
-/**
- * Verifies configured limits before the compiler accepts dependencies.
- *
- * @param limits - Merged compile limits
- */
 function assertValidLimits(limits: KnowledgeCompilerLimits): void {
   for (const [field, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value <= 0) {
@@ -2475,15 +2179,9 @@ function assertValidLimits(limits: KnowledgeCompilerLimits): void {
   }
 }
 
-/** Plans safe source destinations, then validates one model-written review draft. */
 export class KnowledgeCompiler {
   private readonly limits: KnowledgeCompilerLimits;
 
-  /**
-   * Creates a compiler with all provider, read, and validation boundaries injected.
-   *
-   * @param dependencies - Model, read-only target resolver, validator, and limits
-   */
   constructor(private readonly dependencies: KnowledgeCompilerDependencies) {
     this.limits = {
       ...DEFAULT_KNOWLEDGE_COMPILER_LIMITS,
@@ -2492,17 +2190,6 @@ export class KnowledgeCompiler {
     assertValidLimits(this.limits);
   }
 
-  /**
-   * Compiles trusted parser material into a validated review-only ChangeSet.
-   *
-   * The method performs no Vault write. Model outputs remain unknown until
-   * strict parsing, target paths are bound before generation, and the returned
-   * ChangeSet status is always `proposed`.
-   *
-   * @param value - Typed or runtime-supplied compile input
-   * @param signal - Cancellation signal owned by the ingest queue attempt
-   * @returns No changes, a safe controlled failure, or a validated proposal
-   */
   async compile(
     value: KnowledgeCompileInput,
     signal: AbortSignal
@@ -2824,15 +2511,6 @@ export class KnowledgeCompiler {
     };
   }
 
-  /**
-   * Creates and freezes the provider-neutral source-writing request.
-   *
-   * @param input - Validated normalized compile input
-   * @param compileContextDigest - Identity of exact model-visible context
-   * @param targetSetDigest - Identity of runtime-bound target states
-   * @param targets - Runtime-bound writable targets only
-   * @returns Deeply frozen generation request
-   */
   private createGenerationRequest(
     input: KnowledgeCompileInput,
     compileContextDigest: string,
@@ -2869,28 +2547,12 @@ export class KnowledgeCompiler {
     });
   }
 
-  /**
-   * Delivers one exact one-shot call authorization to an opted-in model port.
-   *
-   * The caller invokes this method inside `invokeDependency`, so an accessor or
-   * hook failure is sanitized as the matching analysis or generation stage.
-   *
-   * @param call - Exact compiler-owned model call state
-   */
   private authorizeModelCall(call: KnowledgeCompilerModelCall): void {
     const model = this.dependencies.model;
     if (model.authorizeModelCall === undefined) return;
     model.authorizeModelCall(createModelCallAuthorization(call));
   }
 
-  /**
-   * Invokes one dependency while preserving cancellation and sanitizing errors.
-   *
-   * @param stage - Dependency stage
-   * @param signal - Cancellation signal
-   * @param invoke - Deferred dependency invocation
-   * @returns Dependency payload
-   */
   private async invokeDependency<T>(
     stage: Exclude<KnowledgeCompilerStage, "input">,
     signal: AbortSignal,
@@ -2917,16 +2579,6 @@ export class KnowledgeCompiler {
     }
   }
 
-  /**
-   * Invokes only the classifier paired with the exact model dependency.
-   *
-   * Unknown classifier output fails closed for model stages. Other dependency
-   * stages retain the existing bounded-retry classification.
-   *
-   * @param stage - Dependency stage that rejected
-   * @param error - Opaque rejection, never retained
-   * @returns One stable provider-neutral code whose retry facts are Core-owned
-   */
   private classifyDependencyFailure(
     stage: Exclude<KnowledgeCompilerStage, "input">,
     error: unknown
@@ -2958,16 +2610,11 @@ export class KnowledgeCompiler {
       }
     } catch {
       // A classifier is diagnostic-only and cannot expose or replace its original error.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     return "model_authority_failed";
   }
 
-  /**
-   * Converts false validator flags into explicit fail-closed diagnostics.
-   *
-   * @param validation - Deterministic validation flags
-   * @param diagnostics - Mutable validator diagnostics
-   */
   private appendFailedValidationFlags(
     validation: KnowledgeValidationSummary,
     diagnostics: KnowledgeDiagnostic[]

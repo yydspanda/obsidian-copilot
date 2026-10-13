@@ -24,7 +24,6 @@ const CURRENT_REF = `known-wiki-output-${"1".repeat(64)}`;
 const SELECTED_REF = `known-wiki-output-${"2".repeat(64)}`;
 const PAGE_REF = `known-wiki-page-${"3".repeat(64)}`;
 
-/** Creates canonical source-Apply provenance for one historical selection. */
 function origins(
   appliedAt: number
 ): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
@@ -38,23 +37,19 @@ function origins(
   ]);
 }
 
-/** Minimal atomic file used only to mint a genuine read/write Runtime facade. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   processCallCount = 0;
 
-  /** Creates the file only when absent. */
   async initialize(initialContent: string): Promise<void> {
     this.content ??= initialContent;
   }
 
-  /** Reads the exact current content. */
   async read(): Promise<string> {
     if (this.content === undefined) throw new Error("Runtime file is not initialized");
     return this.content;
   }
 
-  /** Applies one synchronous exact transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     this.processCallCount += 1;
     if (this.content === undefined) throw new Error("Runtime file is not initialized");
@@ -63,7 +58,6 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   }
 }
 
-/** Mints one genuine owner-bound Runtime facade and its revocable test lifecycle. */
 function createRuntimeFixture(file = new MemoryAtomicRuntimeFile()) {
   const pairing = createKnowledgeProductionWorkflowExecutionPairing();
   const executionBinding = consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
@@ -91,7 +85,6 @@ function createRuntimeFixture(file = new MemoryAtomicRuntimeFile()) {
   });
 }
 
-/** Creates one authentic-shaped R3b session for pre-publication checks. */
 function createSession(
   currentState: "applied" | "drifted" = "applied"
 ): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
@@ -127,7 +120,6 @@ function createSession(
   });
 }
 
-/** Creates one identity-checking R3b reader with no Runtime authority. */
 function createKnownOutputsDelegate(
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
   currentContent = CURRENT_CONTENT
@@ -179,7 +171,6 @@ function createKnownOutputsDelegate(
   };
 }
 
-/** Creates the production coordinator over genuine Runtime and R3b capabilities. */
 async function createCoordinator(
   delegateSession: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
   currentContent = CURRENT_CONTENT

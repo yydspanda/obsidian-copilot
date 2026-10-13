@@ -1,16 +1,3 @@
-/**
- * Recognizes intentional cancellation without invoking candidate accessors.
- *
- * Same-realm platform errors retain their native brand. Detached or serialized
- * cross-realm failures are accepted only when a bounded prototype walk finds an
- * own data property whose exact value is `AbortError`. Native foreign-realm
- * DOMException instances keep their name behind an accessor, which this helper
- * deliberately does not invoke; async boundaries must also honor their associated
- * AbortSignal. Hostile accessors and Proxy traps fail closed.
- *
- * @param value - Unknown rejection value
- * @returns Whether the value represents platform-standard cancellation
- */
 export function isKnowledgeAbortError(value: unknown): boolean {
   try {
     if (value instanceof DOMException) return value.name === "AbortError";

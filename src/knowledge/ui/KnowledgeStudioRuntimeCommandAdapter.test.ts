@@ -46,14 +46,12 @@ const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 const RUNTIME_ID = "d".repeat(32);
 
-/** Promise whose settlement is controlled by one test. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
   reject(reason: unknown): void;
 }
 
-/** Creates one externally settled Promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -64,12 +62,10 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Clones one JSON-compatible value across a persistence boundary. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Creates the strict empty Queue state used by Activity adapter tests. */
 function createQueueSnapshot(
   revision = 0,
   overrides: Partial<IngestQueueSnapshot> = {}
@@ -89,7 +85,6 @@ function createQueueSnapshot(
   };
 }
 
-/** JSON-only Queue storage with strict compare-and-swap behavior. */
 class MemoryQueueStorage implements QueueStorage {
   private readonly values = new Map<string, unknown>();
 
@@ -99,18 +94,15 @@ class MemoryQueueStorage implements QueueStorage {
     expectedRevision: number | null;
   }> = [];
 
-  /** Seeds one exact Queue snapshot without counting a command write. */
   seed(snapshot: IngestQueueSnapshot): void {
     this.values.set(snapshot.bundleId, cloneJson(snapshot));
   }
 
-  /** Reads detached persisted Queue JSON. */
   async read(bundleId: string): Promise<unknown> {
     const value = this.values.get(bundleId);
     return value === undefined ? null : cloneJson(value);
   }
 
-  /** Atomically compares and replaces one complete Queue snapshot. */
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -133,7 +125,6 @@ class MemoryQueueStorage implements QueueStorage {
     this.values.set(bundleId, cloneJson(snapshot));
   }
 
-  /** Returns one strict detached Queue snapshot for assertions. */
   snapshot(bundleId = BUNDLE_ID): IngestQueueSnapshot {
     const value = this.values.get(bundleId);
     const parsed = parseIngestQueueSnapshot(value);
@@ -142,35 +133,29 @@ class MemoryQueueStorage implements QueueStorage {
   }
 }
 
-/** Records the exact post-commit Queue notifications emitted by Activity commands. */
 class RecordingEventSink implements EventSink {
   readonly events: IngestQueueEvent[] = [];
 
-  /** Records one value-free Queue event. */
   emit(event: IngestQueueEvent): void {
     this.events.push({ ...event });
   }
 }
 
-/** Minimal serialized atomic Runtime file with a write counter. */
 class CountingMemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
 
   processCount = 0;
 
-  /** Initializes the file without replacing existing bytes. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) this.content = initialContent;
   }
 
-  /** Reads the current exact Runtime bytes. */
   async read(): Promise<string> {
     if (this.content === undefined) throw new Error("The test Runtime is not initialized");
     return this.content;
   }
 
-  /** Serializes and commits one synchronous full-file transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     const previous = this.tail;
     let release: () => void = () => undefined;
@@ -188,18 +173,15 @@ class CountingMemoryAtomicRuntimeFile implements AtomicRuntimeFile {
     }
   }
 
-  /** Replaces the Runtime bytes to seed an exact durable fixture. */
   replaceContent(content: string): void {
     this.content = content;
   }
 
-  /** Resets only the command-write counter after fixture setup. */
   resetProcessCount(): void {
     this.processCount = 0;
   }
 }
 
-/** Creates one authentic Queue whose executor is unreachable in adapter tests. */
 function createQueue(storage: QueueStorage, sink = new RecordingEventSink()): IngestQueue {
   return new IngestQueue(
     storage,
@@ -212,7 +194,6 @@ function createQueue(storage: QueueStorage, sink = new RecordingEventSink()): In
   );
 }
 
-/** Creates one proposed ChangeSet for an exact pending Review. */
 function createProposal(): KnowledgeChangeSet {
   const afterContent = "# Adapter rejection\n";
   return {
@@ -239,7 +220,6 @@ function createProposal(): KnowledgeChangeSet {
   };
 }
 
-/** Creates one immutable Manifest plan retained by the pending Review. */
 function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   return {
     version: 1,
@@ -264,7 +244,6 @@ function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   };
 }
 
-/** Creates exact Queue, Review, and command identity for atomic Reject tests. */
 function createPendingReviewFixture(): {
   queue: IngestQueueSnapshot;
   review: ChangeSetReviewSnapshot;
@@ -345,7 +324,6 @@ function createPendingReviewFixture(): {
   };
 }
 
-/** Creates an initialized authentic Runtime and its narrow Reject facade. */
 async function createReviewRuntime(fixture = createPendingReviewFixture()): Promise<{
   file: CountingMemoryAtomicRuntimeFile;
   runtime: KnowledgeRuntimeStore;
@@ -394,7 +372,6 @@ async function createReviewRuntime(fixture = createPendingReviewFixture()): Prom
   return { file, runtime, port: new KnowledgeRuntimeReviewRejectPort(runtime) };
 }
 
-/** Creates an authentic command adapter with observable lifecycle and side effects. */
 async function createAdapterHarness(
   options: {
     fixture?: ReturnType<typeof createPendingReviewFixture>;

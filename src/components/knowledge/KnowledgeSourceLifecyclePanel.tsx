@@ -3,7 +3,8 @@ import { AlertTriangle, FileCheck2, FileWarning, Loader2, RefreshCw, Trash2 } fr
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/CardTitle";
 import type {
   KnowledgeSourceLifecycleIssueReason,
   KnowledgeSourceLifecycleItem,
@@ -11,10 +12,8 @@ import type {
   KnowledgeSourceRemovalConfirmation,
 } from "@/knowledge/ui/sourceLifecycleModel";
 
-/** Async-or-sync callback result accepted by the UI-only command boundary. */
 type KnowledgeSourceLifecycleCommandResult = void | Promise<void>;
 
-/** Callback-only boundary for source lifecycle requests. */
 export interface KnowledgeSourceLifecyclePanelProps {
   model: Readonly<KnowledgeSourceLifecycleModel>;
   onCheckAgain: (sourceId: string, signal: AbortSignal) => KnowledgeSourceLifecycleCommandResult;
@@ -47,19 +46,16 @@ const ERROR_MESSAGES: Readonly<Record<PendingActionKind, string>> = {
   remove: "The removal request could not be completed.",
 };
 
-/** Returns the stable visible label for one source custody mode. */
 function getCustodyLabel(custody: KnowledgeSourceLifecycleItem["custody"]): string {
   return custody === "managed_copy" ? "Managed copy" : "User managed";
 }
 
-/** Returns the stable explanation for a currently blocked source removal. */
 function getRemovalBlockerMessage(source: Readonly<KnowledgeSourceLifecycleItem>): string {
   return source.retirementBlockers.includes("forward_revision_overlay_active")
     ? "Removal is unavailable while this source owns an active reviewed Wiki revision. Apply or supersede that revision before checking again."
     : "Removal is currently unavailable. Clear pending Activity, Review, or Recovery work, then check again.";
 }
 
-/** Returns the pending label for one row or undefined when another row owns work. */
 function getPendingLabel(pending: PendingAction | undefined, sourceId: string): string | undefined {
   if (pending?.sourceId !== sourceId) return undefined;
   switch (pending.kind) {
@@ -80,7 +76,6 @@ interface SourceLifecycleRowProps {
   onCheckAgain: (sourceId: string) => void;
 }
 
-/** Renders one active source row without acquiring durable write authority. */
 function SourceLifecycleRow({
   source,
   pending,
@@ -253,15 +248,6 @@ function SourceLifecycleRow({
   );
 }
 
-/**
- * Presents every active source and delegates lifecycle requests to narrow callbacks.
- *
- * This component never reads, copies, registers, retires, or deletes a source.
- * Retirement uses one exact revision-bound confirmation captured from the model.
- *
- * @param props - Immutable model and revocable command callbacks
- * @returns Accessible source inventory with fail-closed lifecycle controls
- */
 export function KnowledgeSourceLifecyclePanel({
   model,
   onCheckAgain,
@@ -288,7 +274,6 @@ export function KnowledgeSourceLifecyclePanel({
     };
   }, []);
 
-  /** Runs exactly one callback under a panel-owned abort signal. */
   const runAction = React.useCallback(
     async (
       kind: PendingActionKind,
@@ -321,7 +306,6 @@ export function KnowledgeSourceLifecyclePanel({
     []
   );
 
-  /** Starts one exact source recheck without passing paths or model objects. */
   const checkAgain = React.useCallback(
     (sourceId: string): void => {
       void runAction("check", sourceId, (signal) => onCheckAgain(sourceId, signal));
@@ -329,7 +313,6 @@ export function KnowledgeSourceLifecyclePanel({
     [onCheckAgain, runAction]
   );
 
-  /** Freezes the exact row and revision authority that opened removal confirmation. */
   const beginRemove = React.useCallback(
     (source: Readonly<KnowledgeSourceLifecycleItem>): void => {
       setConfirmation(
@@ -345,7 +328,6 @@ export function KnowledgeSourceLifecyclePanel({
     [model.manifestRevision, model.runtimeRevision]
   );
 
-  /** Completes the second removal confirmation with its frozen authority token. */
   const confirmRemove = React.useCallback(
     (confirmed: Readonly<KnowledgeSourceRemovalConfirmation>): void => {
       setConfirmation(undefined);

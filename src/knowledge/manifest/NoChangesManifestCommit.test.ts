@@ -30,7 +30,6 @@ const EXPECTED_MANIFEST_DIGEST = "f".repeat(64);
 const CAPTURE_DIGEST = "1".repeat(64);
 const PAGE_HASH = "2".repeat(64);
 
-/** Creates an ordinary source authority through the shared SourceOrigin boundary. */
 function createSourceAuthority() {
   const entry: SourceManifestEntry = {
     sourceId: "source-1",
@@ -41,7 +40,6 @@ function createSourceAuthority() {
   return deriveKnowledgeSourceCompileAuthority(entry);
 }
 
-/** Creates a managed query-writeback authority through the shared SourceOrigin boundary. */
 function createQueryAuthority() {
   const entry: SourceManifestEntry = {
     sourceId: "source-query",
@@ -56,7 +54,6 @@ function createQueryAuthority() {
   return deriveKnowledgeSourceCompileAuthority(entry);
 }
 
-/** Creates one complete base page for no-changes freshness projection. */
 function createPage(
   path = "Wiki/Alpha.md",
   ownership: ManifestCommitPage["ownership"] = "generated",
@@ -65,7 +62,6 @@ function createPage(
   return { path, ownership, contentHash };
 }
 
-/** Creates a complete ordinary plan input with replaceable fields. */
 function createPlanInput(
   overrides: Partial<CreateNoChangesManifestCommitPlanInput> = {}
 ): CreateNoChangesManifestCommitPlanInput {
@@ -87,7 +83,6 @@ function createPlanInput(
   };
 }
 
-/** Creates one strict ordinary plan. */
 function createPlan(
   overrides: Partial<CreateNoChangesManifestCommitPlanInput> = {}
 ): NoChangesManifestCommitPlan {

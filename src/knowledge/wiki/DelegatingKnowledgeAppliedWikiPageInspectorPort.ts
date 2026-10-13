@@ -59,25 +59,20 @@ interface DelegatingInspectorState {
 
 const delegatingInspectorStates = new WeakMap<object, DelegatingInspectorState>();
 
-/** Explicit fail-closed delegate used before and between production generations. */
 class UnavailableKnowledgeAppliedWikiPageInspectorPort implements KnowledgeAppliedWikiPageInspectorPort {
-  /** Rejects inspection while no released production generation owns it. */
   async inspectPage(): Promise<Readonly<KnowledgeAppliedWikiPageInspectionSession>> {
     throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
   }
 
-  /** Reports a value-free unavailable result when no generation is installed. */
   async openEvidence(): Promise<Readonly<KnowledgeAppliedWikiEvidenceOpenResult>> {
     return UNAVAILABLE_RESULT;
   }
 }
 
-/** Creates the platform-standard cancellation category without retaining a reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reads an exact own enumerable data record without invoking accessors. */
 function readExactRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -106,7 +101,6 @@ function readExactRecord(
   }
 }
 
-/** Snapshots a dense bounded array without invoking indexed property accessors. */
 function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -145,17 +139,14 @@ function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown
   }
 }
 
-/** Reports whether one number is a safe non-negative integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** Reports whether one number is a safe positive integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
-/** Captures one display-only Review location summary. */
 function snapshotLocation(
   value: unknown
 ): KnowledgeAppliedWikiSourceSummary["evidence"][number]["location"] | undefined {
@@ -217,7 +208,6 @@ function snapshotLocation(
   });
 }
 
-/** Captures one bounded display-only evidence summary. */
 function snapshotEvidence(
   value: unknown
 ): KnowledgeAppliedWikiSourceSummary["evidence"][number] | undefined {
@@ -252,7 +242,6 @@ function snapshotEvidence(
   });
 }
 
-/** Captures one bounded display-only Source summary within the remaining page evidence budget. */
 function snapshotSource(
   value: unknown,
   maxEvidence: number
@@ -293,7 +282,6 @@ function snapshotSource(
   });
 }
 
-/** Strictly snapshots a delegate DTO for display; this does not authenticate it for opening. */
 function snapshotDelegateSession(
   value: unknown
 ): Readonly<KnowledgeAppliedWikiPageInspectionSession> | undefined {
@@ -376,7 +364,6 @@ function snapshotDelegateSession(
   });
 }
 
-/** Captures a value-free navigation result without invoking accessors. */
 function snapshotOpenResult(value: unknown): Readonly<KnowledgeAppliedWikiEvidenceOpenResult> {
   const record = readExactRecord(value, ["kind"]);
   switch (record?.kind) {
@@ -392,7 +379,6 @@ function snapshotOpenResult(value: unknown): Readonly<KnowledgeAppliedWikiEviden
   }
 }
 
-/** Finds a data method on one delegate/prototype chain without invoking getters. */
 function captureMethod(value: object, name: string): ((...args: unknown[]) => unknown) | undefined {
   try {
     let owner: object | null = value;
@@ -413,7 +399,6 @@ function captureMethod(value: object, name: string): ((...args: unknown[]) => un
   }
 }
 
-/** Captures an inspector delegate without retaining accessor-based capabilities. */
 function captureDelegate(value: KnowledgeAppliedWikiPageInspectorPort): CapturedInspectorDelegate {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
@@ -447,7 +432,6 @@ function captureDelegate(value: KnowledgeAppliedWikiPageInspectorPort): Captured
   });
 }
 
-/** Links caller and generation cancellation with deterministic listener cleanup. */
 function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   const controller = new AbortController();
   const listeners: Array<Readonly<{ signal: AbortSignal; listener: () => void }>> = [];
@@ -468,14 +452,12 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   });
 }
 
-/** Recreates only recognized value-free failures at the stable boundary. */
 function sanitizeInspectionError(error: unknown): Error {
   const code = getKnowledgeAppliedWikiPageInspectorErrorCode(error);
   if (code !== undefined) return new KnowledgeAppliedWikiPageInspectorError(code);
   return new KnowledgeAppliedWikiPageInspectorError("unavailable");
 }
 
-/** Races one delegate promise against cancellation and always removes its race listener. */
 async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw createAbortError();
   let rejectAborted: (() => void) | undefined;
@@ -490,7 +472,6 @@ async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promi
   }
 }
 
-/** Creates one separately cancellable captured delegate generation. */
 function createGeneration(delegate: KnowledgeAppliedWikiPageInspectorPort): InspectorGeneration {
   return Object.freeze({
     delegate: captureDelegate(delegate),
@@ -498,7 +479,6 @@ function createGeneration(delegate: KnowledgeAppliedWikiPageInspectorPort): Insp
   });
 }
 
-/** Returns hidden state only for one authentic stable wrapper instance. */
 function requireDelegatingInspectorState(value: unknown): DelegatingInspectorState {
   if (
     typeof value !== "object" ||
@@ -512,14 +492,7 @@ function requireDelegatingInspectorState(value: unknown): DelegatingInspectorSta
   return state;
 }
 
-/**
- * Stable Wiki-inspector boundary whose authentic sessions are generation-revocable.
- *
- * Delegate sessions are never exposed. The wrapper snapshots display DTOs and
- * binds their exact identities back to the delegate generation in a WeakMap.
- */
 export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements KnowledgeAppliedWikiPageInspectorPort {
-  /** Creates a frozen stable wrapper in an explicit unavailable generation. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeAppliedWikiPageInspectorPort());
     delegatingInspectorStates.set(this, {
@@ -531,7 +504,6 @@ export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements Knowledg
     Object.freeze(this);
   }
 
-  /** Atomically installs a new delegate and aborts every old in-flight read. */
   replaceDelegate(delegate: KnowledgeAppliedWikiPageInspectorPort): void {
     const state = requireDelegatingInspectorState(this);
     if (state.disposed) throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
@@ -541,21 +513,18 @@ export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements Knowledg
     state.generation = replacement;
   }
 
-  /** Publishes the explicit unavailable generation without disposing the wrapper. */
   setUnavailable(): void {
     const state = requireDelegatingInspectorState(this);
     if (state.disposed) return;
     this.replaceDelegate(state.unavailable);
   }
 
-  /** Revokes a delegate only if that exact owner is still current. */
   revokeDelegate(delegate: KnowledgeAppliedWikiPageInspectorPort): void {
     const state = requireDelegatingInspectorState(this);
     if (state.disposed || state.generation.delegate.owner !== delegate) return;
     this.setUnavailable();
   }
 
-  /** Permanently revokes the wrapper and all session/open work. */
   dispose(): void {
     const state = requireDelegatingInspectorState(this);
     if (state.disposed) return;
@@ -565,7 +534,6 @@ export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements Knowledg
     state.generation = createGeneration(state.unavailable);
   }
 
-  /** Routes one strict page request through exactly one delegate generation. */
   async inspectPage(
     requestValue: Readonly<KnowledgeAppliedWikiPageInspectionRequest>,
     signal: AbortSignal
@@ -601,7 +569,6 @@ export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements Knowledg
     }
   }
 
-  /** Opens only evidence bound to one exact authentic wrapper session. */
   async openEvidence(
     session: Readonly<KnowledgeAppliedWikiPageInspectionSession>,
     evidenceRef: string,

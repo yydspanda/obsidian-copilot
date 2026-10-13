@@ -15,9 +15,7 @@ function provider(overrides: Partial<Provider> = {}): Provider {
 
 describe("providerRequiresApiKey", () => {
   describe("providerRequiresApiKey()", () => {
-    it("returns the explicit flag — the only runtime criteria", () => {
-      // The flag wins regardless of identity: a hosted catalog provider marked
-      // keyless reads keyless; a self-hosted row marked key-requiring reads so.
+    it("returns the explicit requiresApiKey flag regardless of catalog id or base URL", () => {
       expect(
         providerRequiresApiKey(
           provider({
@@ -33,15 +31,13 @@ describe("providerRequiresApiKey", () => {
       ).toBe(true);
     });
 
-    it("defaults a flagless row to key-requiring (defensive backstop)", () => {
-      // Post-migration every persisted row carries the flag; a stray undefined
-      // must never read as keyless or its models would be silently dropped.
+    it("treats a provider without the flag as requiring a key", () => {
       expect(providerRequiresApiKey(provider({ requiresApiKey: undefined }))).toBe(true);
     });
   });
 
   describe("providerNeedsResolvedApiKey()", () => {
-    it("requires a runtime key for required providers, Copilot Plus, and optional providers with a stored pointer (https://github.com/logancyang/obsidian-copilot/issues/2895)", () => {
+    it("needs a runtime key for required-key providers, Copilot Plus, and optional-key providers with a stored key, but not for an optional-key provider without one (https://github.com/logancyang/obsidian-copilot/issues/2895)", () => {
       expect(providerNeedsResolvedApiKey(provider({ requiresApiKey: true }))).toBe(true);
       expect(
         providerNeedsResolvedApiKey(

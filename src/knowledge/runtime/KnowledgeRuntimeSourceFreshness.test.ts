@@ -7,7 +7,6 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 
-/** Creates common exact Runtime and Manifest source bindings. */
 function createCommonAuthority() {
   return {
     version: 2,
@@ -35,7 +34,6 @@ function createCommonAuthority() {
   };
 }
 
-/** Creates one strict Apply authority candidate. */
 function createAppliedAuthority() {
   return {
     ...createCommonAuthority(),
@@ -50,7 +48,6 @@ function createAppliedAuthority() {
   };
 }
 
-/** Creates one strict no-changes authority candidate. */
 function createNoChangesAuthority() {
   return {
     ...createCommonAuthority(),

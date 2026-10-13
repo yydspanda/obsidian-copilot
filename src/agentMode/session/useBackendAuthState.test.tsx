@@ -21,6 +21,35 @@ const makeDescriptor = (): BackendDescriptor =>
 
 describe("useBackendAuthState", () => {
   describe("useBackendAuthState()", () => {
+    it("re-probes when the caller's auth-relevant key changes", async () => {
+      const descriptor = makeDescriptor();
+      descriptor.auth!.getStatus = jest
+        .fn()
+        .mockResolvedValueOnce({ signedIn: false })
+        .mockResolvedValueOnce({ signedIn: true });
+      const { result, rerender } = renderHook(
+        ({ binaryPath }) => useBackendAuthState(descriptor, binaryPath),
+        { initialProps: { binaryPath: "" } }
+      );
+
+      await waitFor(() => expect(result.current.status).toEqual({ signedIn: false }));
+
+      rerender({ binaryPath: "/usr/local/bin/claude" });
+
+      await waitFor(() => expect(result.current.status).toEqual({ signedIn: true }));
+      expect(descriptor.auth!.getStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps auth state empty when the descriptor has no auth capability", () => {
+      const descriptor = { id: "codex", displayName: "Codex" } as BackendDescriptor;
+
+      const { result } = renderHook(() => useBackendAuthState(descriptor));
+
+      expect(result.current.status).toBeNull();
+      expect(result.current.signingIn).toBe(false);
+      expect(result.current.url).toBeNull();
+    });
+
     it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 re-probes backend profile changes even without a caller key", async () => {
       const descriptor = makeDescriptor();
       let profile = "first";
@@ -184,7 +213,7 @@ describe("useBackendAuthState", () => {
       expect(owner.result.current.status?.signedIn).toBe(false);
     });
 
-    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 retains cached status while a newly mounted consumer refreshes it", async () => {
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 retains cached status and reports a pending refresh for a new consumer (https://github.com/Brevilabs/obsidian-copilot-private/issues/532)", async () => {
       const descriptor = makeDescriptor();
       const first = renderHook(() => useBackendAuthState(descriptor));
       await waitFor(() => expect(first.result.current.status?.signedIn).toBe(false));
@@ -199,11 +228,13 @@ describe("useBackendAuthState", () => {
       await waitFor(() => expect(descriptor.auth!.getStatus).toHaveBeenCalledTimes(1));
       expect(first.result.current.status?.signedIn).toBe(false);
       expect(second.result.current.status?.signedIn).toBe(false);
+      expect(second.result.current.checking).toBe(true);
       await act(async () => {
         finish({ signedIn: true });
       });
       expect(first.result.current.status?.signedIn).toBe(true);
       expect(second.result.current.status?.signedIn).toBe(true);
+      expect(second.result.current.checking).toBe(false);
     });
 
     it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 clears a previous profile's failure before probing its replacement", async () => {
@@ -364,35 +395,6 @@ describe("useBackendAuthState", () => {
       act(() => hook.result.current.signOut());
       expect(hook.result.current.signingOut).toBe(false);
       expect(hook.result.current.failed).toBe(false);
-    });
-
-    it("re-probes when the caller's auth-relevant key changes", async () => {
-      const descriptor = makeDescriptor();
-      descriptor.auth!.getStatus = jest
-        .fn()
-        .mockResolvedValueOnce({ signedIn: false })
-        .mockResolvedValueOnce({ signedIn: true });
-      const { result, rerender } = renderHook(
-        ({ binaryPath }) => useBackendAuthState(descriptor, binaryPath),
-        { initialProps: { binaryPath: "" } }
-      );
-
-      await waitFor(() => expect(result.current.status).toEqual({ signedIn: false }));
-
-      rerender({ binaryPath: "/usr/local/bin/claude" });
-
-      await waitFor(() => expect(result.current.status).toEqual({ signedIn: true }));
-      expect(descriptor.auth!.getStatus).toHaveBeenCalledTimes(2);
-    });
-
-    it("keeps auth state empty when the descriptor has no auth capability", () => {
-      const descriptor = { id: "codex", displayName: "Codex" } as BackendDescriptor;
-
-      const { result } = renderHook(() => useBackendAuthState(descriptor));
-
-      expect(result.current.status).toBeNull();
-      expect(result.current.signingIn).toBe(false);
-      expect(result.current.url).toBeNull();
     });
   });
 });

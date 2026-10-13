@@ -1,38 +1,24 @@
 import { diffArrays, type Change } from "diff";
 import React, { memo, useMemo } from "react";
 
-/** One line-aligned row rendered by a diff preview. */
 export interface DiffRow {
   original: string | null;
   modified: string | null;
   isUnchanged: boolean;
 }
 
-/** One exact word-level diff segment. */
 export interface WordDiffPart {
   value: string;
   added?: boolean;
   removed?: boolean;
 }
 
-/** Side of a two-way diff being rendered. */
 export type DiffSide = "original" | "modified";
 
-/** Props shared by the reusable block preview renderers. */
 export interface DiffBlockProps {
   block: readonly Change[];
 }
 
-/**
- * Performs a word-level diff while preserving the exact input substrings.
- *
- * Whitespace is tokenized separately so joining every non-added part recreates
- * `original`, and joining every non-removed part recreates `modified`.
- *
- * @param original - Original text to compare
- * @param modified - Modified text to compare
- * @returns Exact ordered diff segments
- */
 export function wordLevelDiff(original: string, modified: string): WordDiffPart[] {
   const tokenize = (value: string): string[] => value.split(/(\s+)/).filter(Boolean);
   const diff = diffArrays(tokenize(original), tokenize(modified));
@@ -44,15 +30,6 @@ export function wordLevelDiff(original: string, modified: string): WordDiffPart[
   }));
 }
 
-/**
- * Splits one diff chunk into visible rows without trimming row content.
- *
- * A single terminal empty item produced by the line terminator is removed;
- * additional blank lines remain visible.
- *
- * @param value - Exact diff chunk text
- * @returns Visible row values in source order
- */
 export function splitDiffLines(value: string): string[] {
   const lines = value.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") {
@@ -61,16 +38,6 @@ export function splitDiffLines(value: string): string[] {
   return lines;
 }
 
-/**
- * Converts ordered diff chunks into aligned original/modified rows.
- *
- * Adjacent removal and addition chunks are paired by row for word-level
- * highlighting. Standalone additions and removals retain a null placeholder on
- * the opposite side.
- *
- * @param block - Exact diff chunks for one visual block
- * @returns Line-aligned rows without modifying the input chunks
- */
 export function buildDiffRows(block: readonly Change[]): DiffRow[] {
   const rows: DiffRow[] = [];
 
@@ -122,14 +89,12 @@ export function buildDiffRows(block: readonly Change[]): DiffRow[] {
   return rows;
 }
 
-/** Props for one word-highlighted side of a replacement row. */
 interface WordDiffSpanProps {
   original: string;
   modified: string;
   side: DiffSide;
 }
 
-/** Renders the exact visible segments for one side of a word-level replacement. */
 const WordDiffSpan = memo(({ original, modified, side }: WordDiffSpanProps) => {
   const diff = wordLevelDiff(original, modified);
 
@@ -168,13 +133,11 @@ const WordDiffSpan = memo(({ original, modified, side }: WordDiffSpanProps) => {
 
 WordDiffSpan.displayName = "WordDiffSpan";
 
-/** Props for one line-aligned diff cell. */
 interface DiffCellProps {
   row: DiffRow;
   side: DiffSide;
 }
 
-/** Renders one original or modified row with the appropriate highlight. */
 const DiffCell = memo(({ row, side }: DiffCellProps) => {
   const text = side === "original" ? row.original : row.modified;
   const paired = side === "original" ? row.modified : row.original;
@@ -198,7 +161,6 @@ const DiffCell = memo(({ row, side }: DiffCellProps) => {
 
 DiffCell.displayName = "DiffCell";
 
-/** Renders one diff block as aligned original and modified columns. */
 export const SideBySideDiffBlock = memo(({ block }: DiffBlockProps) => {
   const rows = useMemo(() => buildDiffRows(block), [block]);
 
@@ -227,7 +189,6 @@ export const SideBySideDiffBlock = memo(({ block }: DiffBlockProps) => {
 
 SideBySideDiffBlock.displayName = "SideBySideDiffBlock";
 
-/** Renders one diff block as stacked original and modified regions. */
 export const SplitDiffBlock = memo(({ block }: DiffBlockProps) => {
   const hasChanges = block.some((change) => change.added || change.removed);
   const rows = useMemo(() => buildDiffRows(block), [block]);

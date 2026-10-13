@@ -42,13 +42,11 @@ const FORWARD_ORIGIN_NOT_SUPPORTED_RESULT = Object.freeze({
   reason: "forward_origin_not_supported" as const,
 });
 
-/** One trusted Bundle root used only to resolve an authentic session page. */
 export interface KnowledgeForwardRevisionProposalBundleBinding {
   readonly bundleId: string;
   readonly wikiRoot: string;
 }
 
-/** Dependencies captured by one production forward-proposal generation. */
 export interface KnowledgeProductionForwardRevisionProposalCoordinatorInput {
   readonly knownOutputs: DelegatingKnowledgeKnownAppliedWikiOutputsPort;
   readonly knownOutputsDelegate: KnowledgeKnownAppliedWikiOutputsPort;
@@ -58,13 +56,11 @@ export interface KnowledgeProductionForwardRevisionProposalCoordinatorInput {
   readonly assertCurrent: () => void;
 }
 
-/** Closed safe reasons why a selected known output is not proposal-eligible. */
 export type KnowledgeForwardRevisionProposalIneligibilityReason =
   | "current_not_applied"
   | "selected_is_current"
   | "forward_origin_not_supported";
 
-/** Closed proposal-only result that never represents Wiki write authority. */
 export type KnowledgeForwardRevisionProposalResult =
   | Readonly<{
       kind: "published";
@@ -105,12 +101,10 @@ interface CoordinatorState {
 
 const coordinatorStates = new WeakMap<object, Readonly<CoordinatorState>>();
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reads one exact plain data record without invoking caller accessors. */
 function snapshotRecord(
   value: unknown,
   requiredKeys: readonly string[]
@@ -139,7 +133,6 @@ function snapshotRecord(
   }
 }
 
-/** Reads one dense bounded caller array entirely through data descriptors. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -166,7 +159,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -182,7 +174,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported identifier control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -191,7 +182,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is one bounded protocol identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -203,7 +193,6 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Finds a callable data method through one bounded acyclic prototype chain. */
 function captureMethod(value: object, name: string): ((...args: unknown[]) => unknown) | undefined {
   try {
     let owner: object | null = value;
@@ -224,7 +213,6 @@ function captureMethod(value: object, name: string): ((...args: unknown[]) => un
   return undefined;
 }
 
-/** Captures only the two R3b methods that re-prove an opaque session selection. */
 function captureKnownOutputs(
   value: unknown,
   delegate: KnowledgeKnownAppliedWikiOutputsPort
@@ -247,7 +235,6 @@ function captureKnownOutputs(
   });
 }
 
-/** Captures owner-bound Runtime methods only from the exact production execution lifecycle. */
 function captureRuntime(
   value: unknown,
   executionOwner: KnowledgeExecutionOwner
@@ -268,12 +255,10 @@ function captureRuntime(
   });
 }
 
-/** Reports whether two configured roots overlap under Windows Vault semantics. */
 function rootsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/** Captures bounded non-overlapping Bundle roots used for unique path resolution. */
 function snapshotBundles(value: unknown): readonly Readonly<CapturedBundle>[] {
   const values = snapshotArray(value, MAX_BUNDLES);
   if (!values || values.length === 0) throw createAbortError();
@@ -305,7 +290,6 @@ function snapshotBundles(value: unknown): readonly Readonly<CapturedBundle>[] {
   return Object.freeze(bundles);
 }
 
-/** Captures the constructor surface before evaluating any dependency. */
 function snapshotInput(
   value: unknown
 ): Readonly<KnowledgeProductionForwardRevisionProposalCoordinatorInput> {
@@ -328,7 +312,6 @@ function snapshotInput(
   });
 }
 
-/** Re-proves the Runtime mutation facade against the captured exact execution owner. */
 function assertRuntimeOwner(state: CoordinatorState): void {
   if (
     !KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
@@ -340,7 +323,6 @@ function assertRuntimeOwner(state: CoordinatorState): void {
   }
 }
 
-/** Stops proposal work around every asynchronous pre-commit authority boundary. */
 function assertInvocation(state: CoordinatorState, signal: AbortSignal): void {
   if (signal.aborted) throw createAbortError();
   try {
@@ -361,7 +343,6 @@ function assertInvocation(state: CoordinatorState, signal: AbortSignal): void {
   if (signal.aborted) throw createAbortError();
 }
 
-/** Returns hidden coordinator state only for an authentic module instance. */
 function requireState(value: unknown): Readonly<CoordinatorState> {
   if (
     typeof value !== "object" ||
@@ -375,7 +356,6 @@ function requireState(value: unknown): Readonly<CoordinatorState> {
   return state;
 }
 
-/** Selects exactly one trusted Bundle from the authentic session's exact path. */
 function selectBundle(
   state: Readonly<CoordinatorState>,
   pagePath: string
@@ -384,7 +364,6 @@ function selectBundle(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Maps one strict R3b terminal detail result without widening its categories. */
 function mapDetailTerminal(
   result: Exclude<KnowledgeKnownAppliedWikiOutputDetailResult, { kind: "loaded" }>
 ): KnowledgeForwardRevisionProposalResult {
@@ -393,7 +372,6 @@ function mapDetailTerminal(
   return UNAVAILABLE_RESULT;
 }
 
-/** Maps one strict R3b terminal comparison result without widening its categories. */
 function mapComparisonTerminal(
   result: Exclude<KnowledgeKnownAppliedWikiOutputComparisonResult, { kind: "loaded" }>
 ): KnowledgeForwardRevisionProposalResult {
@@ -402,9 +380,7 @@ function mapComparisonTerminal(
   return UNAVAILABLE_RESULT;
 }
 
-/** Production coordinator for authenticated known-output proposal publication only. */
 export class KnowledgeProductionForwardRevisionProposalCoordinator {
-  /** Captures one exact worker generation without Wiki, model, or network write authority. */
   constructor(inputValue: KnowledgeProductionForwardRevisionProposalCoordinatorInput) {
     const input = snapshotInput(inputValue);
     KnowledgeExecutionOwner.assert(input.executionOwner);
@@ -421,26 +397,12 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
     Object.freeze(this);
   }
 
-  /** Requires one exact process-local production proposal coordinator. */
   static assert(
     value: unknown
   ): asserts value is KnowledgeProductionForwardRevisionProposalCoordinator {
     requireState(value);
   }
 
-  /**
-   * Re-proves one authentic R3b selection and publishes only a pending proposal.
-   *
-   * All caller cancellation and generation checks are abort-wins before the
-   * atomic publication call. Once that call resolves to a strict committed
-   * receipt, commit-wins: a later caller abort cannot turn durable truth into a
-   * reported failure. The returned receipt is not Review or Wiki write authority.
-   *
-   * @param sessionValue - Original authentic current-generation R3b session object
-   * @param outputRef - Opaque output ref disclosed by that exact session
-   * @param signal - Caller cancellation signal
-   * @returns Closed proposal publication result
-   */
   async proposeKnownOutput(
     sessionValue: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -531,8 +493,7 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
         selectedContentHash,
         vaultObservedBeforeHash,
       });
-      // The genuine Runtime method confirms uncertain commits before returning.
-      // Do not re-enter revocable generation authority after this atomic boundary.
+
       const receipt = snapshotKnowledgeForwardRevisionPublicationReceipt(rawReceipt);
       if (receipt.runtimeId !== authority.runtimeId) return UNAVAILABLE_RESULT;
       return Object.freeze({ kind: "published" as const, bundleId: bundle.bundleId, receipt });

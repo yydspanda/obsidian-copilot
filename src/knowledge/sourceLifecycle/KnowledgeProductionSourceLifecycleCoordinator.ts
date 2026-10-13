@@ -23,7 +23,7 @@ import {
 const MAX_SOURCE_LIFECYCLE_ITEMS = 10_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const RETIREMENT_ID_PATTERN = /^knowledge-source-retirement-[a-f0-9]{64}$/;
-/** Exact production dependencies retained by one source-lifecycle generation. */
+
 export interface KnowledgeProductionSourceLifecycleCoordinatorInput {
   runtime: Pick<KnowledgeRuntimeStore, "readSourceRetirementCandidates" | "retireSourceAtomically">;
   getSourceIssues(): readonly KnowledgeSourceObservationRecoverableIssue[];
@@ -53,12 +53,10 @@ const RETIREMENT_BLOCKERS = new Set<KnowledgeSourceRetirementBlocker>([
   "revision_overflow",
 ]);
 
-/** Creates the standard cancellation category for stale lifecycle work. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Recognizes cancellation without relying on one renderer realm. */
 function isAbortError(error: unknown): boolean {
   try {
     return (
@@ -71,17 +69,14 @@ function isAbortError(error: unknown): boolean {
   }
 }
 
-/** Compares stable text without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates an unambiguous Bundle/source lookup key. */
 function createSourceKey(bundleId: string, sourceId: string): string {
   return `${bundleId.length}:${bundleId}${sourceId.length}:${sourceId}`;
 }
 
-/** Requires a non-empty opaque identifier without reflecting invalid content. */
 function requireIdentifier(value: unknown): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new KnowledgeSourceLifecycleError("invalid_request");
@@ -89,7 +84,6 @@ function requireIdentifier(value: unknown): string {
   return value;
 }
 
-/** Requires caller cancellation and production generation authority together. */
 function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void): void {
   if (signal.aborted) throw createAbortError();
   try {
@@ -100,7 +94,6 @@ function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void)
   if (signal.aborted) throw createAbortError();
 }
 
-/** Copies an exact plain data record without invoking accessors. */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -130,7 +123,6 @@ function snapshotExactRecord(
   return Object.freeze(snapshot);
 }
 
-/** Copies a dense bounded array of unknown values without retaining its container. */
 function snapshotDenseArray(value: unknown): readonly unknown[] {
   if (
     !Array.isArray(value) ||
@@ -150,7 +142,6 @@ function snapshotDenseArray(value: unknown): readonly unknown[] {
   return Object.freeze(items);
 }
 
-/** Copies and validates one Runtime retirement blocker list. */
 function snapshotRetirementBlockers(value: unknown): readonly KnowledgeSourceRetirementBlocker[] {
   const blockers = snapshotDenseArray(value).map((blocker) => {
     if (!RETIREMENT_BLOCKERS.has(blocker as KnowledgeSourceRetirementBlocker)) {
@@ -165,7 +156,6 @@ function snapshotRetirementBlockers(value: unknown): readonly KnowledgeSourceRet
   return Object.freeze(blockers);
 }
 
-/** Copies one strict active Runtime retirement candidate. */
 function snapshotRetirementCandidate(value: unknown): Readonly<KnowledgeSourceRetirementCandidate> {
   const snapshot = snapshotExactRecord(value, [
     "sourceId",
@@ -206,7 +196,6 @@ function snapshotRetirementCandidate(value: unknown): Readonly<KnowledgeSourceRe
   });
 }
 
-/** Copies one strict Runtime retirement candidate snapshot. */
 function snapshotRetirementCandidates(
   value: unknown,
   expectedBundleId: string
@@ -259,7 +248,6 @@ function snapshotRetirementCandidates(
   });
 }
 
-/** Copies strict recoverable watcher issues without retaining coordinator values. */
 function snapshotSourceIssues(
   value: unknown
 ): readonly Readonly<KnowledgeSourceObservationRecoverableIssue>[] {
@@ -318,12 +306,10 @@ function snapshotSourceIssues(
   return Object.freeze(issues);
 }
 
-/** Returns the stable detail discriminator of one recoverable source issue. */
 function getIssueDetail(issue: Readonly<KnowledgeSourceObservationRecoverableIssue>): string {
   return issue.kind === "source_change_unsupported" ? issue.change : "";
 }
 
-/** Captures one exact token-bound retirement request. */
 function snapshotRetirementRequest(
   value: Readonly<KnowledgeSourceRetirementRequest>
 ): Readonly<KnowledgeSourceRetirementRequest> {
@@ -345,7 +331,6 @@ function snapshotRetirementRequest(
   });
 }
 
-/** Maps one recoverable watcher issue to its user-facing lifecycle reason. */
 function mapIssueReason(
   issue: Readonly<KnowledgeSourceObservationRecoverableIssue>
 ): KnowledgeSourceLifecycleIssueReason {
@@ -353,7 +338,6 @@ function mapIssueReason(
   return issue.change === "delete" ? "source_deleted" : "source_renamed";
 }
 
-/** Selects the strongest issue when one source accumulated several recoverable hints. */
 function selectIssueReason(
   current: KnowledgeSourceLifecycleIssueReason | undefined,
   candidate: KnowledgeSourceLifecycleIssueReason
@@ -366,7 +350,6 @@ function selectIssueReason(
   return !current || priority[candidate] > priority[current] ? candidate : current;
 }
 
-/** Copies and validates only the retirement receipt fields exposed to the UI. */
 function snapshotRetirementReceipt(
   value: unknown,
   bundleId: string,
@@ -410,21 +393,13 @@ function snapshotRetirementReceipt(
   });
 }
 
-/**
- * Generation-bound source lifecycle coordinator with no Studio, worker, or Wiki authority.
- *
- * Retirement is delegated to the Runtime's token-bound atomic transition. This
- * boundary intentionally has no source-file publication authority.
- */
 export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeSourceLifecyclePort {
   private readonly assertGenerationCurrent: () => void;
 
-  /** Captures one released production generation and its least-authority ports. */
   constructor(private readonly input: KnowledgeProductionSourceLifecycleCoordinatorInput) {
     this.assertGenerationCurrent = () => input.assertCurrent();
   }
 
-  /** Loads active Runtime sources merged with current recoverable watcher issues. */
   async loadSources(
     bundleId: string,
     signal: AbortSignal
@@ -476,7 +451,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     }
   }
 
-  /** Requests one generation refresh only for a still-missing active source. */
   async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
     const exactBundleId = requireIdentifier(bundleId);
     const exactSourceId = requireIdentifier(sourceId);
@@ -489,7 +463,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     this.requestGenerationRefresh();
   }
 
-  /** Atomically retires one twice-reproved active source while preserving Wiki bytes. */
   async retireSource(
     bundleId: string,
     requestValue: Readonly<KnowledgeSourceRetirementRequest>,
@@ -551,7 +524,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     });
   }
 
-  /** Reads and strictly snapshots Runtime plus recoverable watcher state. */
   private async readState(bundleId: string, signal: AbortSignal): Promise<LifecycleStateSnapshot> {
     assertCurrent(signal, this.assertGenerationCurrent);
     try {
@@ -570,7 +542,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     }
   }
 
-  /** Builds a strict issue index and rejects watcher/Runtime source disagreement. */
   private createIssueReasonIndex(
     state: LifecycleStateSnapshot,
     bundleId: string
@@ -590,7 +561,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     return reasons;
   }
 
-  /** Finds one current recoverable issue for an exact Bundle/source pair. */
   private findIssue(
     state: LifecycleStateSnapshot,
     bundleId: string,
@@ -599,7 +569,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     return state.issues.find((issue) => issue.bundleId === bundleId && issue.sourceId === sourceId);
   }
 
-  /** Requires one active Runtime candidate from the same strict snapshot. */
   private requireCandidate(
     state: LifecycleStateSnapshot,
     bundleId: string,
@@ -613,7 +582,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     return candidate;
   }
 
-  /** Requires an active candidate to retain the request's opaque retirement token. */
   private requireTokenCandidate(
     state: LifecycleStateSnapshot,
     bundleId: string,
@@ -626,7 +594,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     return candidate;
   }
 
-  /** Re-proves reason-specific missing state and all atomic retirement blockers. */
   private assertRetirementAllowed(
     state: LifecycleStateSnapshot,
     bundleId: string,
@@ -641,7 +608,6 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     }
   }
 
-  /** Requests exactly one generation refresh and maps callback failure safely. */
   private requestGenerationRefresh(): void {
     try {
       this.input.onGenerationRefreshRequired();
@@ -650,16 +616,15 @@ export class KnowledgeProductionSourceLifecycleCoordinator implements KnowledgeS
     }
   }
 
-  /** Best-effort refresh after a durable commit; its failure cannot erase success. */
   private requestGenerationRefreshBestEffort(): void {
     try {
       this.input.onGenerationRefreshRequired();
     } catch {
       // The durable retirement receipt wins over an advisory refresh failure.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 
-  /** Preserves only cancellation and stable lifecycle read errors. */
   private rethrowReadError(error: unknown): never {
     if (isAbortError(error)) throw createAbortError();
     if (error instanceof KnowledgeSourceLifecycleError) throw error;

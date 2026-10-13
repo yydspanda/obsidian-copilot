@@ -16,7 +16,8 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/CardTitle";
 import type {
   KnowledgeActivityBundleState,
   KnowledgeActivityItem,
@@ -26,7 +27,6 @@ import type {
 import type { KnowledgeStudioCommandCapabilities } from "@/knowledge/ui/KnowledgeStudioController";
 import { cn } from "@/lib/utils";
 
-/** Callback-only boundary for the Activity panel. */
 export interface KnowledgeActivityPanelProps {
   model: Readonly<KnowledgeActivityModel>;
   commandCapabilities: Readonly<
@@ -243,35 +243,17 @@ const BUNDLE_PRESENTATION: Readonly<Record<KnowledgeActivityBundleState, BundleP
   },
 };
 
-/**
- * Converts an epoch timestamp into deterministic, inspectable UI text.
- *
- * @param timestamp - Epoch timestamp in milliseconds
- * @returns ISO timestamp, or a safe fallback for invalid input
- */
 function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? "Unknown time" : date.toISOString();
 }
 
-/**
- * Converts a durable stage identifier into a human-readable label.
- *
- * @param stage - Durable queue stage
- * @returns Display label without changing stage semantics
- */
 function formatStage(stage: KnowledgeActivityItem["durableStage"]): string {
   return stage === "review"
     ? "Review"
     : stage.charAt(0).toUpperCase() + stage.slice(1).replaceAll("_", " ");
 }
 
-/**
- * Renders one timestamp without relying on a global Window or Document.
- *
- * @param props - Timestamp and leading label
- * @returns Accessible timestamp metadata
- */
 function ActivityTime({ timestamp, label }: { timestamp: number; label: string }) {
   const formatted = formatTimestamp(timestamp);
   return (
@@ -282,12 +264,6 @@ function ActivityTime({ timestamp, label }: { timestamp: number; label: string }
   );
 }
 
-/**
- * Renders the bundle-wide execution gate and only the actions it permits.
- *
- * @param props - Activity model and bundle callbacks
- * @returns Bundle control summary
- */
 function BundleControls({
   model,
   commandCapabilities,
@@ -358,12 +334,6 @@ function BundleControls({
   );
 }
 
-/**
- * Renders aggregate Activity counts from the complete durable projection.
- *
- * @param model - Immutable Activity model
- * @returns Count summary that includes hidden terminal history
- */
 function ActivityCounts({ model }: { model: Readonly<KnowledgeActivityModel> }) {
   const { counts } = model;
   return (
@@ -392,12 +362,6 @@ function ActivityCounts({ model }: { model: Readonly<KnowledgeActivityModel> }) 
   );
 }
 
-/**
- * Renders failure details already sanitized by the queue boundary.
- *
- * @param item - Failed Activity item
- * @returns Failure detail block, or null for non-failed items
- */
 function FailureDetails({ item }: { item: Readonly<KnowledgeActivityItem> }) {
   if (!item.failure) {
     return null;
@@ -438,12 +402,6 @@ function CompletionDetails({ completion }: Pick<KnowledgeActivityItem, "completi
   );
 }
 
-/**
- * Renders one durable Activity item and capability-gated callbacks.
- *
- * @param props - Item and job callback boundary
- * @returns One Activity row
- */
 function ActivityItem({
   item,
   commandCapabilities,
@@ -639,13 +597,6 @@ function ActivityItem({
   );
 }
 
-/**
- * Presents immutable personal-knowledge queue activity and delegates every
- * mutation request through caller-owned callbacks.
- *
- * @param props - Activity model and command callbacks
- * @returns Pure Activity panel
- */
 export function KnowledgeActivityPanel({
   model,
   commandCapabilities,

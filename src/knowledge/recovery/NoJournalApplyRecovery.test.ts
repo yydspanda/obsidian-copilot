@@ -17,7 +17,6 @@ const DIGEST = "a".repeat(64);
 const SOURCE_HASH = "b".repeat(64);
 const PIPELINE_FINGERPRINT = "c".repeat(64);
 
-/** Creates the durable accepted Review identity used by coordinator tests. */
 function createIdentity(): AcceptedReviewStartupIdentity {
   return {
     bundleId: "personal",
@@ -39,12 +38,10 @@ function createIdentity(): AcceptedReviewStartupIdentity {
   };
 }
 
-/** Creates one opaque recovery reference without exposing its identity derivation. */
 function createReference(): NoJournalApplyRecoveryReference {
   return { bundleId: "personal", recoveryId: "recovery-opaque" };
 }
 
-/** Creates the exact input returned only after runtime authority is re-proved. */
 function createApplyInput(): ChangeSetTransactionApplyInput {
   return {
     changeSet: { id: "changeset-1" },
@@ -63,7 +60,6 @@ function createApplyInput(): ChangeSetTransactionApplyInput {
   };
 }
 
-/** Creates the transaction receipt returned by the fake apply port. */
 function createCommitReceipt(): TransactionCommitReceipt {
   return {
     transactionId: "transaction-1",
@@ -77,7 +73,6 @@ function createCommitReceipt(): TransactionCommitReceipt {
   };
 }
 
-/** Creates complete state-port defaults with optional behavior overrides. */
 function createStatePort(
   overrides: Partial<NoJournalApplyRecoveryStatePort> = {}
 ): NoJournalApplyRecoveryStatePort {
@@ -109,7 +104,6 @@ function createStatePort(
   };
 }
 
-/** Creates a transaction port that returns a deterministic commit receipt. */
 function createTransactionPort(
   apply: NoJournalApplyRecoveryTransactionPort["apply"] = async () => createCommitReceipt()
 ): NoJournalApplyRecoveryTransactionPort {

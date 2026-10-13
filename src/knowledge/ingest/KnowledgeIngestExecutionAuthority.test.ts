@@ -15,7 +15,6 @@ import { createKnowledgeExecutionTestHarness } from "@/knowledge/testing/Knowled
 const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_FINGERPRINT = "b".repeat(64);
 
-/** Creates the durable source authority required by Runtime proof. */
 function createManifest(revision = 1): SourceManifest {
   return {
     version: 1,
@@ -32,7 +31,6 @@ function createManifest(revision = 1): SourceManifest {
   };
 }
 
-/** Captures one authority error without accepting an unrelated exception. */
 async function expectAuthorityError(
   action: () => Promise<unknown>,
   code: KnowledgeIngestExecutionAuthorityError["code"]
@@ -144,7 +142,6 @@ describe("KnowledgeIngestExecutionAuthority", () => {
   it("uses the canonical branded facade method instead of a subclass override", async () => {
     let overrideCalls = 0;
     class OverridingProofPort extends KnowledgeRuntimeIngestExecutionProofPort {
-      /** Must never replace the canonical proof method captured by the Binder. */
       override async prove(): Promise<unknown> {
         overrideCalls += 1;
         return { forged: true };

@@ -54,7 +54,7 @@ export const ManagedUpgradeRequired: StoryObj<AgentStatusCardProps> = {
   args: {
     summary: "opencode update required",
     tone: "warning",
-    message: "opencode v1.15.0 is not supported. Copilot requires opencode v1.16.0 or newer.",
+    message: "opencode v1.18.31 is not supported. Copilot requires opencode v2.0.3 or newer.",
     action: { label: "Upgrade", onClick: () => undefined },
   },
 };
@@ -64,7 +64,7 @@ export const ManagedUpgradeRunning: StoryObj<AgentStatusCardProps> = {
     summary: "Updating opencode…",
     tone: "warning",
     message: "Downloading opencode-darwin-arm64.zip 42%",
-    action: { label: "Upgrading…", onClick: () => undefined, disabled: true },
+    progress: { percent: 42 },
   },
 };
 

@@ -1,10 +1,3 @@
-/**
- * RTL tests for ChatContextMenu's empty-state collapse (#205).
- *
- * Agent Mode has no "@ Add context" button in this row and mounts its status
- * trigger outside it, so an empty row is pure dead height and must not render.
- * Legacy Chat keeps the row: its "@ Add context" entry point lives here.
- */
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TFile } from "obsidian";
@@ -15,15 +8,9 @@ jest.mock("obsidian", () => ({
   Platform: { isDesktopApp: true },
 }));
 
-// Mock factory names must match the real `use*` exports, so the no-hook `use`
-// prefix is expected on the mocked hooks below.
 /* eslint-disable @eslint-react/hooks-extra/no-unnecessary-use-prefix */
 jest.mock("@/context", () => ({
   useApp: () => ({}),
-}));
-
-jest.mock("@/aiParams", () => ({
-  useChainType: () => ["llm_chain"],
 }));
 
 /* eslint-enable @eslint-react/hooks-extra/no-unnecessary-use-prefix */
@@ -33,8 +20,8 @@ jest.mock("@/utils/desktopRuntime", () => ({
 }));
 
 jest.mock("@/utils", () => ({
-  isPlusChain: () => false,
   openFileInWorkspace: jest.fn(),
+  getDomainFromUrl: (url: string) => new URL(url).hostname,
 }));
 
 jest.mock("./AtMentionTypeahead", () => ({
@@ -67,7 +54,6 @@ describe("ChatContextMenu", () => {
     });
 
     it("keeps the row with its badges in Agent Mode once context exists", () => {
-      // The mocked TFile class keeps this instanceof-safe without a cast.
       const note = Object.assign(new TFile(), {
         path: "Note.md",
         basename: "Note",
@@ -121,6 +107,31 @@ describe("ChatContextMenu", () => {
         expect(Boolean(screen.queryByText("L2-3"))).toBe(includeSelection);
       }
     );
+    it("shows the active web tab beside a web selection - https://github.com/Brevilabs/obsidian-copilot-private/issues/667", () => {
+      render(
+        <ChatContextMenu
+          {...baseProps}
+          includeActiveWebTab
+          activeWebTab={{
+            url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+            title: "Me at the zoo",
+          }}
+          selectedTextContexts={[
+            {
+              id: "video-excerpt",
+              sourceType: "web",
+              title: "Video description",
+              url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+              content: "really really long trunks",
+            },
+          ]}
+          isAgentMode
+          hideAddContextButton
+        />
+      );
+      expect(screen.getByText("Me at the zoo")).toBeTruthy();
+      expect(screen.getByText("really really long trunks")).toBeTruthy();
+    });
     it.each(["Note.md", "Other note.md"])(
       "keeps the active note beside a selection from %s - https://github.com/Brevilabs/obsidian-copilot-private/issues/465",
       (notePath) => {

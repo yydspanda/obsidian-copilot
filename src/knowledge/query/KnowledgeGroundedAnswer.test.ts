@@ -7,7 +7,6 @@ import {
 
 const PAGE_HASH = "a".repeat(64);
 
-/** Creates one authentic request containing two exact source excerpts. */
 function createRequest() {
   return createKnowledgeGroundedAnswerRequest(
     "What does the knowledge system do?",
@@ -38,7 +37,6 @@ function createRequest() {
   );
 }
 
-/** Produces one valid mixed fact-and-inference response for an exact request. */
 function createOutput(request = createRequest()): string {
   return JSON.stringify({
     version: 1,

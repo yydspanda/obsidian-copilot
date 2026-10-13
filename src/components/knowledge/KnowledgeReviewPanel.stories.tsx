@@ -145,7 +145,6 @@ const defaultProps: Props = {
   onSubmit: noop,
 };
 
-// Drafts stay interactive without a controller or any file-write capability.
 function InteractiveReview(args: Partial<Props>): JSX.Element {
   const [draft, setDraft] = React.useState<Draft>(args.draft ?? EMPTY_DRAFT);
   return (

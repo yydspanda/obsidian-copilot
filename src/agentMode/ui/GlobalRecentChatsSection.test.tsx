@@ -7,9 +7,15 @@ type SectionItems = React.ComponentProps<typeof GlobalRecentChatsSection>["items
 
 const noop = async () => {};
 
-function renderSection(props: Partial<React.ComponentProps<typeof GlobalRecentChatsSection>> = {}) {
+function renderSection(
+  props: Partial<React.ComponentProps<typeof GlobalRecentChatsSection>> & {
+    openChatIds?: ReadonlySet<string>;
+    onCloseSession?: (id: string) => Promise<void>;
+  } = {}
+) {
   return render(
     <GlobalRecentChatsSection
+      {...{ openChatIds: props.openChatIds, onCloseSession: props.onCloseSession }}
       items={props.items ?? []}
       variant={props.variant}
       title={props.title}
@@ -25,8 +31,6 @@ function renderSection(props: Partial<React.ComponentProps<typeof GlobalRecentCh
   );
 }
 
-// The attention dot is `aria-hidden` (purely decorative overlay), so query it
-// by its accent class the way ChatIconWithAttention paints it.
 function queryAttentionDot(container: HTMLElement): Element | null {
   return container.querySelector(".tw-bg-interactive-accent");
 }
@@ -35,8 +39,6 @@ function makeItem(
   id: string,
   overrides: Partial<React.ComponentProps<typeof GlobalRecentChatsSection>["items"][number]> = {}
 ): React.ComponentProps<typeof GlobalRecentChatsSection>["items"][number] {
-  // `lastAccessedAt` set to "now" so the relative-time label renders the stable
-  // `now` bucket regardless of when the test runs.
   return {
     id,
     title: `Chat ${id}`,
@@ -74,6 +76,34 @@ describe("GlobalRecentChatsSection", () => {
   });
 
   describe("GlobalRecentChatsSection()", () => {
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/429 shows open sessions and retains saved chats after close", async () => {
+      const onLoadChat = jest.fn(noop);
+      const onDeleteChat = jest.fn(noop);
+      const onCloseSession = jest.fn(noop);
+      renderSection({
+        items: [makeItem("idle"), makeItem("running"), makeItem("closed")],
+        openChatIds: new Set(["idle", "running"]),
+        runningChatIds: new Set(["running"]),
+        onCloseSession,
+        onLoadChat,
+        onDeleteChat,
+      });
+      const liveDots = screen.getAllByLabelText("Session live");
+      expect(liveDots).toHaveLength(2);
+      expect(liveDots[0].parentElement?.getAttribute("title")).toBe("Session is running");
+      expect(screen.getByLabelText("Responding")).toBeTruthy();
+      const buttons = screen.getAllByRole("button", { name: "Close session" });
+      expect(buttons).toHaveLength(2);
+      fireEvent.keyDown(buttons[0], { key: "Enter" });
+      await act(async () => {
+        fireEvent.click(buttons[0]);
+      });
+      expect(onCloseSession).toHaveBeenCalledTimes(1);
+      expect(onLoadChat).not.toHaveBeenCalled();
+      expect(onDeleteChat).not.toHaveBeenCalled();
+      expect(screen.getByText("Chat idle")).toBeTruthy();
+    });
+
     it("defaults to the global empty-state copy", () => {
       renderSection();
       expect(screen.getByText("No recent chats")).toBeTruthy();
@@ -92,20 +122,18 @@ describe("GlobalRecentChatsSection", () => {
     it("renders a running spinner instead of the time for a backgrounded session", () => {
       const item = makeItem("running-1");
       renderSection({ items: [item], runningChatIds: new Set([item.id]) });
-      expect(screen.getByLabelText("Running")).toBeTruthy();
+      expect(screen.getByLabelText("Responding")).toBeTruthy();
       expect(screen.queryByText("now")).toBeNull();
     });
 
     it("renders the relative time (no spinner) when the session is not running", () => {
       const item = makeItem("idle-1");
       renderSection({ items: [item], runningChatIds: new Set() });
-      expect(screen.queryByLabelText("Running")).toBeNull();
+      expect(screen.queryByLabelText("Responding")).toBeNull();
       expect(screen.getByText("now")).toBeTruthy();
     });
 
     it("shows the attention dot from the live set even when the item snapshot lacks it", () => {
-      // The handoff case: a backgrounded session finished AFTER the history items
-      // were loaded — the stale snapshot says no attention, the live set says yes.
       const item = makeItem("done-live");
       expect(item.needsAttention).toBeUndefined();
       const { container } = renderSection({
@@ -294,14 +322,6 @@ describe("GlobalRecentChatsSection", () => {
     });
 
     it("refreshes once when the parent re-renders with the items that refresh produced", () => {
-      // The mount refresh is keyed to `onLoadHistory`, and a completed load
-      // stores a fresh items array that re-renders the parent. A parent that
-      // hands over a newly allocated wrapper each render therefore re-arms this
-      // effect with the result of its own load and loops until the tab
-      // unmounts. AgentHome wraps inline, so the identity has to come from
-      // `safeAsyncHandler` itself.
-      // `loadHistory` stands in for AgentHome's `useCallback`-stable loader; the
-      // wrapper around it is built during render, as AgentHome builds it.
       const loadHistory = jest.fn(async () => {});
       const Parent = ({ items }: { items: SectionItems }) => (
         <GlobalRecentChatsSection

@@ -13,39 +13,33 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 
-/** Current protocol version for the Knowledge writing request and response. */
 export const KNOWLEDGE_COMPILER_PROTOCOL_VERSION = 1 as const;
 
-/** Exact queue-owned identity of the primary source being compiled. */
 export interface CompilerSourceIdentity {
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
-  /** Durable queue observation revision that makes each review instance unique. */
+
   inputRevision: number;
 }
 
-/** Immutable schema material supplied by the Bundle adapter. */
 export interface CompilerSchemaSnapshot {
   path: string;
   content: string;
   contentHash: string;
 }
 
-/** Read-only Wiki page selected as association context before compilation. */
 export interface CompilerContextPage {
   path: string;
   content: string;
   contentHash: string;
 }
 
-/** Trusted, parser-produced evidence that the model may reference by opaque id. */
 export interface CompilerEvidence {
   evidenceId: string;
   locator: SourceLocator;
 }
 
-/** Caller-owned manifest authority for reading or changing one known Wiki path. */
 export interface CompilerTargetAuthorization {
   path: string;
   allowedIntents: ("write" | "delete")[];
@@ -55,18 +49,11 @@ export interface CompilerTargetAuthorization {
   expectedContentHash?: string;
 }
 
-/**
- * Complete deterministic input to one source-writing attempt.
- *
- * Artifact observations are parser-owned trusted inputs: their declared hash
- * identifies the parser artifact, while the core separately digests the exact
- * parsed material so stale or changed text cannot retain a compile identity.
- */
 export interface KnowledgeCompileInput {
   bundle: KnowledgeBundleConfig;
   operation: KnowledgeChangeSet["operation"];
   source: CompilerSourceIdentity;
-  /** Exact complete Manifest read-set used to authorize the final source projection. */
+
   manifest: SourceManifest;
   schema: CompilerSchemaSnapshot;
   artifacts: SourceArtifactObservation[];
@@ -76,14 +63,12 @@ export interface KnowledgeCompileInput {
   createdAt: number;
 }
 
-/** Historical normalized concept retained by the Review data contract. */
 export interface CompilerConcept {
   id: string;
   name: string;
   description?: string;
 }
 
-/** Historical normalized entity retained by the Review data contract. */
 export interface CompilerEntity {
   id: string;
   name: string;
@@ -91,13 +76,11 @@ export interface CompilerEntity {
   description?: string;
 }
 
-/** Stable normalized, source-backed claim returned with the written content. */
 export interface CompilerClaim {
   id: string;
   text: string;
 }
 
-/** Stable normalized relation between concepts, entities, or claims. */
 export interface CompilerRelation {
   id: string;
   fromId: string;
@@ -105,7 +88,6 @@ export interface CompilerRelation {
   type: string;
 }
 
-/** Program-selected destination checked against source write authority. */
 export interface CompilerApprovedTarget {
   targetId: string;
   path: string;
@@ -119,7 +101,6 @@ export interface CompilerApprovedTarget {
   expectedContentHash?: string;
 }
 
-/** Canonical provenance used by validation and Review; historical graph fields remain readable. */
 export interface CompilerAnalysis {
   version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
   summary: string;
@@ -131,7 +112,6 @@ export interface CompilerAnalysis {
   targets: CompilerApprovedTarget[];
 }
 
-/** Program-selected target passed to the read-only Vault resolver. */
 export interface CompilerTargetRequest {
   targetId: string;
   path: string;
@@ -139,14 +119,12 @@ export interface CompilerTargetRequest {
   access: "authorized" | "create_only";
 }
 
-/** Exact runtime observation returned for one approved target. */
 export type CompilerTargetObservation =
   | { targetId: string; kind: "missing"; windowsPathKey: string }
   | { targetId: string; kind: "occupied"; path: string }
   | { targetId: string; kind: "file"; path: string; content: string }
   | { targetId: string; kind: "directory"; path: string };
 
-/** Target whose create/update/delete semantics are bound to an exact observation. */
 export type CompilerBoundTarget = CompilerApprovedTarget &
   (
     | { operation: "create" }
@@ -154,13 +132,11 @@ export type CompilerBoundTarget = CompilerApprovedTarget &
     | { operation: "delete"; beforeContent: string; beforeHash: string }
   );
 
-/** Writable target content that may be exposed to the generation model. */
 export type CompilerWritableTarget = Extract<
   CompilerBoundTarget,
   { operation: "create" | "update" }
 >;
 
-/** Minimal model-visible create or update target. */
 export type CompilerGenerationTarget = {
   targetId: string;
   path: string;
@@ -168,7 +144,6 @@ export type CompilerGenerationTarget = {
   contentPolicy: "grounded" | "structural";
 } & ({ operation: "create" } | { operation: "update"; currentContent: string });
 
-/** Full source evidence and program-owned destinations for one writing call. */
 export interface CompilerGenerationRequest {
   version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
   compileContextDigest: string;
@@ -182,7 +157,6 @@ export interface CompilerGenerationRequest {
   targets: CompilerGenerationTarget[];
 }
 
-/** ChangeSet material before deterministic validation flags and status are attached. */
 export interface CompilerChangeSetDraft {
   id: string;
   bundleId: string;
@@ -193,7 +167,6 @@ export interface CompilerChangeSetDraft {
   createdAt: number;
 }
 
-/** Input to the deterministic OKF, link, and citation candidate validator. */
 export interface CompilerCandidateValidationInput {
   bundle: KnowledgeBundleConfig;
   source: CompilerSourceIdentity;
@@ -206,72 +179,25 @@ export interface CompilerCandidateValidationInput {
   draft: CompilerChangeSetDraft;
 }
 
-/** Runtime result required before a proposal may enter user review. */
 export interface CompilerCandidateValidationResult {
   validation: KnowledgeValidationSummary;
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Read-only adapter that resolves exact states for program-approved paths. */
 export interface CompilerTargetResolver {
-  /**
-   * Resolves every approved target without mutating the Vault.
-   *
-   * Successful adapter payloads are still treated as untrusted and parsed by
-   * the compiler. Existing files must report their canonical Vault spelling.
-   * `create_only` requests MUST use a case-insensitive existence probe and
-   * return `occupied` without reading file content when the path already exists.
-   * A missing result echoes the exact Windows comparison key that was checked.
-   *
-   * @param targets - Frozen, deterministic target requests
-   * @param signal - Cancellation signal owned by the ingest attempt
-   * @returns Unknown adapter payload containing one observation per target
-   */
   resolve(targets: readonly CompilerTargetRequest[], signal: AbortSignal): Promise<unknown>;
 }
 
-/** Deterministic validation boundary for generated proposal material. */
 export interface CompilerCandidateValidator {
-  /**
-   * Validates projected OKF, links, and material citations without writing.
-   *
-   * The compiler rejects false flags, error diagnostics, and malformed success
-   * payloads. The apply-time validator will independently repeat these checks.
-   *
-   * @param input - Frozen candidate and its complete semantic read context
-   * @param signal - Cancellation signal owned by the ingest attempt
-   * @returns Unknown adapter payload containing recomputed validation flags
-   */
   validate(input: CompilerCandidateValidationInput, signal: AbortSignal): Promise<unknown>;
 }
 
-/** Provider-neutral structured-output boundary used by the compiler core. */
 export interface CompilerModelPort {
-  /**
-   * Receives a one-shot opaque authorization immediately before a model call.
-   *
-   * The compiler keeps this hook optional for provider ports that do not need
-   * process-local request provenance. Hardened per-attempt adapters may consume
-   * the value through `KnowledgeCompilerModelCallAuthorization.consume`.
-   *
-   * @param authorization - Compiler-issued opaque call authorization
-   */
   authorizeModelCall?(authorization: unknown): void;
 
-  /**
-   * Writes source-grounded content and its citations for program-owned targets.
-   *
-   * Provider adapters must enforce response byte/token limits before decoding;
-   * core collection and character limits remain an independent second gate.
-   *
-   * @param request - Frozen plan with exact target observations
-   * @param signal - Cancellation signal owned by the ingest attempt
-   * @returns Unknown provider output for strict runtime parsing
-   */
   generate(request: CompilerGenerationRequest, signal: AbortSignal): Promise<unknown>;
 }
 
-/** Stable infrastructure categories safe to translate into Queue retry facts. */
 export type KnowledgeCompilerInfrastructureFailureCode =
   | "dependency_failed"
   | "model_authority_failed"
@@ -285,12 +211,10 @@ export type KnowledgeCompilerInfrastructureFailureCode =
   | "provider_http_failed"
   | "provider_response_invalid";
 
-/** Classifies an opaque dependency rejection as one stable provider-neutral code. */
 export type KnowledgeCompilerDependencyFailureClassifier = (
   error: unknown
 ) => KnowledgeCompilerInfrastructureFailureCode | undefined;
 
-/** Compile stages surfaced by controlled failures and infrastructure errors. */
 export type KnowledgeCompilerStage =
   | "input"
   | "analysis"
@@ -298,7 +222,6 @@ export type KnowledgeCompilerStage =
   | "generation"
   | "candidate_validation";
 
-/** Successful proposal that must still be explicitly reviewed before apply. */
 export interface KnowledgeCompileProposal {
   kind: "proposed";
   compileContextDigest: string;
@@ -312,22 +235,20 @@ export interface KnowledgeCompileProposal {
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Valid analysis that produced no file mutation after exact target binding. */
 export interface KnowledgeCompileNoChanges {
   kind: "no_changes";
-  /** Content-addressed identity of this exact durable no-change conclusion. */
+
   noChangesId: string;
   compileContextDigest: string;
   analysisDigest: string;
-  /** Exact Manifest read-set and retained output projection for durable success. */
+
   manifestCommitPlan: NoChangesManifestCommitPlan;
-  /** Canonical digest re-proved before the no-change success may be committed. */
+
   manifestCommitPlanDigest: string;
   analysis: CompilerAnalysis;
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Controlled deterministic failure safe to persist and render. */
 export interface KnowledgeCompileFailure {
   kind: "failed";
   stage: KnowledgeCompilerStage;
@@ -335,13 +256,11 @@ export interface KnowledgeCompileFailure {
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Complete result of one provider-neutral compiler run. */
 export type KnowledgeCompileResult =
   | KnowledgeCompileProposal
   | KnowledgeCompileNoChanges
   | KnowledgeCompileFailure;
 
-/** Compile-time resource bounds applied after strict structural parsing. */
 export interface KnowledgeCompilerLimits {
   maxConcepts: number;
   maxEntities: number;
@@ -359,7 +278,6 @@ export interface KnowledgeCompilerLimits {
   maxValidationDiagnostics: number;
 }
 
-/** Safe default limits shared by production input derivation and the Compiler gate. */
 export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: Readonly<KnowledgeCompilerLimits> = Object.freeze({
   maxConcepts: 256,
   maxEntities: 256,
@@ -377,10 +295,9 @@ export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: Readonly<KnowledgeCompilerLimits
   maxValidationDiagnostics: 1024,
 });
 
-/** Constructor dependencies for source-writing compilation. */
 export interface KnowledgeCompilerDependencies {
   model: CompilerModelPort;
-  /** Optional trusted classifier paired with the exact injected model boundary. */
+
   classifyModelFailure?: KnowledgeCompilerDependencyFailureClassifier;
   targetResolver: CompilerTargetResolver;
   candidateValidator: CompilerCandidateValidator;

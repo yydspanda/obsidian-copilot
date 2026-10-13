@@ -1,11 +1,9 @@
-/** Minimum native file-handle surface needed by exclusive publication. */
 export interface ObsidianNodeFileHandle {
   writeFile(data: string, options: { encoding: "utf8" }): Promise<void>;
   sync(): Promise<void>;
   close(): Promise<void>;
 }
 
-/** Native filesystem promises used by Windows knowledge persistence. */
 export interface ObsidianNodeFileSystemPromises {
   realpath(path: string): Promise<string>;
   open(path: string, flags: "wx", mode: number): Promise<ObsidianNodeFileHandle>;
@@ -13,7 +11,6 @@ export interface ObsidianNodeFileSystemPromises {
   unlink(path: string): Promise<void>;
 }
 
-/** Native path operations used to enforce real-Vault containment. */
 export interface ObsidianNodePathModule {
   readonly sep: string;
   resolve(...paths: string[]): string;
@@ -24,34 +21,27 @@ export interface ObsidianNodePathModule {
   join(...paths: string[]): string;
 }
 
-/** Validated desktop-native modules needed by knowledge persistence. */
 export interface ObsidianNodeRuntimeModules {
   readonly fs: ObsidianNodeFileSystemPromises;
   readonly path: ObsidianNodePathModule;
   readonly randomUUID: () => string;
 }
 
-/** Lazily resolves the desktop-native modules for one operation. */
 export type ObsidianNodeRuntimeLoader = () => ObsidianNodeRuntimeModules;
 
-/** Minimal CommonJS loader exposed by Obsidian's desktop Electron renderer. */
 export type ObsidianNodeRequire = (moduleId: string) => unknown;
 
-/** Reports that the current renderer cannot provide the required native modules. */
 export class ObsidianNodeRuntimeUnavailableError extends Error {
-  /** Creates a sanitized native-runtime availability error. */
   constructor() {
     super("The current Obsidian runtime cannot provide Windows knowledge file persistence");
     this.name = "ObsidianNodeRuntimeUnavailableError";
   }
 }
 
-/** Reports whether a value is an object-like module namespace. */
 function isObjectLike(value: unknown): value is Record<PropertyKey, unknown> {
   return (typeof value === "object" && value !== null) || typeof value === "function";
 }
 
-/** Reads the renderer's lazy CommonJS loader without evaluating native modules at import time. */
 function getRendererNodeRequire(): unknown {
   try {
     return (window as unknown as { require?: unknown }).require;
@@ -60,17 +50,6 @@ function getRendererNodeRequire(): unknown {
   }
 }
 
-/**
- * Loads and validates the native modules exposed by Obsidian Desktop.
- *
- * Obsidian's Electron renderer supports lazy CommonJS `require`, while native
- * dynamic imports are treated as browser module fetches. Keeping this lookup
- * inside the operation also preserves normal plugin loading on non-desktop
- * platforms where Knowledge Studio is unavailable.
- *
- * @param nodeRequire - Injectable CommonJS loader for deterministic tests
- * @returns Validated native filesystem, path, and UUID operations
- */
 export function loadObsidianNodeRuntimeModules(
   nodeRequire: unknown = getRendererNodeRequire()
 ): ObsidianNodeRuntimeModules {

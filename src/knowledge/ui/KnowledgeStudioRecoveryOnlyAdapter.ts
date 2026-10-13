@@ -16,16 +16,14 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioController";
 import { sha256 } from "@/utils/hash";
 
-/** Narrow action authority supplied by the production recovery coordinator. */
 export interface KnowledgeStudioRecoveryActionPort {
-  /** Continues one exact accepted apply. */
   continue(
     bundleId: string,
     recoveryId: string,
     expectedRuntimeRevision: number,
     signal: AbortSignal
   ): Promise<KnowledgeStudioRecoverySubmissionResult>;
-  /** Abandons one exact no-journal apply. */
+
   abandon(
     bundleId: string,
     recoveryId: string,
@@ -34,7 +32,6 @@ export interface KnowledgeStudioRecoveryActionPort {
   ): Promise<KnowledgeStudioRecoverySubmissionResult>;
 }
 
-/** Dependencies captured by one retained recovery-only Studio generation. */
 export interface KnowledgeStudioRecoveryOnlyAdapterInput {
   composer: KnowledgeProductionRecoveryComposer;
   bundleIds: readonly string[];
@@ -43,7 +40,6 @@ export interface KnowledgeStudioRecoveryOnlyAdapterInput {
   onRecoveryStateChanged(): void;
 }
 
-/** Hidden state prevents React or reflection from recovering durable capabilities. */
 interface KnowledgeStudioRecoveryOnlyAdapterState {
   composer: KnowledgeProductionRecoveryComposer;
   bundleIds: ReadonlySet<string>;
@@ -57,12 +53,10 @@ interface KnowledgeStudioRecoveryOnlyAdapterState {
 
 const recoveryAdapterStates = new WeakMap<object, KnowledgeStudioRecoveryOnlyAdapterState>();
 
-/** Creates the platform cancellation category for stale recovery generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Returns hidden state only for an authentic recovery-only adapter. */
 function requireRecoveryAdapterState(value: unknown): KnowledgeStudioRecoveryOnlyAdapterState {
   if (
     typeof value !== "object" ||
@@ -76,7 +70,6 @@ function requireRecoveryAdapterState(value: unknown): KnowledgeStudioRecoveryOnl
   return state;
 }
 
-/** Requires one configured recovery Bundle and current caller/generation ownership. */
 function assertInvocation(
   state: KnowledgeStudioRecoveryOnlyAdapterState,
   bundleId: string,
@@ -87,16 +80,15 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Requests a lifecycle re-check without changing the durable recovery outcome. */
 function requestRecoveryStateChanged(state: KnowledgeStudioRecoveryOnlyAdapterState): void {
   try {
     state.onRecoveryStateChanged();
   } catch {
     // The retained recovery state remains fail-closed if lifecycle notification fails.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Creates a stable snapshot token from content-free recovery identities. */
 function createRecoveryRevisionToken(
   observation: NonNullable<ReturnType<KnowledgeProductionRecoveryComposer["getStudioObservation"]>>
 ): string {
@@ -133,7 +125,6 @@ function createRecoveryRevisionToken(
   return `knowledge-recovery-${sha256(canonicalizeJson(material))}`;
 }
 
-/** Creates exact command flags from the currently rendered recovery rows. */
 function createRecoveryCapabilities(
   observation: NonNullable<ReturnType<KnowledgeProductionRecoveryComposer["getStudioObservation"]>>
 ): Readonly<KnowledgeStudioCommandCapabilities> {
@@ -150,17 +141,9 @@ function createRecoveryCapabilities(
   });
 }
 
-/**
- * Retained recovery-only Studio adapter.
- *
- * It can re-run the existing startup Gate, display immutable Activity/recovery
- * projections, and delegate two opaque explicit decisions. It owns no model,
- * watcher, ordinary Queue command, Review decision, or direct Vault handle.
- */
 export class KnowledgeStudioRecoveryOnlyAdapter
   implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort
 {
-  /** Captures one authentic recovery composer and narrow action facade. */
   constructor(input: KnowledgeStudioRecoveryOnlyAdapterInput) {
     if (
       typeof input !== "object" ||
@@ -199,12 +182,10 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     Object.freeze(this);
   }
 
-  /** Proves an adapter was constructed by this module without revealing its state. */
   static assert(value: unknown): asserts value is KnowledgeStudioRecoveryOnlyAdapter {
     requireRecoveryAdapterState(value);
   }
 
-  /** Loads the retained observation and re-runs the Gate on explicit later checks. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     const state = requireRecoveryAdapterState(this);
     assertInvocation(state, bundleId, signal);
@@ -272,7 +253,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     });
   }
 
-  /** Registers no speculative hint source; refresh always re-runs durable recovery. */
   subscribe(bundleId: string, _onHint: () => void): () => void {
     const state = requireRecoveryAdapterState(this);
     if (!state.bundleIds.has(bundleId)) throw createAbortError();
@@ -280,7 +260,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     return () => undefined;
   }
 
-  /** Rejects ordinary Queue pause while startup recovery owns the Bundle. */
   async pauseBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -289,7 +268,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects ordinary Queue resume while startup recovery owns the Bundle. */
   async resumeBundle(
     _bundleId: string,
     _expectedQueueRevision: number,
@@ -298,7 +276,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects job cancellation while startup recovery owns the Bundle. */
   async cancelJob(
     _bundleId: string,
     _jobId: string,
@@ -308,7 +285,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects job retry while startup recovery owns the Bundle. */
   async retryJob(
     _bundleId: string,
     _jobId: string,
@@ -318,7 +294,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects Review decisions while startup recovery owns the Bundle. */
   async submitReview(
     _bundleId: string,
     _command: KnowledgeReviewCommand,
@@ -327,7 +302,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Delegates one exact recovery continuation after basic generation checks. */
   async continueRecovery(
     bundleId: string,
     recoveryId: string,
@@ -339,7 +313,6 @@ export class KnowledgeStudioRecoveryOnlyAdapter
     return state.continueRecovery(bundleId, recoveryId, expectedRuntimeRevision, signal);
   }
 
-  /** Delegates one exact no-journal abandonment after basic generation checks. */
   async abandonRecovery(
     bundleId: string,
     recoveryId: string,

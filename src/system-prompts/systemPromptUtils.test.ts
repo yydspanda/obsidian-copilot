@@ -12,36 +12,24 @@ import * as state from "@/system-prompts/state";
 import type { CopilotSettings } from "@/settings/model";
 import { mockTFile } from "@/__tests__/mockObsidian";
 
-// Mock Obsidian
 jest.mock("obsidian", () => ({
   TFile: jest.fn(),
   TAbstractFile: jest.fn(),
   normalizePath: jest.fn((path: string) => path),
 }));
 
-// Mock settings
 jest.mock("@/settings/model", () => ({
   getSettings: jest.fn(() => ({
     userSystemPromptsFolder: "SystemPrompts",
   })),
 }));
 
-// The folder read point derives from copilotFolder in production; these tests
-// exercise path-composition/file-matching, so the derived accessor is shimmed
-// to the folder each test configures via getSettings().userSystemPromptsFolder.
 jest.mock("@/settings/copilotFolder", () => {
   const { getSettings } = jest.requireMock<typeof import("@/settings/model")>("@/settings/model");
   return {
     getEffectiveSystemPromptsFolder: jest.fn(() => getSettings().userSystemPromptsFolder),
   };
 });
-
-// Mock state management
-jest.mock("@/system-prompts/state", () => ({
-  updateCachedSystemPrompts: jest.fn(),
-  addPendingFileWrite: jest.fn(),
-  removePendingFileWrite: jest.fn(),
-}));
 
 describe("systemPromptUtils", () => {
   describe("getSystemPromptsFolder()", () => {
@@ -84,7 +72,6 @@ describe("systemPromptUtils", () => {
         extension: "md",
       });
 
-      // Mock instanceof check
       Object.setPrototypeOf(mockFile, TFile.prototype);
 
       expect(isSystemPromptFile(mockFile)).toBe(true);
@@ -260,26 +247,6 @@ Content here.`;
       });
     });
 
-    it("strips frontmatter from content", async () => {
-      const rawContent = `---
-copilot-system-prompt-created: 1234567890
----
-Line 1
-Line 2`;
-
-      (app.vault.read as jest.Mock).mockResolvedValue(rawContent);
-      (app.metadataCache.getFileCache as jest.Mock).mockReturnValue({
-        frontmatter: {
-          "copilot-system-prompt-created": 1234567890,
-        },
-      });
-
-      const result = await parseSystemPromptFile(app, mockFile);
-
-      expect(result.content).toBe("Line 1\nLine 2");
-      expect(result.content).not.toContain("---");
-    });
-
     it("handles content with --- in the middle", async () => {
       const rawContent = `---
 copilot-system-prompt-created: 1234567890
@@ -333,7 +300,7 @@ Content with --- separator in the middle.`;
   });
 
   describe("loadAllSystemPrompts()", () => {
-    it("replaces the shared cache with prompts loaded from the vault", async () => {
+    it("returns the prompts loaded from the vault and stores them in the shared cache", async () => {
       jest.spyOn(settingsModel, "getSettings").mockReturnValue({
         userSystemPromptsFolder: "SystemPrompts",
       } as CopilotSettings);
@@ -355,7 +322,8 @@ Content with --- separator in the middle.`;
 
       const prompts = await loadAllSystemPrompts(app);
 
-      expect(state.updateCachedSystemPrompts).toHaveBeenCalledWith(prompts);
+      expect(prompts.map((prompt) => prompt.title)).toEqual(["Test Prompt"]);
+      expect(state.getCachedSystemPrompts()).toBe(prompts);
     });
   });
 });

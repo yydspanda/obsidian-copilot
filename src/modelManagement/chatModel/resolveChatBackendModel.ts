@@ -1,15 +1,3 @@
-/**
- * Resolve the chat backend's selected model into a runnable `CustomModel`.
- *
- * Single entry point shared by every chat surface (main chat, project, vault
- * QA, quick command, quick ask) so they all apply the same selection + fallback
- * policy:
- *   - the passed `configuredModelId` if it's still enabled in `backends.chat`;
- *   - otherwise the first enabled chat model for ordinary stale selections;
- *   - direct-provider selections that cannot be mapped safely fail closed;
- *   - failures distinguish an empty backend from an unavailable retained selection.
- */
-
 import { CustomModel } from "@/aiParams";
 import { logWarn } from "@/logger";
 import type { ModelManagementApi } from "@/modelManagement/createModelManagement";
@@ -29,7 +17,7 @@ export async function resolveChatBackendModel(
   preferredConfiguredModelId: string | undefined
 ): Promise<ChatBackendResolution> {
   const enabled = api.backendConfigRegistry.resolveEnabled("chat");
-  const target = findChatBackendEntry(enabled, preferredConfiguredModelId, {
+  const target = findChatBackendEntry(enabled, preferredConfiguredModelId, true, {
     configuredModels: api.configuredModelRegistry.list(),
     providers: api.providerRegistry.list(),
   });

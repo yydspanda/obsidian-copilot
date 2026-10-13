@@ -32,7 +32,6 @@ const SCHEMA_CONTENT = "# Knowledge schema\n";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 
-/** Creates one valid source compilation snapshot with caller-selected pages. */
 function createLastSuccessful(generatedPages: GeneratedPageReference[]) {
   return {
     sourceContentHash: HASH_A,
@@ -43,7 +42,6 @@ function createLastSuccessful(generatedPages: GeneratedPageReference[]) {
   };
 }
 
-/** Creates a complete plain preparation fixture for pure input derivation. */
 function createPreparation(
   artifacts: readonly SourceArtifactObservation[],
   manifest?: SourceManifest
@@ -88,7 +86,6 @@ function createPreparation(
   };
 }
 
-/** Creates one plain text artifact with a valid exact content hash. */
 function createTextArtifact(text = "Exact primary source text"): SourceArtifactObservation {
   return {
     kind: "text",
@@ -748,7 +745,6 @@ describe("KnowledgeProductionCompileInput", () => {
         createKnowledgeProductionCompileInput(createPreparation([boundedPdf]), 1).evidence
       ).toHaveLength(2_048);
 
-      /** Creates one primary-source Manifest with an exact generated-page count. */
       const createManifestWithPages = (count: number): SourceManifest => ({
         version: 1,
         bundleId: "personal",

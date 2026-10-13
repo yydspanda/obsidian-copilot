@@ -60,7 +60,6 @@ function createAuthority(
   };
 }
 
-/** Creates one exact private forward-ledger authority for coordinator boundary tests. */
 function createForwardAuthority(
   contentHash: string,
   appliedAt: number
@@ -169,7 +168,6 @@ function createRuntime(
   };
 }
 
-/** Creates a Runtime facade that rejects each read with one selected value. */
 function createRejectingRuntime(failure: Error): KnowledgeKnownAppliedWikiOutputsRuntimePort {
   return {
     readKnownAppliedWikiOutputIndex: async () => {

@@ -40,17 +40,13 @@ const DEFAULT_MAX_PARSED_CHARACTERS = 8_000_000;
 const MAX_WORKFLOW_ARRAY_LENGTH = 10_000;
 const EXECUTION_PLAN_TOKEN = Symbol("KnowledgeSourceExecutionPlan.constructor");
 
-/** Read-only durable Manifest repository boundary. */
 export interface KnowledgeManifestSnapshotPort {
-  /** Loads one detached current Source Manifest. */
   load(bundleId: string): Promise<unknown>;
 }
 
-/** Exact App/Vault-owned bytes used for both schema and source reproof. */
 export interface KnowledgeExactArtifactReaderPort {
-  /** Reads exact current bytes without cache or text conversion. */
   read(sourcePath: string, signal?: AbortSignal): Promise<ExactSourceArtifact>;
-  /** Reads exact current bytes and requires a durable expected hash. */
+
   readExpected(
     sourcePath: string,
     expectedContentHash: string,
@@ -58,19 +54,14 @@ export interface KnowledgeExactArtifactReaderPort {
   ): Promise<ExactSourceArtifact>;
 }
 
-/** Secret-free profile resolver bound to one Projects/settings generation. */
 export interface KnowledgePipelineProfilePort {
-  /** Resolves one project-owned Bundle's complete behavior profile. */
   resolve(owner: ConfiguredProjectKnowledgeBundle, signal: AbortSignal): unknown;
 }
 
-/** Caller-owned workflow generation lease checked around every async boundary. */
 export interface KnowledgeWorkflowGenerationPort {
-  /** Returns whether the exact loader/execution generation remains current. */
   isCurrent(): boolean;
 }
 
-/** Resource limits and capabilities captured by one workflow-plan loader. */
 export interface KnowledgeSourceWorkflowPlanDependencies {
   executionOwner: KnowledgeExecutionOwner;
   manifest: KnowledgeManifestSnapshotPort;
@@ -82,7 +73,6 @@ export interface KnowledgeSourceWorkflowPlanDependencies {
   maxParsedCharacters?: number;
 }
 
-/** Untrusted job-shaped projection accepted by the read-only preparation boundary. */
 export interface KnowledgeSourceParseJob {
   bundleId: string;
   sourceId: string;
@@ -91,7 +81,6 @@ export interface KnowledgeSourceParseJob {
   inputRevision: number;
 }
 
-/** Source observation that is deliberately not branded as durable Queue authority. */
 export interface KnowledgeUnboundSourceObservation {
   sourceId: string;
   sourceContentHash: string;
@@ -99,7 +88,6 @@ export interface KnowledgeUnboundSourceObservation {
   inputRevision: number;
 }
 
-/** Strict source material that remains unusable until a future Queue authority binding. */
 export interface KnowledgeSourceParsePreparation {
   authority: "unbound_read_only";
   operation: KnowledgeSourceCompileOperation;
@@ -110,7 +98,6 @@ export interface KnowledgeSourceParsePreparation {
   artifacts: readonly SourceArtifactObservation[];
 }
 
-/** Requires current Manifest origin authority to equal the retained watch source. */
 function requireMatchingSourceCompileAuthority(
   watchedSource: ReturnType<KnowledgeSourceWatchPlan["getSource"]>,
   manifestEntry: SourceManifest["entries"][number],
@@ -143,14 +130,12 @@ function requireMatchingSourceCompileAuthority(
   return current;
 }
 
-/** Exact secret-free Bundle authority retained and freshly re-proved by one execution plan. */
 export interface KnowledgeSourceBundleAuthoritySnapshot {
   readonly manifest: SourceManifest;
   readonly schema: CompilerSchemaSnapshot;
   readonly pipeline: KnowledgeBundlePipelineProfile;
 }
 
-/** Stable stage at which read-only workflow-plan preparation failed. */
 export type KnowledgeSourceWorkflowPlanErrorStage =
   | "dependencies"
   | "bundle"
@@ -161,7 +146,6 @@ export type KnowledgeSourceWorkflowPlanErrorStage =
   | "job"
   | "parser";
 
-/** Stable, value-free workflow-plan failure categories. */
 export type KnowledgeSourceWorkflowPlanErrorCode =
   | "dependency_invalid"
   | "generation_stale"
@@ -182,9 +166,7 @@ export type KnowledgeSourceWorkflowPlanErrorCode =
   | "parser_mutated_bytes"
   | "plan_not_authoritative";
 
-/** Sanitized loader/preparation error retaining no path, bytes, profile, or lower-level error. */
 export class KnowledgeSourceWorkflowPlanError extends Error {
-  /** Creates one stable read-only preparation failure. */
   constructor(
     public readonly code: KnowledgeSourceWorkflowPlanErrorCode,
     public readonly stage: KnowledgeSourceWorkflowPlanErrorStage,
@@ -249,24 +231,20 @@ interface WorkflowPlanLoaderState {
 const executionPlanStates = new WeakMap<object, ExecutionPlanState>();
 const workflowPlanLoaderStates = new WeakMap<object, WorkflowPlanLoaderState>();
 
-/** Compares strings by code unit without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Produces one unambiguous Bundle/source lookup key. */
 function createBundleSourceKey(bundleId: string, sourceId: string): string {
   return `${bundleId.length}:${bundleId}${sourceId.length}:${sourceId}`;
 }
 
-/** Creates a platform-compatible cancellation without retaining a signal reason. */
 function createAbortError(): Error {
   const error = new Error("The knowledge source workflow operation was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/** Stops stale or cancelled workflow work at a synchronous boundary. */
 function assertCurrent(signal: AbortSignal, isCurrent: () => boolean): void {
   if (signal.aborted) {
     throw createAbortError();
@@ -274,7 +252,6 @@ function assertCurrent(signal: AbortSignal, isCurrent: () => boolean): void {
   assertGenerationCurrent(isCurrent);
 }
 
-/** Rejects a stale workflow generation without requiring a caller-provided cancellation signal. */
 function assertGenerationCurrent(isCurrent: () => boolean): void {
   let current = false;
   try {
@@ -287,7 +264,6 @@ function assertGenerationCurrent(isCurrent: () => boolean): void {
   }
 }
 
-/** Checks one positive safe resource limit. */
 function requirePositiveLimit(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError(`${field} must be a positive safe integer`);
@@ -295,7 +271,6 @@ function requirePositiveLimit(value: number, field: string): number {
   return value;
 }
 
-/** Resolves a callable data method once without invoking accessors. */
 function captureDataMethod(value: unknown, key: string): CapturedMethod | undefined {
   try {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") {
@@ -321,7 +296,6 @@ function captureDataMethod(value: unknown, key: string): CapturedMethod | undefi
   }
 }
 
-/** Reads an exact plain record through own enumerable data properties. */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -351,7 +325,6 @@ function snapshotExactRecord(
   }
 }
 
-/** Reads one required own enumerable data property without invoking an accessor. */
 function readOwnDataProperty(value: unknown, key: string): unknown {
   try {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") {
@@ -367,7 +340,6 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Reads one optional own enumerable data property without invoking an accessor. */
 function readOptionalOwnDataProperty(value: unknown, key: string): unknown {
   try {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") {
@@ -384,7 +356,6 @@ function readOptionalOwnDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Reads a dense array using only own data descriptors and no iterator. */
 function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -411,7 +382,6 @@ function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   }
 }
 
-/** Creates one detached strict JSON data snapshot without invoking accessors. */
 function snapshotJsonValue(
   value: unknown,
   ancestors: Set<object> = new Set<object>(),
@@ -479,7 +449,6 @@ function snapshotJsonValue(
   }
 }
 
-/** Captures and validates the caller's complete project-owned Bundle set once. */
 function captureBundleOwners(value: unknown): readonly ConfiguredProjectKnowledgeBundle[] {
   let snapshot: JsonValue;
   try {
@@ -515,7 +484,6 @@ function captureBundleOwners(value: unknown): readonly ConfiguredProjectKnowledg
   return Object.freeze(owners);
 }
 
-/** Re-encodes text and proves exact equality without invoking byte instance methods. */
 function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
@@ -524,7 +492,6 @@ function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   return true;
 }
 
-/** Copies exact bytes without invoking an instance iterator or copy method. */
 function copyExactBytes(value: Uint8Array): Uint8Array {
   const copy = new Uint8Array(value.length);
   for (let index = 0; index < value.length; index += 1) {
@@ -533,14 +500,12 @@ function copyExactBytes(value: Uint8Array): Uint8Array {
   return copy;
 }
 
-/** Rejects any parser-visible mutation before parsed material can be published. */
 function assertParserBytesUnchanged(bytes: Uint8Array, expectedHash: string): void {
   if (createSourceContentHash(bytes) !== expectedHash) {
     throw new KnowledgeSourceWorkflowPlanError("parser_mutated_bytes", "parser");
   }
 }
 
-/** Decodes exact schema bytes using the same versioned no-normalization UTF-8 policy. */
 function decodeSchema(
   bytes: Uint8Array,
   path: string,
@@ -562,7 +527,6 @@ function decodeSchema(
   return Object.freeze({ path, content, contentHash: createFileContentHash(content) });
 }
 
-/** Revalidates an exact-reader payload without trusting its declared hash. */
 function verifyExactArtifact(
   value: unknown,
   expectedPath: string,
@@ -599,7 +563,6 @@ function verifyExactArtifact(
   });
 }
 
-/** Captures and normalizes one parser capability before any plan is loaded. */
 function captureParser(value: KnowledgeByteParser): CapturedParser {
   const getProfile = captureDataMethod(value, "getProfile");
   const parse = captureDataMethod(value, "parse");
@@ -645,7 +608,6 @@ function captureParser(value: KnowledgeByteParser): CapturedParser {
   });
 }
 
-/** Snapshots one resolved profile and proves its complete parser registry is executable. */
 function capturePipelineProfile(
   value: unknown,
   parsers: readonly CapturedParser[],
@@ -689,7 +651,6 @@ function capturePipelineProfile(
   return snapshot as unknown as KnowledgeBundlePipelineProfile;
 }
 
-/** Captures all loader dependency methods once and freezes parser routing by profile digest. */
 function captureDependencies(dependencies: KnowledgeSourceWorkflowPlanDependencies): {
   executionOwner: KnowledgeExecutionOwner;
   manifestLoad: (bundleId: string) => Promise<unknown>;
@@ -772,7 +733,6 @@ function captureDependencies(dependencies: KnowledgeSourceWorkflowPlanDependenci
   });
 }
 
-/** Parses one detached Manifest snapshot and verifies its exact Bundle identity. */
 function parseManifestSnapshot(
   value: unknown,
   bundleId: string,
@@ -791,7 +751,6 @@ function parseManifestSnapshot(
   return snapshotJsonValue(parsed.value) as unknown as SourceManifest;
 }
 
-/** Loads one exact schema snapshot and its compiler text bridge. */
 async function loadSchemaMaterial(
   owner: ConfiguredProjectKnowledgeBundle,
   readArtifact: (path: string, signal?: AbortSignal) => Promise<ExactSourceArtifact>,
@@ -826,7 +785,6 @@ async function loadSchemaMaterial(
   };
 }
 
-/** Returns module-private state only for an authentic execution-plan instance. */
 function requireExecutionPlanState(value: unknown): ExecutionPlanState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSourceWorkflowPlanError("plan_not_authoritative", "plan");
@@ -838,7 +796,6 @@ function requireExecutionPlanState(value: unknown): ExecutionPlanState {
   return state;
 }
 
-/** Returns loader capability state only for an authentic frozen loader instance. */
 function requireWorkflowPlanLoaderState(value: unknown): WorkflowPlanLoaderState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSourceWorkflowPlanError("plan_not_authoritative", "plan");
@@ -850,7 +807,6 @@ function requireWorkflowPlanLoaderState(value: unknown): WorkflowPlanLoaderState
   return state;
 }
 
-/** Strictly snapshots the minimal Queue identity used by parse preparation. */
 function parseJob(value: unknown): KnowledgeSourceParseJob {
   const snapshot = snapshotExactRecord(value, [
     "bundleId",
@@ -885,7 +841,6 @@ function parseJob(value: unknown): KnowledgeSourceParseJob {
   });
 }
 
-/** Verifies the current durable Manifest still equals the loaded plan authority. */
 async function reproveManifest(
   state: ExecutionPlanState,
   bundleId: string,
@@ -912,7 +867,6 @@ async function reproveManifest(
   return manifest;
 }
 
-/** Verifies current schema bytes against both raw and compiler-text plan authority. */
 async function reproveSchema(
   state: ExecutionPlanState,
   material: CollectedBundleMaterial,
@@ -950,7 +904,6 @@ async function reproveSchema(
   }
 }
 
-/** Verifies the current secret-free behavior profile exactly equals the retained plan snapshot. */
 async function reprovePipelineProfile(
   state: ExecutionPlanState,
   material: CollectedBundleMaterial,
@@ -975,7 +928,6 @@ async function reprovePipelineProfile(
   assertCurrent(signal, state.isCurrent);
 }
 
-/** Re-proves one Bundle's complete retained Manifest, schema, and profile authority. */
 async function reproveBundleMaterial(
   state: ExecutionPlanState,
   material: CollectedBundleMaterial,
@@ -992,15 +944,7 @@ async function reproveBundleMaterial(
   });
 }
 
-/**
- * Authenticated execution binding produced by one double-collected loader generation.
- *
- * It exposes only the public watch plan and a read-only parse preparation. Parser
- * capabilities, schema text, Runtime repository, exact App/Vault reader, and
- * generation lease remain in module-owned WeakMap state.
- */
 export class KnowledgeSourceExecutionPlan {
-  /** Installs only loader-created module-private state. */
   private constructor(token: symbol, state: ExecutionPlanState) {
     if (token !== EXECUTION_PLAN_TOKEN) {
       throw new KnowledgeSourceWorkflowPlanError("plan_not_authoritative", "plan");
@@ -1009,7 +953,6 @@ export class KnowledgeSourceExecutionPlan {
     Object.freeze(this);
   }
 
-  /** Constructs one authentic execution binding only for the module-private loader token. */
   static create(token: symbol, state: ExecutionPlanState): KnowledgeSourceExecutionPlan {
     if (token !== EXECUTION_PLAN_TOKEN) {
       throw new KnowledgeSourceWorkflowPlanError("plan_not_authoritative", "plan");
@@ -1017,26 +960,22 @@ export class KnowledgeSourceExecutionPlan {
     return new KnowledgeSourceExecutionPlan(EXECUTION_PLAN_TOKEN, state);
   }
 
-  /** Rejects forged or directly constructed execution-plan values. */
   static assert(value: unknown): asserts value is KnowledgeSourceExecutionPlan {
     requireExecutionPlanState(value);
   }
 
-  /** Returns the exact opaque watcher authority produced by the same collection. */
   getWatchPlan(): KnowledgeSourceWatchPlan {
     const state = requireExecutionPlanState(this);
     assertGenerationCurrent(state.isCurrent);
     return state.watchPlan;
   }
 
-  /** Returns the config-free digest of the double-collected data authority. */
   getDigest(): string {
     const state = requireExecutionPlanState(this);
     assertGenerationCurrent(state.isCurrent);
     return state.digest;
   }
 
-  /** Reports whether this plan belongs to one exact App/Vault/workflow lifecycle owner. */
   matchesExecutionOwner(value: unknown): boolean {
     const state = requireExecutionPlanState(this);
     assertGenerationCurrent(state.isCurrent);
@@ -1048,14 +987,12 @@ export class KnowledgeSourceExecutionPlan {
     }
   }
 
-  /** Returns one retained, detached, secret-free Bundle pipeline profile when still current. */
   getBundlePipelineProfile(bundleId: string): KnowledgeBundlePipelineProfile | undefined {
     const state = requireExecutionPlanState(this);
     assertGenerationCurrent(state.isCurrent);
     return state.bundlesById.get(bundleId)?.pipeline;
   }
 
-  /** Strictly re-proves one Bundle's current Manifest, schema, and profile authority. */
   async reproveBundleAuthorities(
     bundleId: string,
     signal: AbortSignal
@@ -1069,11 +1006,6 @@ export class KnowledgeSourceExecutionPlan {
     return reproveBundleMaterial(state, material, signal);
   }
 
-  /**
-   * Re-proves durable/schema authority and parses one Queue observation from its exact bytes.
-   *
-   * No model, Review, Queue mutation, or Vault write capability is present.
-   */
   async prepare(
     jobValue: KnowledgeSourceParseJob,
     signal: AbortSignal
@@ -1190,15 +1122,7 @@ export class KnowledgeSourceExecutionPlan {
 Object.freeze(KnowledgeSourceExecutionPlan.prototype);
 Object.freeze(KnowledgeSourceExecutionPlan);
 
-/**
- * Read-only all-or-nothing loader for production Bundle/Manifest/schema/profile snapshots.
- *
- * The complete input set is collected twice. Only identical plan/owner/schema
- * projections produce an execution binding, catching mixed-generation reads
- * before any watcher or parser can start.
- */
 export class KnowledgeSourceWorkflowPlanLoader {
-  /** Captures exact repository, App/Vault reader, profile, parser, and generation capabilities. */
   constructor(dependencies: KnowledgeSourceWorkflowPlanDependencies) {
     const captured = captureDependencies(dependencies);
     try {
@@ -1210,7 +1134,6 @@ export class KnowledgeSourceWorkflowPlanLoader {
     Object.freeze(this);
   }
 
-  /** Collects one deterministic complete snapshot from every read-only authority port. */
   private async collect(
     owners: readonly ConfiguredProjectKnowledgeBundle[],
     signal: AbortSignal
@@ -1278,7 +1201,6 @@ export class KnowledgeSourceWorkflowPlanLoader {
     return Object.freeze({ watchPlan, bundles: Object.freeze(bundles), digest });
   }
 
-  /** Loads two matching snapshots and returns one authenticated execution binding. */
   async load(
     owners: readonly ConfiguredProjectKnowledgeBundle[],
     signal: AbortSignal

@@ -20,7 +20,6 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => ({
       return this.read(bundleId);
     }
 
-    /** Delegates one exact accepted-ready abandonment to the focused Runtime fake. */
     abandonForwardRevisionAcceptedReady(
       acceptedIdentity: unknown,
       expectedRuntimeRevision: number
@@ -201,7 +200,6 @@ type VisitCall = (
   visitor: (value: unknown, fileByteSize?: number) => void
 ) => Promise<void>;
 
-/** Visits the first requested target with the default current Wiki content. */
 const visitCurrentTarget: VisitCall = async (requests, _signal, _options, visitor) => {
   const request = requests[0];
   if (!request) throw new Error("Expected one compiler target request");
@@ -232,7 +230,6 @@ const ResolverConstructor = ObsidianKnowledgeCompilerTargetResolver as unknown a
   visit: VisitCall
 ) => ObsidianKnowledgeCompilerTargetResolver;
 
-/** Creates one minimal pending durable record accepted by the product coordinator mocks. */
 function createPendingRecord(
   index = 0,
   selectedContent = SELECTED_CONTENT,
@@ -273,7 +270,6 @@ function createPendingRecord(
   });
 }
 
-/** Creates one accepted-ready record from the same exact pending identity. */
 function createAcceptedReadyRecord(pending = createPendingRecord()) {
   return Object.freeze({
     state: "accepted_ready" as const,
@@ -299,7 +295,6 @@ function createAcceptedReadyRecord(pending = createPendingRecord()) {
   });
 }
 
-/** Creates the canonical accepted lifecycle identity used by Runtime abandonment mocks. */
 function createAcceptedIdentity(accepted = createAcceptedReadyRecord()) {
   const decision = accepted.acceptedDecision;
   const request = decision.proposal.request;
@@ -320,7 +315,6 @@ function createAcceptedIdentity(accepted = createAcceptedReadyRecord()) {
   });
 }
 
-/** Creates one terminal Studio record backed by an exact no-write abandonment. */
 function createAbandonedRecord(accepted = createAcceptedReadyRecord(), abandonedAt = 14) {
   const abandonment = createKnowledgeForwardRevisionAbandonmentRecord({
     acceptedIdentity: createAcceptedIdentity(accepted),
@@ -336,7 +330,6 @@ function createAbandonedRecord(accepted = createAcceptedReadyRecord(), abandoned
   });
 }
 
-/** Creates one value-only terminal row for a recovery that retained the observed Wiki value. */
 function createKeptCurrentRecord(accepted = createAcceptedReadyRecord(), terminalizedAt = 15) {
   return Object.freeze({
     ...accepted,
@@ -347,7 +340,6 @@ function createKeptCurrentRecord(accepted = createAcceptedReadyRecord(), termina
   });
 }
 
-/** Creates one applying record carrying the exact accepted decision identity. */
 function createApplyingRecord(accepted = createAcceptedReadyRecord()) {
   return Object.freeze({
     ...accepted,
@@ -357,7 +349,6 @@ function createApplyingRecord(accepted = createAcceptedReadyRecord()) {
   });
 }
 
-/** Creates one sticky recovery row carrying no UI mutation authority. */
 function createRecoveryRecord(accepted = createAcceptedReadyRecord()) {
   return Object.freeze({
     ...accepted,
@@ -376,7 +367,6 @@ function createRecoveryRecord(accepted = createAcceptedReadyRecord()) {
   });
 }
 
-/** Creates one minimal internal Runtime Studio snapshot. */
 function createRuntimeSnapshot(
   activeRecords: readonly Readonly<
     | ReturnType<typeof createPendingRecord>
@@ -403,7 +393,6 @@ function createRuntimeSnapshot(
   }) as unknown as Readonly<KnowledgeForwardRevisionStudioSnapshot>;
 }
 
-/** Creates one coordinator with independently controlled genuine-boundary mocks. */
 function createCoordinator(input: {
   read: RuntimeRead;
   decide?: DecisionCall;
@@ -442,7 +431,6 @@ function createCoordinator(input: {
   return { coordinator, decide, apply, resolveRecovery, abandon, visit };
 }
 
-/** Creates one opaque command from the current UI row. */
 function createCommand(
   reviewRef: string,
   snapshotRef: string,

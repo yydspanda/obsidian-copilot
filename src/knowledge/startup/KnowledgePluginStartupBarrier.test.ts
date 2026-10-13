@@ -10,14 +10,12 @@ import {
   type KnowledgePluginStartupState,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
-/** Promise controls used to hold one startup prerequisite across a rerun. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T | PromiseLike<T>): void;
   reject(reason?: unknown): void;
 }
 
-/** Creates externally controlled asynchronous work for ordering tests. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: Deferred<T>["resolve"];
   let reject!: Deferred<T>["reject"];
@@ -28,14 +26,12 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Creates the safe configured aggregate returned by the project adapter. */
 function createConfiguredBundles(
   bundleIds: readonly string[] = ["personal"]
 ): KnowledgePluginBundleConfigLoadResult {
   return { kind: "configured", bundleIds };
 }
 
-/** Creates an observable one-shot recovery port. */
 function createRecovery(
   start: (signal: AbortSignal) => Promise<KnowledgePluginRecoveryStartupResult> = async () => ({
     kind: "observed_clear",
@@ -47,7 +43,6 @@ function createRecovery(
   return { start: jest.fn(start), close: jest.fn() };
 }
 
-/** Creates an observable long-lived observation port. */
 function createObservation(
   start: (signal: AbortSignal) => Promise<KnowledgePluginObservationStartupResult> = async () => ({
     kind: "observation_converged",
@@ -60,7 +55,6 @@ function createObservation(
   return { start: jest.fn(start), close: jest.fn() };
 }
 
-/** Creates default narrow dependencies and captures every Studio reset. */
 function createHarness(overrides: Partial<KnowledgePluginStartupBarrierDependencies> = {}): {
   barrier: KnowledgePluginStartupBarrier;
   dependencies: KnowledgePluginStartupBarrierDependencies;

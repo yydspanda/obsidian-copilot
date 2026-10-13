@@ -5,11 +5,6 @@ interface Deferred<T> {
   resolve: (value: T) => void;
 }
 
-/**
- * Creates a controllable Promise for lifecycle-boundary tests.
- *
- * @returns Deferred Promise controls
- */
 function createDeferred<T>(): Deferred<T> {
   let resolvePromise!: (value: T) => void;
   const promise = new Promise<T>((resolve) => {

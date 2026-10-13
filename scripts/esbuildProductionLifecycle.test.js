@@ -3,8 +3,6 @@ import path from "node:path";
 
 const ISSUE = "https://github.com/yydspanda/obsidian-copilot/issues/22";
 
-// Evaluate the real entrypoint with inert dependencies so lifecycle failures cannot
-// overwrite the plugin artifact or terminate the Jest worker.
 function runBuildConfig(mode, failRebuild = false) {
   const result = spawnSync(
     process.execPath,

@@ -42,7 +42,6 @@ const MAX_REQUESTS = 1;
 const TIMEOUT_MS = 120_000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
-/** Read-only live capabilities and a complete paused Runtime snapshot retained only in memory. */
 export interface KnowledgeAnalysisRetestInput {
   runtimeText: string;
   app: Pick<App, "vault">;
@@ -74,11 +73,6 @@ let session: RetestSession | undefined;
 let preparing = false;
 let preparationController: AbortController | undefined;
 
-/**
- * Builds an isolated production compile chain without releasing its network capability.
- *
- * @param input - One explicitly selected source, its owner/model selection, and a complete paused snapshot
- */
 export async function prepare(
   input: KnowledgeAnalysisRetestInput
 ): Promise<Record<string, unknown>> {
@@ -200,7 +194,7 @@ export async function prepare(
     const schemaArtifact = await artifactReader.read(owner.config.schemaRef);
     const requests: SafeRequest[] = [];
     let networkReleased = false;
-    // Native fetch is necessary here for real AbortSignal cancellation; requestUrl cannot provide it.
+
     const nativeFetch: typeof window.fetch = window.fetch.bind(window);
     const fetchPort: KnowledgeDeepSeekFetchPort = async (url, init) => {
       if (
@@ -439,7 +433,6 @@ export async function prepare(
   }
 }
 
-/** Runs one prepared attempt; a second call cannot reuse its authority or request budget. */
 export async function run(): Promise<Record<string, unknown>> {
   const active = session;
   if (!active || active.used) return { kind: "diagnostic", code: "run_not_available" };
@@ -469,14 +462,12 @@ export async function run(): Promise<Record<string, unknown>> {
   }
 }
 
-/** Releases only the isolated session; a new run requires explicit preparation again. */
 export function close(): void {
   preparationController?.abort();
   session?.close();
   session = undefined;
 }
 
-/** Optional development-only loader shell; loading never starts preparation, models, or real Queue work. */
 export default class KnowledgeAnalysisRetestPlugin extends Plugin {
   readonly api = Object.freeze({ prepare, run, close });
   onload(): void {

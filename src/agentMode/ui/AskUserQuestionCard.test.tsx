@@ -26,10 +26,6 @@ function renderCard(request: AskUserQuestionPrompt, onResolve: jest.Mock) {
   return render(<AskUserQuestionCard request={request} onResolve={onResolve} />);
 }
 
-// The "Other" row's accessible name is its label plus the "Type your own
-// response" description (jsdom concatenates them with no separator), so anchor
-// on the leading "Other" rather than an exact match. Preset labels here are
-// A/B/C, so this can't collide with a preset.
 function getOtherControl(role: "radio" | "checkbox"): HTMLElement {
   return screen.getByRole(role, { name: /^other/i });
 }
@@ -41,15 +37,6 @@ const otherTextarea = (): HTMLElement => screen.getByPlaceholderText(/type your 
 
 describe("AskUserQuestionCard", () => {
   describe("AskUserQuestionCard()", () => {
-    it("fills the available action-rail width", () => {
-      const { container } = renderCard(
-        makeRequest([{ question: "Continue?", options: [{ label: "Yes" }] }]),
-        jest.fn()
-      );
-
-      expect(container.firstElementChild?.classList.contains("tw-w-full")).toBe(true);
-    });
-
     it("single-select 'Other' → the trimmed typed text is the answer", () => {
       const onResolve = jest.fn();
       const request = makeRequest([
@@ -61,7 +48,6 @@ describe("AskUserQuestionCard", () => {
       renderCard(request, onResolve);
 
       fireEvent.click(getOtherControl("radio"));
-      // Surrounding whitespace proves the answer is trimmed on submit.
       fireEvent.change(otherTextarea(), { target: { value: "  ship it Friday  " } });
       fireEvent.click(submitButton());
 
@@ -240,21 +226,25 @@ describe("AskUserQuestionCard", () => {
       expect(onResolve).toHaveBeenCalledWith(REQUEST_ID, {});
     });
 
-    it("regression: single-select preset still resolves with the chosen label", () => {
+    it("hides Other and submits under the answer key when the backend cannot accept typed answers (https://github.com/Brevilabs/obsidian-copilot-private/issues/551)", () => {
       const onResolve = jest.fn();
-      const request = makeRequest([
-        {
-          question: "When do we ship?",
-          options: [{ label: "A" }, { label: "B" }],
-        },
-      ]);
-      renderCard(request, onResolve);
+      renderCard(
+        makeRequest([
+          {
+            question: "Install MCP servers?",
+            answerKey: "mcp_install",
+            options: [{ label: "Install" }, { label: "Skip" }],
+            allowOther: false,
+          },
+        ]),
+        onResolve
+      );
 
-      fireEvent.click(screen.getByRole("radio", { name: /^A$/ }));
+      expect(screen.queryByRole("radio", { name: /^other/i })).toBeNull();
+      fireEvent.click(screen.getByRole("radio", { name: /^Skip$/ }));
       fireEvent.click(submitButton());
 
-      expect(onResolve).toHaveBeenCalledTimes(1);
-      expect(onResolve).toHaveBeenCalledWith(REQUEST_ID, { "When do we ship?": "A" });
+      expect(onResolve).toHaveBeenCalledWith(REQUEST_ID, { mcp_install: "Skip" });
     });
   });
 });

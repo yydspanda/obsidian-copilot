@@ -61,7 +61,6 @@ const STALE_COMPARISON = Object.freeze({ kind: "stale" as const });
 const UNAVAILABLE_COMPARISON = Object.freeze({ kind: "unavailable" as const });
 const OPAQUE_REF_PATTERN = /^known-wiki-(?:page|output|cursor)-[a-f0-9]{64}$/;
 
-/** Reports whether a caller supplied one bounded opaque ref without coercion. */
 function isOpaqueRef(value: unknown, kind: "output" | "cursor"): value is string {
   return (
     typeof value === "string" &&
@@ -71,7 +70,6 @@ function isOpaqueRef(value: unknown, kind: "output" | "cursor"): value is string
   );
 }
 
-/** Reports whether a returned session uses the exact opaque field categories. */
 function sessionRefsHaveExactKinds(
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>
 ): boolean {
@@ -82,7 +80,6 @@ function sessionRefsHaveExactKinds(
   );
 }
 
-/** Reports exact equality for two already-snapshotted provenance arrays. */
 function originsEqual(
   left: Readonly<KnowledgeKnownAppliedWikiOutputsSession["items"][number]>["origins"],
   right: Readonly<KnowledgeKnownAppliedWikiOutputsSession["items"][number]>["origins"]
@@ -102,35 +99,28 @@ function originsEqual(
   );
 }
 
-/** Explicit fail-closed capability used outside a released production generation. */
 class UnavailableKnowledgeKnownAppliedWikiOutputsPort implements KnowledgeKnownAppliedWikiOutputsPort {
-  /** Rejects a new browsing session while no generation is installed. */
   async inspectKnownOutputs(): Promise<Readonly<KnowledgeKnownAppliedWikiOutputsSession>> {
     throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
   }
 
-  /** Returns a value-free unavailable page result. */
   async listMore(): Promise<Readonly<KnowledgeKnownAppliedWikiOutputsPageResult>> {
     return UNAVAILABLE_PAGE;
   }
 
-  /** Returns a value-free unavailable detail result. */
   async readOutput(): Promise<Readonly<KnowledgeKnownAppliedWikiOutputDetailResult>> {
     return UNAVAILABLE_DETAIL;
   }
 
-  /** Returns a value-free unavailable comparison result. */
   async compareWithCurrent(): Promise<Readonly<KnowledgeKnownAppliedWikiOutputComparisonResult>> {
     return UNAVAILABLE_COMPARISON;
   }
 }
 
-/** Creates a platform cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Finds one callable data method without invoking an accessor. */
 function captureMethod(value: object, name: string): ((...args: unknown[]) => unknown) | undefined {
   try {
     let owner: object | null = value;
@@ -151,7 +141,6 @@ function captureMethod(value: object, name: string): ((...args: unknown[]) => un
   return undefined;
 }
 
-/** Captures the exact delegate receiver and four read-only methods. */
 function captureDelegate(value: KnowledgeKnownAppliedWikiOutputsPort): CapturedDelegate {
   if (typeof value !== "object" || value === null) throw createAbortError();
   const inspect = captureMethod(value, "inspectKnownOutputs");
@@ -180,7 +169,6 @@ function captureDelegate(value: KnowledgeKnownAppliedWikiOutputsPort): CapturedD
   });
 }
 
-/** Links caller and generation cancellation and releases listeners after settlement. */
 function linkSignals(caller: AbortSignal, generation: AbortSignal): LinkedSignal {
   const controller = new AbortController();
   const abort = (): void => controller.abort();
@@ -198,7 +186,6 @@ function linkSignals(caller: AbortSignal, generation: AbortSignal): LinkedSignal
   });
 }
 
-/** Races a delegate read against linked cancellation without accepting late values. */
 async function runAbortWins<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw createAbortError();
   let remove = (): void => undefined;
@@ -214,7 +201,6 @@ async function runAbortWins<T>(operation: Promise<T>, signal: AbortSignal): Prom
   }
 }
 
-/** Returns hidden state only for an authentic stable port. */
 function requireState(value: unknown): State {
   try {
     if (
@@ -232,7 +218,6 @@ function requireState(value: unknown): State {
   throw createAbortError();
 }
 
-/** Returns an authentic session binding only from the exact current generation. */
 function resolveSession(
   state: State,
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>
@@ -244,9 +229,7 @@ function resolveSession(
     : undefined;
 }
 
-/** Stable generation-revocable port for the optional Known outputs UI. */
 export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements KnowledgeKnownAppliedWikiOutputsPort {
-  /** Creates one fail-closed stable surface. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeKnownAppliedWikiOutputsPort());
     states.set(this, {
@@ -261,21 +244,10 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     Object.freeze(this);
   }
 
-  /**
-   * Requires an exact module-authentic stable port before it can supply Vault observations.
-   *
-   * @param value - Unknown candidate capability
-   */
   static assert(value: unknown): asserts value is DelegatingKnowledgeKnownAppliedWikiOutputsPort {
     requireState(value);
   }
 
-  /**
-   * Requires that an exact stable port currently delegates to one expected production reader.
-   *
-   * @param value - Unknown candidate stable port
-   * @param delegate - Exact production reader expected for the current generation
-   */
   static assertCurrentDelegate(
     value: unknown,
     delegate: KnowledgeKnownAppliedWikiOutputsPort
@@ -291,7 +263,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     }
   }
 
-  /** Atomically replaces the read generation and invalidates all old sessions. */
   replaceDelegate(delegate: KnowledgeKnownAppliedWikiOutputsPort): void {
     const state = requireState(this);
     if (state.disposed) throw createAbortError();
@@ -305,14 +276,12 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     previous.abortController.abort();
   }
 
-  /** Conditionally revokes one exact published delegate. */
   revokeDelegate(delegate: KnowledgeKnownAppliedWikiOutputsPort): void {
     const state = requireState(this);
     if (state.disposed || state.generation.delegate.owner !== delegate) return;
     this.setUnavailable();
   }
 
-  /** Withdraws all current sessions without reviving a disposed port. */
   setUnavailable(): void {
     const state = requireState(this);
     if (state.disposed) return;
@@ -325,7 +294,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     previous.abortController.abort();
   }
 
-  /** Re-proves one canonical path through the current exact generation. */
   async inspectKnownOutputs(
     requestValue: Readonly<KnowledgeKnownAppliedWikiOutputsRequest>,
     signal: AbortSignal
@@ -370,7 +338,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     }
   }
 
-  /** Delegates one current session/cursor and snapshots the closed result. */
   async listMore(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     cursor: string,
@@ -444,7 +411,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     }
   }
 
-  /** Delegates one current output reference and snapshots its exact lazy body. */
   async readOutput(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -487,7 +453,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     }
   }
 
-  /** Delegates one current output comparison and snapshots both bounded texts. */
   async compareWithCurrent(
     session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
     outputRef: string,
@@ -532,7 +497,6 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements Knowledge
     }
   }
 
-  /** Permanently aborts and clears the stable surface. */
   dispose(): void {
     const state = requireState(this);
     if (state.disposed) return;

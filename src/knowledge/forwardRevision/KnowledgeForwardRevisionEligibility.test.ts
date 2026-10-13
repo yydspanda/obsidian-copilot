@@ -13,7 +13,6 @@ const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 const HASH_D = "d".repeat(64);
 
-/** Creates one eligible sole-owner generated-page fact set. */
 function createInput(): KnowledgeForwardRevisionProtocolAdmissionInput {
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
@@ -76,7 +75,6 @@ function createInput(): KnowledgeForwardRevisionProtocolAdmissionInput {
   };
 }
 
-/** Requires one candidate to produce the exact closed ineligibility reason. */
 function expectReason(
   candidate: unknown,
   reason: KnowledgeForwardRevisionProtocolIneligibilityReason

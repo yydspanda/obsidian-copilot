@@ -14,17 +14,13 @@ import type {
   KnowledgePluginStartupStatus,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
-/** Immutable store observation with a monotonic process-local revision. */
 export interface KnowledgeSetupReadinessSnapshot extends KnowledgeSetupReadinessProjection {
   revision: number;
 }
 
-/** Callback notified synchronously after readiness publication. */
 export type KnowledgeSetupReadinessListener = () => void;
 
-/** Fixed error raised when a disposed readiness store is asked to publish again. */
 export class KnowledgeSetupReadinessStoreDisposedError extends Error {
-  /** Creates one sanitized permanent-closure failure. */
   constructor() {
     super("Knowledge setup readiness store has been disposed");
     this.name = "KnowledgeSetupReadinessStoreDisposedError";
@@ -102,7 +98,6 @@ const CHAT_MODEL_PAIRS = new Set<string>([
   "locally_ready:chat_model_configured",
 ]);
 
-/** Reads one enumerable own data field without evaluating an accessor. */
 function readOwnData(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSetupReadinessInputError();
@@ -114,7 +109,6 @@ function readOwnData(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Captures one readiness item through its exact closed level/reason pair. */
 function captureItem<Reason extends string>(
   value: unknown,
   allowedPairs: ReadonlySet<string>
@@ -135,7 +129,6 @@ function captureItem<Reason extends string>(
   });
 }
 
-/** Copies a projection into a new frozen snapshot without retaining caller-owned objects. */
 function captureSnapshot(
   revision: number,
   projection: KnowledgeSetupReadinessProjection
@@ -178,45 +171,28 @@ function captureSnapshot(
   }
 }
 
-/** Notifies one non-authoritative observer without interrupting store publication. */
 function notifyListenerSafely(listener: KnowledgeSetupReadinessListener): void {
   try {
     listener();
   } catch {
     // Readiness observers cannot interrupt the store or one another.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Stable in-memory publisher for local Knowledge setup readiness.
- *
- * The store owns no settings, application, runtime, model, network, or I/O
- * capability. Every publication is copied through the closed reason vocabulary.
- */
 export class KnowledgeSetupReadinessStore {
   private state: KnowledgeSetupReadinessSnapshot;
   private readonly listeners = new Set<KnowledgeSetupReadinessListener>();
   private disposed = false;
 
-  /**
-   * Creates revision zero from an already projected local observation.
-   *
-   * @param initialProjection - Secret-free projector output
-   */
   constructor(initialProjection: KnowledgeSetupReadinessProjection) {
     this.state = captureSnapshot(0, initialProjection);
   }
 
-  /** Returns the current frozen readiness observation synchronously. */
   getState(): KnowledgeSetupReadinessSnapshot {
     return this.state;
   }
 
-  /**
-   * Copies and publishes one projected observation at the next local revision.
-   *
-   * @param projection - Secret-free projector output without a revision
-   */
   publish(projection: KnowledgeSetupReadinessProjection): void {
     if (this.disposed) {
       throw new KnowledgeSetupReadinessStoreDisposedError();
@@ -226,12 +202,6 @@ export class KnowledgeSetupReadinessStore {
     this.notifyListeners();
   }
 
-  /**
-   * Projects and publishes one startup observation without exposing a settings edge.
-   *
-   * @param startupState - Sanitized Knowledge startup-barrier state
-   * @param context - Plain Project count and exact Chat catalog result
-   */
   publishStartup(
     startupState: KnowledgePluginStartupState,
     context: KnowledgeSetupReadinessContext
@@ -239,16 +209,6 @@ export class KnowledgeSetupReadinessStore {
     this.publish(projectKnowledgeSetupReadiness(startupState, context));
   }
 
-  /**
-   * Subscribes and immediately reports the current observation.
-   *
-   * Registration precedes the immediate call, preventing a synchronous
-   * get/subscribe window. A late subscriber after disposal receives the final
-   * observation once but is not retained.
-   *
-   * @param listener - Callback that reads the snapshot through `getState`
-   * @returns Idempotent unsubscribe callback
-   */
   subscribe(listener: KnowledgeSetupReadinessListener): () => void {
     if (this.disposed) {
       notifyListenerSafely(listener);
@@ -264,14 +224,12 @@ export class KnowledgeSetupReadinessStore {
     };
   }
 
-  /** Permanently closes publication authority and releases every observer. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.listeners.clear();
   }
 
-  /** Returns the next safe monotonic process-local revision. */
   private nextRevision(): number {
     if (
       !Number.isSafeInteger(this.state.revision) ||
@@ -282,7 +240,6 @@ export class KnowledgeSetupReadinessStore {
     return this.state.revision + 1;
   }
 
-  /** Notifies a stable copy so listener mutation cannot affect this publication. */
   private notifyListeners(): void {
     for (const listener of Array.from(this.listeners)) {
       notifyListenerSafely(listener);

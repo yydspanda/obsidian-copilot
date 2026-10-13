@@ -16,12 +16,6 @@ const SHA_C = "c".repeat(64);
 
 type UnknownParser = (value: unknown) => KnowledgeParseResult<unknown>;
 
-/**
- * Asserts that a runtime parser accepts a fixture without changing persisted data.
- *
- * @param parser - Public knowledge contract parser
- * @param fixture - Serializable fixture to parse
- */
 function expectRoundTrip<T>(
   parser: (value: unknown) => KnowledgeParseResult<T>,
   fixture: unknown
@@ -34,12 +28,6 @@ function expectRoundTrip<T>(
   }
 }
 
-/**
- * Asserts that a runtime parser rejects an invalid fixture.
- *
- * @param parser - Public knowledge contract parser
- * @param fixture - Invalid fixture to parse
- */
 function expectRejected<T>(
   parser: (value: unknown) => KnowledgeParseResult<T>,
   fixture: unknown
@@ -53,7 +41,6 @@ function expectRejected<T>(
   }
 }
 
-/** Creates fields shared by all source locator fixtures. */
 function createLocatorBase() {
   return {
     sourceId: "source-1",
@@ -64,7 +51,6 @@ function createLocatorBase() {
   };
 }
 
-/** Creates a representative Markdown line locator fixture. */
 function createMarkdownLocator() {
   return {
     ...createLocatorBase(),
@@ -75,7 +61,6 @@ function createMarkdownLocator() {
   };
 }
 
-/** Creates a representative claim citation fixture. */
 function createCitation() {
   return {
     citationId: "citation-1",
@@ -85,7 +70,6 @@ function createCitation() {
   };
 }
 
-/** Creates fields shared by all durable ingest job fixtures. */
 function createJobBase() {
   return {
     id: "job-1",
@@ -101,7 +85,6 @@ function createJobBase() {
   };
 }
 
-/** Creates fields shared by all file change fixtures. */
 function createFileChangeBase() {
   return {
     id: "change-1",
@@ -111,7 +94,6 @@ function createFileChangeBase() {
   };
 }
 
-/** Creates a complete persisted source manifest fixture. */
 function createManifest() {
   return {
     version: 1,
@@ -159,7 +141,6 @@ function createManifest() {
   };
 }
 
-/** Creates a valid multi-operation knowledge ChangeSet fixture. */
 function createChangeSet() {
   return {
     id: "changeset-1",

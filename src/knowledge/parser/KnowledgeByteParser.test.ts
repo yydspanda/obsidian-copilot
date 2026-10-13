@@ -7,7 +7,6 @@ import {
 } from "@/knowledge/parser/KnowledgeByteParser";
 import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
 
-/** Creates one exact request whose hash belongs to the supplied bytes. */
 function createRequest(
   bytes = new TextEncoder().encode("exact source")
 ): KnowledgeByteParserRequest {
@@ -19,7 +18,6 @@ function createRequest(
   };
 }
 
-/** Creates one valid parser success for the supplied source identity. */
 function createParsedSource(sourceId = "source-1", text = "parsed source") {
   return {
     artifact: {
@@ -32,7 +30,6 @@ function createParsedSource(sourceId = "source-1", text = "parsed source") {
   };
 }
 
-/** Creates one valid data-only PDF parser success for exact request bytes. */
 function createParsedPdfSource(request: KnowledgeByteParserRequest) {
   return {
     artifact: {

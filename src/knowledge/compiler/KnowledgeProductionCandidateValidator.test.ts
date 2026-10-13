@@ -18,7 +18,6 @@ const PIPELINE_FINGERPRINT = "b".repeat(64);
 const TARGET_SET_DIGEST = "c".repeat(64);
 const SCHEMA_CONTENT = "Generated pages use bounded OKF Markdown without links.";
 
-/** Creates one exact material citation backed by the primary text artifact. */
 function createCitation(excerpt = SOURCE_TEXT): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -35,7 +34,6 @@ function createCitation(excerpt = SOURCE_TEXT): ClaimCitation {
   };
 }
 
-/** Creates one generated concept page with valid OKF frontmatter. */
 function createConceptChange(
   afterContent = "---\ntype: topic\ntitle: Production Validator\ntags: [knowledge]\nconfidence: 0.9\n---\n\n# Production Validator\n\nThe production validator grounds this exact durable fact.\n",
   path = "Wiki/Production Validator.md"
@@ -52,7 +50,6 @@ function createConceptChange(
   };
 }
 
-/** Creates a bound create target corresponding to one generated change. */
 function createTarget(
   change: Extract<KnowledgeFileChange, { operation: "create" }>
 ): CompilerBoundTarget {
@@ -70,7 +67,6 @@ function createTarget(
   };
 }
 
-/** Creates a complete strict candidate-validation input for supplied file changes. */
 function createInput(
   changes: KnowledgeFileChange[] = [createConceptChange()],
   citations: ClaimCitation[] = [createCitation()]
@@ -160,7 +156,6 @@ function createInput(
   };
 }
 
-/** Runs the stateless validator with one live, caller-owned signal. */
 async function validate(input: CompilerCandidateValidationInput) {
   return new KnowledgeProductionCandidateValidator().validate(input, new AbortController().signal);
 }

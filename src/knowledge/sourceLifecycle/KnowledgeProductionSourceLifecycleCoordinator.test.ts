@@ -24,7 +24,6 @@ interface CoordinatorHarness {
   refresh: jest.Mock<void, []>;
 }
 
-/** Creates one active Runtime retirement candidate. */
 function createCandidate(
   patch: Partial<KnowledgeSourceRetirementCandidate> = {}
 ): KnowledgeSourceRetirementCandidate {
@@ -41,7 +40,6 @@ function createCandidate(
   };
 }
 
-/** Creates one exact Runtime candidate snapshot. */
 function createCandidateSnapshot(
   candidates: readonly KnowledgeSourceRetirementCandidate[] = [createCandidate()],
   patch: Partial<KnowledgeSourceRetirementCandidateSnapshot> = {}
@@ -55,7 +53,6 @@ function createCandidateSnapshot(
   };
 }
 
-/** Creates one current missing-source watcher issue. */
 function createMissingIssue(
   patch: Partial<
     Extract<KnowledgeSourceObservationRecoverableIssue, { kind: "source_missing" }>
@@ -69,7 +66,6 @@ function createMissingIssue(
   };
 }
 
-/** Creates one strict token-bound retirement receipt. */
 function createRetirementReceipt(
   patch: Partial<KnowledgeSourceRetirementReceipt> = {}
 ): KnowledgeSourceRetirementReceipt {
@@ -91,7 +87,6 @@ function createRetirementReceipt(
   };
 }
 
-/** Creates one coordinator with narrow observable fake ports. */
 function createHarness(
   options: {
     candidates?: KnowledgeSourceRetirementCandidateSnapshot;
@@ -126,7 +121,6 @@ function createHarness(
   };
 }
 
-/** Requires one rejected lifecycle action to expose only its stable code. */
 async function expectLifecycleError(promise: Promise<unknown>, code: string): Promise<void> {
   await expect(promise).rejects.toMatchObject({
     name: "KnowledgeSourceLifecycleError",

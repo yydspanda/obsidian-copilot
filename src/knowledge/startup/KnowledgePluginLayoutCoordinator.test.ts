@@ -4,14 +4,12 @@ import {
   type KnowledgePluginLayoutProjectsPort,
 } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
 
-/** Externally controlled Promise used to exercise lifecycle interleavings. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T | PromiseLike<T>): void;
   reject(reason?: unknown): void;
 }
 
-/** Creates one externally settled Promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: Deferred<T>["resolve"];
   let reject!: Deferred<T>["reject"];
@@ -22,7 +20,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Creates an observable Projects initialization boundary. */
 function createProjects(
   ensureInitialized: () => Promise<void> = async () => undefined
 ): KnowledgePluginLayoutProjectsPort & { ensureInitialized: jest.Mock<Promise<void>, []> } {
@@ -31,7 +28,6 @@ function createProjects(
   };
 }
 
-/** Creates an observable replaceable barrier. */
 function createBarrier(
   startAfterLayout: () => Promise<void> = async () => undefined
 ): KnowledgePluginLayoutBarrier & {
@@ -44,7 +40,6 @@ function createBarrier(
   };
 }
 
-/** Flushes already-scheduled Promise rejection handlers. */
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();

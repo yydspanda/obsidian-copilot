@@ -13,13 +13,10 @@ import { validateClaimCitation } from "@/knowledge/model/validation";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict query version for one pending forward-validation authority read. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_QUERY_VERSION = 1 as const;
 
-/** Current strict version of detached Runtime validation proof material. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_VERSION = 1 as const;
 
-/** Defensive limits for one detached validation-authority response. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: 1_024,
@@ -28,7 +25,6 @@ export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_LIMITS = Object.fre
   maxHistoricalCitationStringCharacters: 2_000_000,
 });
 
-/** Exact identity of one pending proposal to rejoin inside a Runtime envelope. */
 export interface KnowledgeForwardRevisionValidationAuthorityQueryV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_QUERY_VERSION;
   readonly kind: "forward_revision_validation_authority_query";
@@ -44,13 +40,11 @@ export interface KnowledgeForwardRevisionValidationAuthorityQueryV1 {
   readonly expectedRecordRevision: 0;
 }
 
-/** Input whose query identity is derived only from one strict pending proposal. */
 export interface CreateKnowledgeForwardRevisionValidationAuthorityQueryInput {
   readonly proposal: unknown;
   readonly proposalDigest: string;
 }
 
-/** Runtime-only structural creator input for one detached validation authority. */
 export interface CreateKnowledgeForwardRevisionValidationAuthorityInput {
   readonly query: unknown;
   readonly proposal: unknown;
@@ -64,13 +58,6 @@ export interface CreateKnowledgeForwardRevisionValidationAuthorityInput {
   readonly historicalCitations: unknown;
 }
 
-/**
- * Detached, non-mutating proof for deterministic validation of one pending proposal.
- *
- * Authenticity comes only from a genuine Runtime read facade. In particular,
- * `acceptanceAuthority.vaultObservedBeforeHash` is the proposal-time external
- * observation echoed by Runtime correlation; it is not a fresh Vault-byte proof.
- */
 export interface KnowledgeForwardRevisionValidationAuthorityV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_VALIDATION_AUTHORITY_VERSION;
   readonly kind: "forward_revision_validation_authority";
@@ -152,16 +139,13 @@ const LOCATOR_BASE_KEYS = [
 const authenticValidationErrors =
   new WeakSet<KnowledgeForwardRevisionValidationAuthorityValidationError>();
 
-/** Fixed value-free failure for malformed validation-authority protocol material. */
 export class KnowledgeForwardRevisionValidationAuthorityValidationError extends TypeError {
-  /** Creates one sanitized failure; only module-thrown instances are authentic. */
   constructor() {
     super("Forward revision validation authority is invalid");
     this.name = "KnowledgeForwardRevisionValidationAuthorityValidationError";
   }
 }
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionValidationAuthorityValidationError();
   authenticValidationErrors.add(error);
@@ -169,7 +153,6 @@ function invalid(): never {
   throw error;
 }
 
-/** Reports whether a caught failure was minted by this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionValidationAuthorityValidationError {
@@ -182,7 +165,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Reads one exact plain data record without invoking caller accessors. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -216,7 +198,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense ordinary array through data descriptors only. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
@@ -243,7 +224,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Captures only one dense ordinary array's bounded length without reading its elements. */
 function snapshotArrayLength(value: unknown, maximum: number): number | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
@@ -264,7 +244,6 @@ function snapshotArrayLength(value: unknown, maximum: number): number | undefine
   }
 }
 
-/** Reads one dense array element through its own enumerable data descriptor only. */
 function readArrayElement(value: unknown, index: number): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
@@ -274,7 +253,6 @@ function readArrayElement(value: unknown, index: number): unknown {
   }
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -287,7 +265,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -303,7 +280,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains a C0 or C1 control character. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -312,7 +288,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is one bounded protocol identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -325,17 +300,14 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether a value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether a value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Captures one exact canonical Vault-relative page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -354,12 +326,10 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Derives a domain-separated digest for one canonical JSON value. */
 function digestValue(domain: string, value: unknown): string {
   return sha256(`${domain}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Strictly snapshots one pending-proposal-derived authority query. */
 export function snapshotKnowledgeForwardRevisionValidationAuthorityQuery(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationAuthorityQueryV1> {
@@ -403,7 +373,6 @@ export function snapshotKnowledgeForwardRevisionValidationAuthorityQuery(
   }
 }
 
-/** Creates one strict lookup query from an exact pending proposal. */
 export function createKnowledgeForwardRevisionValidationAuthorityQuery(
   value: CreateKnowledgeForwardRevisionValidationAuthorityQueryInput
 ): Readonly<KnowledgeForwardRevisionValidationAuthorityQueryV1> {
@@ -437,7 +406,6 @@ export function createKnowledgeForwardRevisionValidationAuthorityQuery(
   }
 }
 
-/** Captures one exact locator variant before shared semantic validation. */
 function snapshotLocator(value: unknown): Readonly<ClaimCitation["locator"]> {
   const kind = readDataProperty(value, "kind");
   const required =
@@ -514,7 +482,6 @@ function snapshotLocator(value: unknown): Readonly<ClaimCitation["locator"]> {
   return Object.freeze({ ...record }) as Readonly<ClaimCitation["locator"]>;
 }
 
-/** Counts every retained citation string against one aggregate budget. */
 function countCitationCharacters(citation: Readonly<ClaimCitation>): number {
   const locator = citation.locator;
   const values = [
@@ -543,7 +510,6 @@ function countCitationCharacters(citation: Readonly<ClaimCitation>): number {
   return values.reduce((total, item) => total + item.length, 0);
 }
 
-/** Snapshots complete historical accepted-Review citations within fixed caps. */
 function snapshotHistoricalCitations(
   value: unknown,
   expectedPrimarySourceId?: string
@@ -595,7 +561,6 @@ function snapshotHistoricalCitations(
   return Object.freeze(citations);
 }
 
-/** Creates a digest binding the complete ordered historical citation collection. */
 export function snapshotKnowledgeForwardRevisionHistoricalCitationSet(
   value: unknown,
   expectedPrimarySourceId?: string
@@ -603,7 +568,6 @@ export function snapshotKnowledgeForwardRevisionHistoricalCitationSet(
   return snapshotHistoricalCitations(value, expectedPrimarySourceId);
 }
 
-/** Creates the shared ordered digest of exact accepted-Review ClaimCitation values. */
 export function createKnowledgeForwardRevisionHistoricalCitationSetDigest(
   value: unknown,
   expectedPrimarySourceId?: string
@@ -615,7 +579,6 @@ export function createKnowledgeForwardRevisionHistoricalCitationSetDigest(
   return digestValue("knowledge-forward-revision-historical-citation-set-v1", citations);
 }
 
-/** Creates one strict detached validation authority from Runtime-projected facts. */
 export function createKnowledgeForwardRevisionValidationAuthority(
   value: CreateKnowledgeForwardRevisionValidationAuthorityInput
 ): Readonly<KnowledgeForwardRevisionValidationAuthorityV1> {
@@ -715,7 +678,6 @@ export function createKnowledgeForwardRevisionValidationAuthority(
   }
 }
 
-/** Strictly snapshots and verifies one detached validation-authority response. */
 export function snapshotKnowledgeForwardRevisionValidationAuthority(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationAuthorityV1> {
@@ -762,12 +724,10 @@ export function snapshotKnowledgeForwardRevisionValidationAuthority(
   }
 }
 
-/** Derives the exact digest of one already strict validation authority. */
 export function createKnowledgeForwardRevisionValidationAuthorityDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionValidationAuthority(value).authorityDigest;
 }
 
-/** Returns a deterministic validation result for unknown authority material. */
 export function validateKnowledgeForwardRevisionValidationAuthority(value: unknown): {
   readonly valid: boolean;
 } {

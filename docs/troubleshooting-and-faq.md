@@ -2,6 +2,18 @@
 
 Start in **Settings → Copilot → Basic → Agents** and check the status beside the Agent Chat backend you want to use.
 
+## Copilot is starting or did not start
+
+### A Copilot tab or Copilot's settings say “Starting Copilot…”
+
+Copilot finishes loading in the background after Obsidian opens your vault, so the vault never waits for it. Until it is ready, Copilot tabs that were open last time and **Settings → Copilot** show **Starting Copilot…**, and Copilot's commands and ribbon icon are not there yet. This usually lasts a moment. The first start after an update can take longer while Copilot updates your settings.
+
+Keep the tab open. It turns back into your chat as soon as Copilot is ready, and the settings page fills in on its own.
+
+### “Copilot failed to start”
+
+Copilot ran into an error while loading and stayed off for this session. To see the error, open the developer console (**View → Toggle Developer Tools**, then the **Console** tab). Then turn Copilot off and on again under **Settings → Community plugins**, or restart Obsidian. If the notice comes back, open an issue and include the error from the console.
+
 ## Agent Chat setup
 
 ### opencode shows “Not set up” or “Error”
@@ -22,10 +34,10 @@ Copilot uses your Claude Code login; there is no API key to paste here.
 
 ### Codex is installed, but Copilot cannot find it
 
-Copilot connects through `codex-acp`, not the `codex` executable alone. Manual installations require adapter version 0.0.45 or newer. This is the minimum supported version; the managed download is pinned to 1.10.0 in this Copilot release.
+Copilot connects through `codex-acp`, not the `codex` executable alone. Manual installations require a supported `@agentclientprotocol/codex-acp` adapter. **Configure** reports any required compatibility update; managed downloads use the version pinned by Copilot.
 
 1. Open **Basic → Agents → Codex → Configure**.
-2. Choose **Download & install** under **Managed by Copilot**. If this first installation fails, read the error in Configure, fix the reported problem, then choose **Download & install** again. Failed updates of an already-managed adapter show the same error and **Retry** action in Settings and Agent Chat.
+2. Choose **Download & install** under **Managed by Copilot**. If this first installation fails, read the error in Configure, fix the reported problem, then choose **Download & install** again. Failed updates of an already-managed adapter show the same error in Settings and Agent Chat. Open **Configure** in Settings to retry, or use **Retry** in Agent Chat.
 3. For an adapter you manage yourself, choose **My own binary**, then **Auto-detect** or enter the absolute path to `codex-acp` on macOS/Linux or its `dist\index.js` on Windows. Copilot does not update custom binaries.
 4. Click **Sign in** and finish authentication in your browser. If it does not open, click **Open sign-in page**. Cancel or retry if needed. Managed Codex includes its runtime; Node.js and npm are not required.
 
@@ -121,7 +133,7 @@ Recognized long addresses and credentials are removed as whole values, rather th
 
 A log too large for the report keeps its newest entries rather than being dropped, and the file itself opens with a banner identifying it as a truncated log and naming the original size. Cleaning always runs over the whole log before anything is cut, so a log too large to clean whole (over 64 MB) is left out and listed with that reason.
 
-Only the zip is uploaded, and only to Brevilabs. It carries no license key and no account identity, and it is not tied to your Copilot account. The public GitHub issue carries the report ID and nothing else — there is no download link on it, and nothing on that page can fetch the bundle.
+The zip is uploaded only to Brevilabs. The upload reuses the random device identifier already used for this vault to group reports and limit uploads. It does not create a separate identifier for bug reports or use your Copilot account identity. If Copilot cannot read a valid saved device identifier, it refuses the upload; you can still save the zip and open the issue to attach it manually. The upload carries no license key or account identity. The public GitHub issue carries the report ID and nothing else — there is no download link on it, and nothing on that page can fetch the bundle.
 
 ### What the report ID is for
 
@@ -142,7 +154,7 @@ That deletion covers the uploaded copy only. The zip on your own computer is you
 
 ### Collecting logs by hand
 
-Run **Copilot: Create log file** from the command palette to save the regular chat log into your vault as a note and open it. The Agent Chat log can be opened or cleared under **Advanced → Debugging & support → Agent Mode activity log**.
+Run **Copilot: Create log file** from the command palette to save the Copilot log into your vault as a note and open it. The Agent Chat log can be opened or cleared under **Advanced → Debugging & support → Agent Mode activity log**.
 
 Logs and screenshots can contain prompts, note contents, paths, and tool inputs. Review them before attaching anything to a public issue.
 

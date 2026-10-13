@@ -19,9 +19,7 @@ import {
   type KnowledgeStudioRuntimePort,
 } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 
-/** Current workflow-plan authority used to recover one private source path. */
 export interface KnowledgeReviewEvidenceSourceAuthorityPort {
-  /** Re-proves one registered source and returns only its current canonical Vault path. */
   resolve(
     bundleId: string,
     sourceId: string,
@@ -29,16 +27,13 @@ export interface KnowledgeReviewEvidenceSourceAuthorityPort {
   ): Promise<Readonly<{ sourcePath: string }> | undefined>;
 }
 
-/** Read-only exact citation navigator accepted by the production coordinator. */
 export interface KnowledgeReviewEvidenceNavigationPort {
-  /** Opens one fully resolved citation through the captured Obsidian owner. */
   navigate(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
   ): Promise<ObsidianKnowledgeCitationNavigationResult>;
 }
 
-/** Dependencies retained by one released production Review-evidence generation. */
 export interface KnowledgeProductionReviewEvidenceCoordinatorInput {
   readonly runtime: KnowledgeStudioRuntimePort;
   readonly bundle: KnowledgeBundleConfig;
@@ -64,12 +59,10 @@ const STALE_RESULT = Object.freeze({ kind: "stale" as const });
 const UNSUPPORTED_RESULT = Object.freeze({ kind: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 
-/** Creates the platform-standard cancellation category without retaining a reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Stops work at every asynchronous authority boundary. */
 function assertInvocation(
   state: KnowledgeProductionReviewEvidenceCoordinatorState,
   signal: AbortSignal
@@ -79,7 +72,6 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Returns hidden state only for an authentic coordinator instance. */
 function requireCoordinatorState(
   value: unknown
 ): KnowledgeProductionReviewEvidenceCoordinatorState {
@@ -95,7 +87,6 @@ function requireCoordinatorState(
   return state;
 }
 
-/** Creates a detached immutable Bundle snapshot for path-confinement checks. */
 function snapshotBundle(bundle: KnowledgeBundleConfig): Readonly<KnowledgeBundleConfig> {
   if (!validateKnowledgeBundleConfig(bundle).valid) throw createAbortError();
   return Object.freeze({
@@ -104,7 +95,6 @@ function snapshotBundle(bundle: KnowledgeBundleConfig): Readonly<KnowledgeBundle
   });
 }
 
-/** Maps the existing Obsidian navigator's value-free status to the Review result. */
 function mapNavigationResult(
   result: ObsidianKnowledgeCitationNavigationResult
 ): Readonly<KnowledgeReviewEvidenceOpenResult> {
@@ -138,7 +128,6 @@ function mapNavigationResult(
   }
 }
 
-/** Checks that the exact source type can support the citation locator contract. */
 function sourceSupportsLocator(sourcePath: string, locatorKind: string): boolean {
   const lowerPath = sourcePath.toLowerCase();
   if (lowerPath.endsWith(".pdf")) return locatorKind === "pdf_page";
@@ -146,7 +135,6 @@ function sourceSupportsLocator(sourcePath: string, locatorKind: string): boolean
   return false;
 }
 
-/** Captures the exact one-field source authority receipt without invoking accessors. */
 function snapshotSourcePath(value: unknown): string | undefined {
   try {
     if (
@@ -170,14 +158,7 @@ function snapshotSourcePath(value: unknown): string | undefined {
   }
 }
 
-/**
- * Reconstructs Review evidence authority at click time and opens only an exact source citation.
- *
- * This coordinator has no model, network, Queue mutation, Review mutation, or Vault-write
- * dependency. Paths and actionable locators remain private behind the opaque Studio port.
- */
 export class KnowledgeProductionReviewEvidenceCoordinator implements KnowledgeStudioReviewEvidencePort {
-  /** Captures one exact Runtime, workflow authority, and Obsidian navigation generation. */
   constructor(input: KnowledgeProductionReviewEvidenceCoordinatorInput) {
     if (
       typeof input !== "object" ||
@@ -210,7 +191,6 @@ export class KnowledgeProductionReviewEvidenceCoordinator implements KnowledgeSt
     Object.freeze(this);
   }
 
-  /** Re-proves an opaque current-plan reference and opens its exact registered source. */
   async openReviewEvidence(
     bundleId: string,
     requestValue: Readonly<KnowledgeReviewEvidenceOpenRequest>,

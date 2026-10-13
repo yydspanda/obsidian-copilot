@@ -25,14 +25,6 @@ import {
   toWindowsPathKey,
 } from "@/knowledge/paths/vaultPath";
 
-/**
- * Appends one deterministic error diagnostic.
- *
- * @param diagnostics - Mutable diagnostic collection for the current validator
- * @param code - Stable machine-readable error code
- * @param field - Field path associated with the error
- * @param message - Human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -42,12 +34,6 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Creates an aggregate validation result from collected diagnostics.
- *
- * @param diagnostics - Diagnostics emitted by a deterministic validator
- * @returns Validation result whose valid flag rejects every error
- */
 function toResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValidationResult {
   return {
     valid: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
@@ -55,13 +41,6 @@ function toResult(diagnostics: KnowledgeDiagnostic[]): KnowledgeValidationResult
   };
 }
 
-/**
- * Appends nested diagnostics beneath a field prefix.
- *
- * @param target - Destination diagnostic collection
- * @param prefix - Parent field path
- * @param nested - Nested validation result to append
- */
 function appendNested(
   target: KnowledgeDiagnostic[],
   prefix: string,
@@ -75,24 +54,10 @@ function appendNested(
   }
 }
 
-/**
- * Checks whether two valid Vault paths overlap as equal or ancestor/descendant paths.
- *
- * @param left - First Vault-relative path
- * @param right - Second Vault-relative path
- * @returns Whether the paths overlap under Windows comparison rules
- */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/**
- * Validates a canonical Vault-relative path for the Windows-only product target.
- *
- * @param value - Runtime path value
- * @param field - Field path used by diagnostics
- * @returns Structured deterministic validation result
- */
 export function validateVaultRelativePath(
   value: unknown,
   field = "path"
@@ -112,12 +77,6 @@ export function validateVaultRelativePath(
   );
 }
 
-/**
- * Validates a knowledge bundle configuration and its non-overlapping write boundary.
- *
- * @param value - Runtime value expected to contain a bundle configuration
- * @returns Structured deterministic validation result
- */
 export function validateKnowledgeBundleConfig(value: unknown): KnowledgeValidationResult {
   const parsed = parseKnowledgeBundleConfig(value);
   if (!parsed.ok) {
@@ -167,12 +126,6 @@ export function validateKnowledgeBundleConfig(value: unknown): KnowledgeValidati
   return toResult(diagnostics);
 }
 
-/**
- * Validates a source manifest and its stable Windows source identities.
- *
- * @param value - Runtime value expected to contain a source manifest
- * @returns Structured deterministic validation result
- */
 export function validateSourceManifest(value: unknown): KnowledgeValidationResult {
   const parsed = parseSourceManifest(value);
   if (!parsed.ok) {
@@ -295,18 +248,6 @@ export function validateSourceManifest(value: unknown): KnowledgeValidationResul
   return toResult(diagnostics);
 }
 
-/**
- * Validates one durable Manifest against its exact owning Bundle boundary.
- *
- * Standalone Manifest validation cannot prove that a registered source belongs
- * to a configured source root or that generated pages remain inside the Wiki.
- * This relationship validator is used by the watch-plan builder and remains
- * reusable by future executor and startup adapters.
- *
- * @param manifestValue - Runtime value expected to contain a Source Manifest
- * @param bundleValue - Runtime value expected to contain its owning Bundle
- * @returns Aggregate structural, semantic, and relationship diagnostics
- */
 export function validateSourceManifestForBundle(
   manifestValue: unknown,
   bundleValue: unknown
@@ -403,12 +344,6 @@ export function validateSourceManifestForBundle(
   return toResult(diagnostics);
 }
 
-/**
- * Validates a source locator, including its excerpt hash and coordinate ordering.
- *
- * @param value - Runtime value expected to contain a source locator
- * @returns Structured deterministic validation result
- */
 export function validateSourceLocator(value: unknown): KnowledgeValidationResult {
   const parsed = parseSourceLocator(value);
   if (!parsed.ok) {
@@ -436,12 +371,6 @@ export function validateSourceLocator(value: unknown): KnowledgeValidationResult
   return toResult(diagnostics);
 }
 
-/**
- * Validates one claim citation and its nested source locator.
- *
- * @param value - Runtime value expected to contain a claim citation
- * @returns Structured deterministic validation result
- */
 export function validateClaimCitation(value: unknown): KnowledgeValidationResult {
   const parsed = parseClaimCitation(value);
   if (!parsed.ok) {
@@ -453,12 +382,6 @@ export function validateClaimCitation(value: unknown): KnowledgeValidationResult
   return toResult(diagnostics);
 }
 
-/**
- * Validates one create, update, or delete file change and its compare-and-swap hashes.
- *
- * @param value - Runtime value expected to contain a file change
- * @returns Structured deterministic validation result
- */
 export function validateKnowledgeFileChange(value: unknown): KnowledgeValidationResult {
   const parsed = parseKnowledgeFileChange(value);
   if (!parsed.ok) {
@@ -482,13 +405,6 @@ export function validateKnowledgeFileChange(value: unknown): KnowledgeValidation
   return toResult(diagnostics);
 }
 
-/**
- * Validates a complete user-reviewable knowledge ChangeSet.
- *
- * @param value - Runtime value expected to contain a ChangeSet
- * @param bundle - Optional Bundle boundary for pre-review target enforcement
- * @returns Structured deterministic validation result
- */
 export function validateKnowledgeChangeSet(
   value: unknown,
   bundle?: KnowledgeBundleConfig
@@ -620,12 +536,6 @@ export function validateKnowledgeChangeSet(
   return toResult(diagnostics);
 }
 
-/**
- * Validates a durable ingest job after strict state-shape parsing.
- *
- * @param value - Runtime value expected to contain an ingest job
- * @returns Structured deterministic validation result
- */
 export function validateKnowledgeIngestJob(value: unknown): KnowledgeValidationResult {
   const parsed = parseKnowledgeIngestJob(value);
   if (!parsed.ok) {
@@ -712,12 +622,6 @@ export function validateKnowledgeIngestJob(value: unknown): KnowledgeValidationR
   return toResult(diagnostics);
 }
 
-/**
- * Validates the semantic contract of an OKF-compatible Markdown document.
- *
- * @param value - Runtime value expected to contain an OKF document
- * @returns Structured deterministic validation result
- */
 export function validateOkfDocument(value: unknown): KnowledgeValidationResult {
   const parsed = parseOkfDocument(value);
   if (!parsed.ok) {

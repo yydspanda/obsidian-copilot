@@ -1,9 +1,5 @@
-// __mocks__/obsidian.js
 import { parse as parseYamlString } from "yaml";
 
-// Per-test overrides set via the exported `__setRequestUrlImpl` helper.
-// Default: empty success response. Tests that exercise network paths should
-// install their own implementation.
 let requestUrlImpl = jest.fn().mockResolvedValue({
   status: 200,
   text: "",
@@ -13,7 +9,6 @@ let requestUrlImpl = jest.fn().mockResolvedValue({
 });
 
 module.exports = {
-  // Reason: keep path normalization observable while matching Obsidian's slash semantics.
   normalizePath: jest
     .fn()
     .mockImplementation((p) => String(p).replace(/\\/g, "/").replace(/\/+/g, "/")),
@@ -27,7 +22,6 @@ module.exports = {
   Vault: jest.fn().mockImplementation(() => {
     return {
       getMarkdownFiles: jest.fn().mockImplementation(() => {
-        // Return an array of mock markdown file objects
         return [
           { path: "test/test2/note1.md" },
           { path: "test/note2.md" },
@@ -36,7 +30,6 @@ module.exports = {
         ];
       }),
       cachedRead: jest.fn().mockImplementation((file) => {
-        // Simulate reading file contents. You can adjust the content as needed for your tests.
         const fileContents = {
           "test/test2/note1.md": "---\ntags: [Tag1, tag2]\n---\nContent of note1",
           "test/note2.md": "---\ntags: [tag2, tag3]\n---\nContent of note2",
@@ -51,8 +44,6 @@ module.exports = {
     isDesktop: true,
     isDesktopApp: true,
     isMobile: false,
-    // Filesystem case sensitivity is behaviour some code branches on; default to
-    // the case-sensitive branch so a test must opt in to folding explicitly.
     isWin: false,
     isMacOS: false,
     isIosApp: false,
@@ -81,9 +72,6 @@ module.exports = {
   Modal: class Modal {
     constructor(app) {
       this.app = app;
-      // Mirrors the element tree Obsidian's own Modal builds in its constructor,
-      // in the same nesting order, so subclasses that reach for `modalEl` or
-      // walk up from `contentEl` behave here as they do at runtime.
       const doc = window.document;
       this.containerEl = doc.createElement("div");
       this.containerEl.className = "modal-container";
@@ -106,8 +94,6 @@ module.exports = {
     unload() {}
     register() {}
   },
-  // Base class for FolderSearchModal & friends; subclasses only need it to be
-  // constructable so suites that pull them into the module graph can load.
   FuzzySuggestModal: class FuzzySuggestModal {
     constructor(app) {
       this.app = app;
@@ -137,7 +123,7 @@ module.exports = {
     this.noticeEl = window.document.createElement("div");
     this.hide = jest.fn();
   }),
-  TFile: jest.fn().mockImplementation(function (path) {
+  TFile: jest.fn().mockImplementation(function (path = "") {
     this.path = path;
     this.name = path.split("/").pop();
     this.basename = this.name.replace(/\.[^/.]+$/, "");
@@ -155,7 +141,6 @@ module.exports = {
   }),
 };
 
-// Mock the global app object
 window.app = {
   vault: {
     getAbstractFileByPath: jest.fn().mockReturnValue({

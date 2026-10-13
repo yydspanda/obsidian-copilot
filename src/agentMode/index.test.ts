@@ -9,7 +9,6 @@ import { BackendConfigRegistry } from "@/modelManagement";
 
 jest.mock("@/constants", () => ({}));
 jest.mock("@/logger", () => ({ logError: jest.fn() }));
-// Exercise real model-list writes without loading the barrel's provider SDKs and UI.
 jest.mock("@/modelManagement", () => ({
   BackendConfigRegistry: jest.requireActual("@/modelManagement/backends/BackendConfigRegistry")
     .BackendConfigRegistry,
@@ -32,7 +31,8 @@ jest.mock("@/utils/appPaths", () => ({
   getVaultId: () => "test-vault",
 }));
 jest.mock("./backends/shared/agentSystemPrompt", () => ({
-  buildAgentSystemPrompt: () => "prompt",
+  buildAgentSystemPrompt: (id: string) =>
+    `prompt:${id}:${JSON.stringify(mockSettings.agentMode.skills.builtinPreferences ?? {})}`,
 }));
 jest.mock("./backends/shared/builtinSkillEnv", () => ({
   getBuiltinSkillEnvRestartPolicy: () => "none",
@@ -68,15 +68,10 @@ jest.mock("./ui/permissionPrompter", () => ({
   createDefaultPermissionPrompter: jest.fn(),
   createDefaultAskUserQuestionPrompter: jest.fn(),
 }));
-// The host barrel also exports UI and provider integrations; none participate in startup wiring.
-jest.mock("./ui/AgentModeChat", () => ({}));
 jest.mock("./ui/CopilotAgentView", () => ({}));
 jest.mock("./ui/useBackendDescriptor", () => ({}));
-jest.mock("./ui/useAgentModelPicker", () => ({}));
-jest.mock("./ui/useAgentModePicker", () => ({}));
 jest.mock("./backends/opencode/opencodeProbePartition", () => ({}));
 jest.mock("./backends/opencode/opencodeModelResolve", () => ({}));
-jest.mock("./backends/shared/installStatus", () => ({}));
 jest.mock("./ui/AgentDefaultModelSetting", () => ({}));
 jest.mock("@/components/ui/ModelEnableList", () => ({}));
 jest.mock("./ui/PlanPreviewView", () => ({}));
@@ -96,9 +91,10 @@ const mockStates: Record<string, InstallState> = {};
 const mockInstallListeners: Record<string, () => void> = {};
 const mockDescriptors = ["claude", "opencode"].map((id) => ({
   id,
+  onPluginLoad: jest.fn(async (_plugin: CopilotPlugin) => {}),
   skillsProjectDir: `.${id}/skills`,
-  // Only subprocess backends bake provider and model config into their spawn.
   restartOnProviderConfigChange: id === "opencode",
+  restartOnSystemPromptChange: id === "opencode",
   getInstallState: () => mockStates[id],
   subscribeInstallState: (_plugin: unknown, listener: () => void) => {
     mockInstallListeners[id] = listener;
@@ -114,7 +110,6 @@ const mockManager = {
 };
 let plugin: CopilotPlugin;
 const reconcile = jest.mocked(reconcileBuiltinSkills);
-/** Settings holding one configured model whose `info` carries `overrides`. */
 function settingsWith(overrides: Record<string, unknown>): CopilotSettings {
   return {
     agentMode: { skills: {} },
@@ -139,7 +134,6 @@ function settingsWith(overrides: Record<string, unknown>): CopilotSettings {
   } as unknown as CopilotSettings;
 }
 
-/** Drive every settings subscriber the way the settings store would. */
 function emitSettingsChange(prev: CopilotSettings, next: CopilotSettings): void {
   mockSettings = next;
   for (const subscriber of mockSettingsSubscribers) subscriber(prev, next);
@@ -174,6 +168,43 @@ describe("agentMode", () => {
       } as unknown as CopilotPlugin;
     });
 
+    it("waits for each backend upgrade before preloading while other agents remain usable (https://github.com/Brevilabs/obsidian-copilot-private/issues/530)", async () => {
+      const upgrade = deferred();
+      mockStates.opencode = { kind: "ready", source: "managed" };
+      mockDescriptors[1].onPluginLoad.mockReturnValueOnce(upgrade.promise);
+      createAgentSessionManager({} as App, plugin);
+      await mockManager.registerPreload.mock.calls.find(([id]) => id === "claude")![1];
+      expect(mockManager.preloadModels).toHaveBeenCalledWith("claude");
+      expect(mockManager.preloadModels).not.toHaveBeenCalledWith("opencode");
+      upgrade.resolve();
+      await mockManager.registerPreload.mock.calls.find(([id]) => id === "opencode")![1];
+      expect(mockManager.preloadModels).toHaveBeenCalledWith("opencode");
+    });
+
+    it("does not restart a backend for installation writes while its upgrade owns startup (https://github.com/Brevilabs/obsidian-copilot-private/issues/530)", async () => {
+      const upgrade = deferred();
+      mockDescriptors[1].onPluginLoad.mockReturnValueOnce(upgrade.promise);
+      createAgentSessionManager({} as App, plugin);
+      mockInstallListeners.opencode();
+      upgrade.resolve();
+      await mockManager.registerPreload.mock.calls.find(([id]) => id === "opencode")![1];
+      expect(mockManager.onInstallStateChanged).not.toHaveBeenCalled();
+    });
+    it("preloads a repaired installation after the upgrade makes it ready (https://github.com/Brevilabs/obsidian-copilot-private/issues/530)", async () => {
+      mockStates.opencode = {
+        kind: "incompatible",
+        source: "managed",
+        currentVersion: "1",
+        minVersion: "2",
+        message: "Upgrade required",
+      };
+      mockDescriptors[1].onPluginLoad.mockImplementationOnce(async () => {
+        mockStates.opencode = { kind: "ready", source: "managed" };
+      });
+      createAgentSessionManager({} as App, plugin);
+      await mockManager.registerPreload.mock.calls.find(([id]) => id === "opencode")![1];
+      expect(mockManager.preloadModels).toHaveBeenCalledWith("opencode");
+    });
     it(`waits for initial skill reconciliation before preloading ready agents ${ISSUE}`, async () => {
       const gate = deferred();
       reconcile.mockReturnValue(gate.promise);
@@ -217,10 +248,35 @@ describe("agentMode", () => {
       expect(mockManager.onInstallStateChanged).toHaveBeenCalledWith("opencode");
     });
 
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/599 offers an OpenCode reload after a builtin skill opt-out is reconciled and changes its system prompt", async () => {
+      createAgentSessionManager({} as App, plugin);
+      await mockManager.registerPreload.mock.calls[0][1];
+      const reconciled = deferred();
+      const noted = deferred();
+      reconcile.mockReturnValueOnce(reconciled.promise);
+      mockManager.noteSpawnConfigChanged.mockImplementationOnce(async () => noted.resolve());
+
+      emitSettingsChange(mockSettings, {
+        ...mockSettings,
+        agentMode: {
+          ...mockSettings.agentMode,
+          skills: {
+            builtinPreferences: { "copilot-web-search": { disabledAgents: ["opencode"] } },
+          },
+        },
+      } as unknown as CopilotSettings);
+
+      expect(mockManager.noteSpawnConfigChanged).not.toHaveBeenCalled();
+      reconciled.resolve();
+      await noted.promise;
+      expect(mockManager.noteSpawnConfigChanged).toHaveBeenCalledTimes(1);
+      expect(mockManager.noteSpawnConfigChanged).toHaveBeenCalledWith(
+        "opencode",
+        "system prompt changed"
+      );
+    });
+
     it(`refreshes a spawn-config backend when a model's published effort levels change ${LINEUP_ISSUE}`, () => {
-      // The Plus lineup reconcile rewrites the row in place, so no provider or
-      // enabled-list emission fires; without this the live agent keeps offering
-      // an effort level the service has withdrawn.
       createAgentSessionManager({} as App, plugin);
 
       emitSettingsChange(
@@ -235,9 +291,18 @@ describe("agentMode", () => {
       );
     });
 
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/557 offers an OpenCode reload when enabled model tool support changes", () => {
+      createAgentSessionManager({} as App, plugin);
+
+      emitSettingsChange(settingsWith({ toolCall: true }), settingsWith({ toolCall: false }));
+
+      expect(mockManager.noteSpawnConfigChanged).toHaveBeenCalledWith(
+        "opencode",
+        "model config changed"
+      );
+    });
+
     it(`leaves a running agent alone when only a model's display metadata changes ${LINEUP_ISSUE}`, () => {
-      // The agent is asked to reload for this, which a reworded description is
-      // not worth: the spawn config never carries it.
       createAgentSessionManager({} as App, plugin);
 
       emitSettingsChange(
@@ -331,7 +396,6 @@ describe("agentMode", () => {
         const notifyProvider = jest.mocked(plugin.modelManagement.providerRegistry.subscribe).mock
           .calls[0][0];
 
-        // A key rotation can emit without changing settings or its keychain ID.
         notifyProvider(providerId);
 
         if (reload) {

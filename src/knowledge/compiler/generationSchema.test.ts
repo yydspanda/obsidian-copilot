@@ -3,7 +3,6 @@ import { parseCompilerGenerationModelOutput } from "@/knowledge/compiler/generat
 
 const VALID_TARGET_SET_DIGEST = "a".repeat(64);
 
-/** Creates one valid generation output containing both supported outcomes. */
 function createValidGenerationOutput() {
   return {
     version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
@@ -23,7 +22,6 @@ function createValidGenerationOutput() {
   };
 }
 
-/** Asserts that untrusted generation output fails closed with safe diagnostics. */
 function expectRejected(value: unknown): void {
   const result = parseCompilerGenerationModelOutput(value);
 

@@ -9,13 +9,11 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const FAILURE_RETRY_BASE_DELAY_MS = 250;
 const FAILURE_RETRY_MAX_DELAY_MS = 30_000;
 
-/** Exact renderer timer realm used by one plugin-owned worker generation. */
 export interface KnowledgeProductionWorkerScheduler {
-  /** Returns the current epoch-millisecond time used by Queue retry markers. */
   now(): number;
-  /** Schedules one future wakeup and returns an opaque realm-owned handle. */
+
   schedule(callback: () => void, delayMs: number): unknown;
-  /** Cancels one previously returned opaque timer handle. */
+
   cancel(handle: unknown): void;
 }
 
@@ -24,14 +22,12 @@ interface KnowledgeProductionWorkerControllerBaseInput {
   scheduler: KnowledgeProductionWorkerScheduler;
 }
 
-/** Dependencies for one event-driven, generation-owned worker controller. */
 export type KnowledgeProductionWorkerControllerInput =
   KnowledgeProductionWorkerControllerBaseInput &
     (
       | {
-          /** Defers replacement after one durable result changes the Manifest-bound generation. */
           onGenerationRefreshRequired: () => void;
-          /** Re-proves the exact Manifest generation after an ambiguous worker rejection. */
+
           probeGenerationCurrent: () => Promise<boolean>;
         }
       | {
@@ -71,16 +67,13 @@ interface PassProjection {
 
 const controllerStates = new WeakMap<object, WorkerControllerState>();
 
-/** Stable controller construction/authority failure retaining no Queue data. */
 export class KnowledgeProductionWorkerControllerError extends Error {
-  /** Creates one value-free worker-controller failure. */
   constructor() {
     super("The production Knowledge worker controller is unavailable");
     this.name = "KnowledgeProductionWorkerControllerError";
   }
 }
 
-/** Returns hidden state only for an authentic controller. */
 function requireControllerState(value: unknown): WorkerControllerState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeProductionWorkerControllerError();
@@ -90,7 +83,6 @@ function requireControllerState(value: unknown): WorkerControllerState {
   return state;
 }
 
-/** Projects one Queue result into progress and retry timing without retaining job ids. */
 function inspectQueueResult(result: RunNextResult, projection: PassProjection): void {
   if (
     result.kind === "executed" &&
@@ -120,7 +112,6 @@ function inspectQueueResult(result: RunNextResult, projection: PassProjection): 
   }
 }
 
-/** Reduces one bounded worker pass to scheduling facts only. */
 function inspectPass(result: KnowledgeProductionWorkerPassResult): PassProjection {
   const projection: PassProjection = { madeProgress: false, refreshRequired: false };
   for (const item of result.results) {
@@ -129,7 +120,6 @@ function inspectPass(result: KnowledgeProductionWorkerPassResult): PassProjectio
   return projection;
 }
 
-/** Reads and validates one scheduler timestamp without allowing negative delay arithmetic. */
 function readNow(scheduler: KnowledgeProductionWorkerScheduler): number {
   const now = scheduler.now();
   if (!Number.isSafeInteger(now) || now < 0) {
@@ -138,7 +128,6 @@ function readNow(scheduler: KnowledgeProductionWorkerScheduler): number {
   return now;
 }
 
-/** Cancels a retained timer after first clearing publication authority for its handle. */
 function cancelTimer(state: WorkerControllerState): void {
   if (state.timer === undefined) return;
   const timer = state.timer;
@@ -148,17 +137,16 @@ function cancelTimer(state: WorkerControllerState): void {
     state.scheduler.cancel(timer.handle);
   } catch {
     // Clearing local authority is sufficient; a late callback rechecks closed state.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Returns a capped exponential delay for the next infrastructure-failure retry. */
 function consumeFailureRetryDelay(state: WorkerControllerState): number {
   const exponent = Math.min(state.consecutiveFailures, 30);
   state.consecutiveFailures = Math.min(state.consecutiveFailures + 1, 31);
   return Math.min(FAILURE_RETRY_MAX_DELAY_MS, FAILURE_RETRY_BASE_DELAY_MS * 2 ** exponent);
 }
 
-/** Consumes generation refresh authority once and blocks every later wakeup. */
 function requestGenerationRefresh(state: WorkerControllerState): void {
   if (state.refreshPending || state.closed) return;
   state.refreshPending = true;
@@ -169,10 +157,10 @@ function requestGenerationRefresh(state: WorkerControllerState): void {
     state.onGenerationRefreshRequired?.();
   } catch {
     // Refresh authority remains consumed even if the outer lifecycle has already closed.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Schedules one non-overlapping worker wakeup in the captured renderer realm. */
 function scheduleWake(state: WorkerControllerState, delayMs: number): void {
   if (state.closed) return;
   cancelTimer(state);
@@ -194,13 +182,13 @@ function scheduleWake(state: WorkerControllerState, delayMs: number): void {
       state.scheduler.cancel(handle);
     } catch {
       // A synchronously fired callback already revoked this timer's local authority.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     return;
   }
   timer.handle = handle;
 }
 
-/** Starts one detached bounded drain if another pass is not already active. */
 function requestRun(state: WorkerControllerState): void {
   if (state.closed || !state.started || state.refreshPending) return;
   state.wakeRequested = true;
@@ -217,14 +205,12 @@ function requestRun(state: WorkerControllerState): void {
     });
 }
 
-/** Resolves one controller lifetime only after close and its final drain unwind. */
 function resolveSettlementIfClosed(state: WorkerControllerState): void {
   if (!state.closed || state.running || state.settlementResolved) return;
   state.settlementResolved = true;
   state.resolveSettlement();
 }
 
-/** Drains committed work until idle/paused/busy, retry time, close, or the safety bound. */
 async function drain(state: WorkerControllerState): Promise<void> {
   let immediatePasses = 0;
   try {
@@ -241,7 +227,7 @@ async function drain(state: WorkerControllerState): Promise<void> {
           state.ambiguousGenerationProbePending = false;
         } catch {
           if (state.closed) return;
-          // Keep the ambiguity retained so the next wake probes before Queue.
+
           scheduleWake(state, consumeFailureRetryDelay(state));
           return;
         }
@@ -264,7 +250,6 @@ async function drain(state: WorkerControllerState): Promise<void> {
             state.ambiguousGenerationProbePending = false;
           } catch {
             if (state.closed) return;
-            // Keep the ambiguity retained so the next wake probes before Queue.
           }
         }
         scheduleWake(state, consumeFailureRetryDelay(state));
@@ -306,9 +291,7 @@ async function drain(state: WorkerControllerState): Promise<void> {
   }
 }
 
-/** Event-driven owner for one released, bounded production worker session. */
 export class KnowledgeProductionWorkerController {
-  /** Captures one worker and exact renderer timer realm. */
   constructor(input: KnowledgeProductionWorkerControllerInput) {
     if (
       !(input.worker instanceof KnowledgeProductionWorkerSession) ||
@@ -351,7 +334,6 @@ export class KnowledgeProductionWorkerController {
     Object.freeze(this);
   }
 
-  /** Starts this generation once and immediately drains its recovered startup backlog. */
   start(): void {
     const state = requireControllerState(this);
     if (state.closed || state.started) {
@@ -361,17 +343,14 @@ export class KnowledgeProductionWorkerController {
     requestRun(state);
   }
 
-  /** Coalesces a committed Queue-change notification into the current or next drain. */
   notifyWorkAvailable(): void {
     requestRun(requireControllerState(this));
   }
 
-  /** Resolves only after this controller closes and its final active drain unwinds. */
   whenSettled(): Promise<void> {
     return requireControllerState(this).settlement;
   }
 
-  /** Synchronously revokes timers and future passes for this worker generation. */
   close(): void {
     const state = controllerStates.get(this);
     if (!state || state.closed) return;
@@ -382,6 +361,7 @@ export class KnowledgeProductionWorkerController {
       state.worker.close();
     } catch {
       // Worker authority is already revoked by the controller state.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     resolveSettlementIfClosed(state);
   }

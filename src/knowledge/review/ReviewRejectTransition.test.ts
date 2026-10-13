@@ -22,7 +22,6 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 
-/** Creates one strict proposed ChangeSet with a single create target. */
 function createProposal(): KnowledgeChangeSet {
   const afterContent = "# Atomic rejection\n";
   return {
@@ -49,7 +48,6 @@ function createProposal(): KnowledgeChangeSet {
   };
 }
 
-/** Creates one immutable Manifest plan bound to the proposed ChangeSet. */
 function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   return {
     version: 1,
@@ -74,7 +72,6 @@ function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   };
 }
 
-/** Creates exact pending Queue and Review state for one durable proposal. */
 function createPendingState(): {
   queue: IngestQueueSnapshot;
   review: ChangeSetReviewSnapshot;
@@ -155,7 +152,6 @@ function createPendingState(): {
   };
 }
 
-/** Captures one expected synchronous error without relying on untyped Jest matchers. */
 function captureThrownError(operation: () => unknown): Error {
   try {
     operation();

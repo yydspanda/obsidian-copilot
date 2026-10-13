@@ -11,9 +11,7 @@ import type {
 } from "@/knowledge/ingest/queue/IngestQueue";
 import { KnowledgeRuntimeIngestExecutionProofPort } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
-/** Compiler-facing handler invoked only after exact claim/read/parser authorization. */
 export interface KnowledgePreparedIngestHandler {
-  /** Consumes one authentic preparation and returns a Queue-owned terminal projection. */
   execute(
     preparation: KnowledgeAuthorizedSourcePreparation,
     context: IngestExecutionContext
@@ -32,16 +30,13 @@ interface PreparationExecutorState {
 
 const executorStates = new WeakMap<object, PreparationExecutorState>();
 
-/** Stable boundary failure containing no source, job, Runtime, or credential data. */
 export class KnowledgeProductionPreparationExecutorError extends Error {
-  /** Creates one fail-closed preparation-executor error. */
   constructor() {
     super("The production Knowledge preparation executor is invalid");
     this.name = "KnowledgeProductionPreparationExecutorError";
   }
 }
 
-/** Snapshots one callable own/prototype method without retaining an accessor value. */
 function hasCallableMethod(value: unknown, key: string): boolean {
   if (typeof value !== "object" || value === null) return false;
   try {
@@ -57,7 +52,6 @@ function hasCallableMethod(value: unknown, key: string): boolean {
   return false;
 }
 
-/** Captures one exact data method and receiver so later mutation cannot replace execution. */
 function captureHandler(
   handler: KnowledgePreparedIngestHandler
 ): PreparationExecutorState["handle"] {
@@ -76,9 +70,7 @@ function captureHandler(
   throw new KnowledgeProductionPreparationExecutorError();
 }
 
-/** Exact Queue-claim → Runtime proof → workflow read/parser → handler bridge. */
 export class KnowledgeProductionPreparationExecutor implements IngestExecutor {
-  /** Captures authentic plan and Runtime proof capabilities before Queue execution begins. */
   constructor(
     plan: KnowledgeSourceExecutionPlan,
     proofPort: KnowledgeRuntimeIngestExecutionProofPort,
@@ -102,7 +94,6 @@ export class KnowledgeProductionPreparationExecutor implements IngestExecutor {
     Object.freeze(this);
   }
 
-  /** Executes only after the exact Queue claim has been parsed from exact source bytes. */
   async execute(context: IngestExecutionContext): Promise<IngestExecutionResult> {
     const state = executorStates.get(this);
     if (!state || context.signal.aborted || context.executionClaim.getSignal() !== context.signal) {

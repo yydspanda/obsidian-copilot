@@ -11,7 +11,6 @@ import type { SourceManifest } from "@/knowledge/model/types";
 const SOURCE_HASH = "a".repeat(64);
 const EFFECTIVE_HASH = "b".repeat(64);
 
-/** Creates one strict source-applied Manifest with an optional active overlay. */
 function createManifest(withOverlay = true): SourceManifest {
   const overlay = createKnowledgeForwardRevisionOverlayEntry({
     bundleId: "personal",

@@ -26,7 +26,6 @@ import type {
 } from "@/knowledge/review/KnowledgeReviewEvidence";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 
-/** Props for the read-only applied-Wiki inspector surface. */
 export interface KnowledgeAppliedWikiInspectorContentProps {
   readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   readonly inspector: KnowledgeAppliedWikiPageInspectorPort;
@@ -36,7 +35,6 @@ export interface KnowledgeAppliedWikiInspectorContentProps {
   readonly onClose: () => void;
 }
 
-/** Returns a stable user-facing classification for an inspection failure. */
 function formatInspectionError(error: unknown): string {
   const code = getKnowledgeAppliedWikiPageInspectorErrorCode(error);
   if (code) {
@@ -53,7 +51,6 @@ function formatInspectionError(error: unknown): string {
   return "The current applied page could not be inspected.";
 }
 
-/** Returns stable user-facing text for a value-free evidence-open result. */
 function formatEvidenceResult(
   result: Readonly<KnowledgeAppliedWikiEvidenceOpenResult>
 ): string | undefined {
@@ -69,7 +66,6 @@ function formatEvidenceResult(
   }
 }
 
-/** Returns a deterministic label for generated-page ownership. */
 function formatOwnership(
   ownership: Readonly<KnowledgeAppliedWikiPageInspectionSession>["ownership"]
 ): string {
@@ -83,14 +79,12 @@ function formatOwnership(
   }
 }
 
-/** Returns a concise user-facing label for the current effective-page origin. */
 function formatPageOrigin(
   origin: Readonly<KnowledgeAppliedWikiPageInspectionSession>["origin"]
 ): string {
   return origin.kind === "source_apply" ? "Source-applied version" : "Forward revision";
 }
 
-/** Explains how the current effective page relates to its retained Source base. */
 function formatPageOriginDescription(
   origin: Readonly<KnowledgeAppliedWikiPageInspectionSession>["origin"]
 ): string {
@@ -99,7 +93,6 @@ function formatPageOriginDescription(
     : "This is an accepted forward revision layered over the last Source-applied version.";
 }
 
-/** Explains the exact evidence scope without treating revised wording as newly proven. */
 function formatEvidenceScope(session: Readonly<KnowledgeAppliedWikiPageInspectionSession>): string {
   if (session.origin.kind === "forward_revision") {
     return "Evidence scope: underlying Source-applied version. The evidence below still comes from the original contributing Sources; it is not new proof for manually revised wording.";
@@ -107,18 +100,15 @@ function formatEvidenceScope(session: Readonly<KnowledgeAppliedWikiPageInspectio
   return "Evidence scope: Source-applied version. Evidence below was attached to each accepted proposal as a whole. It can help you inspect the basis, but does not prove every sentence or changed block in this page.";
 }
 
-/** Returns a deterministic label for source custody. */
 function formatCustody(custody: Readonly<KnowledgeAppliedWikiSourceSummary>["custody"]): string {
   return custody === "managed_copy" ? "Managed copy" : "User-managed source";
 }
 
-/** Converts an accepted timestamp into deterministic inspectable UI text. */
 function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? "Unknown time" : date.toISOString();
 }
 
-/** Returns a compact display-only source location. */
 function formatEvidenceLocation(location: KnowledgeReviewEvidenceLocationSummary): string {
   switch (location.kind) {
     case "markdown_lines": {
@@ -139,7 +129,6 @@ function formatEvidenceLocation(location: KnowledgeReviewEvidenceLocationSummary
   }
 }
 
-/** Returns a deterministic citation-relation label. */
 function formatRelation(relation: KnowledgeReviewEvidenceSummary["relation"]): string {
   switch (relation) {
     case "supports":
@@ -151,7 +140,6 @@ function formatRelation(relation: KnowledgeReviewEvidenceSummary["relation"]): s
   }
 }
 
-/** Reports whether a failure is intentional cancellation. */
 const isAbortError = isKnowledgeAbortError;
 
 interface EvidenceRowProps {
@@ -173,14 +161,12 @@ type InspectionViewState = Readonly<{
     | Readonly<{ kind: "error"; message: string }>
   );
 
-/** Evidence navigation state bound to one exact opaque inspection session. */
 interface EvidenceViewState {
   readonly session: Readonly<KnowledgeAppliedWikiPageInspectionSession>;
   readonly openingEvidenceRef?: string;
   readonly error?: string;
 }
 
-/** Renders one bounded proposal-level evidence row. */
 function EvidenceRow({
   evidence,
   index,
@@ -230,12 +216,6 @@ function EvidenceRow({
   );
 }
 
-/**
- * Renders a read-only current-applied page inspection session.
- *
- * Loading and evidence-opening generations are abortable and last-wins. The
- * evidence callback receives only a projector-issued opaque reference.
- */
 export function KnowledgeAppliedWikiInspectorContent({
   request,
   inspector,
@@ -319,7 +299,6 @@ export function KnowledgeAppliedWikiInspectorContent({
     []
   );
 
-  /** Opens one current opaque evidence reference with last-request-wins semantics. */
   const openEvidence = (evidenceRef: string): void => {
     if (!session || loading) return;
     const known = session.sources.some((source) =>
@@ -525,7 +504,6 @@ export function KnowledgeAppliedWikiInspectorContent({
   );
 }
 
-/** Obsidian Modal wrapper for one abortable applied-page inspection session. */
 export class KnowledgeAppliedWikiInspectorModal extends Modal {
   private root: Root | null = null;
   private closed = false;
@@ -536,7 +514,6 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
   private readonly proposalAction?: KnowledgeForwardRevisionProposalActionPort;
   private readonly onPublished?: (reviewRef: string) => void;
 
-  /** Captures one value-only page request and stable inspector capability. */
   constructor(
     app: App,
     request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>,
@@ -561,7 +538,6 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
     this.onPublished = onPublished;
   }
 
-  /** Mounts the inspector into this Modal's owning document through the shared App root. */
   onOpen(): void {
     this.root = createPluginRoot(this.contentEl, this.app);
     this.root.render(
@@ -576,7 +552,6 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
     );
   }
 
-  /** Unmounts React so component cleanup aborts all in-flight inspector work. */
   onClose(): void {
     const root = this.root;
     this.root = null;
@@ -589,6 +564,7 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
           this.onClosed?.(this);
         } catch {
           // Modal cleanup remains complete even if its lifecycle observer is stale.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
     }

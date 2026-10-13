@@ -28,7 +28,6 @@ const HASH_C = "c".repeat(64);
 const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 
-/** Creates one canonical intent for a numbered request. */
 function createIntent(
   pagePath = "Wiki/Topic.md",
   historicalTransaction = "transaction-old",
@@ -71,7 +70,6 @@ function createIntent(
   });
 }
 
-/** Creates one strict pending proposal at the requested Runtime allocation. */
 function createProposal(
   requestRevision = 1,
   pagePath = "Wiki/Topic.md",
@@ -112,7 +110,6 @@ function createProposal(
   });
 }
 
-/** Creates one Runtime publication wrapper at exact revisions. */
 function createPublished(
   requestRevision = 1,
   proposalStoreRevision = requestRevision,
@@ -128,12 +125,10 @@ function createPublished(
   });
 }
 
-/** Produces a mutable JSON clone for adversarial persisted-state tests. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Makes the aggregate precheck observe a short body before strict snapshotting sees the real one. */
 function createShortThenFullProposalProxy(
   published: KnowledgeForwardRevisionPublishedProposalV1,
   onDeepRead?: () => void

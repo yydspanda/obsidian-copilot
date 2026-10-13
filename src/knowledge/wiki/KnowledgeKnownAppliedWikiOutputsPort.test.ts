@@ -13,7 +13,6 @@ const pageRef = `known-wiki-page-${"a".repeat(64)}`;
 const outputRef = `known-wiki-output-${"b".repeat(64)}`;
 const cursorRef = `known-wiki-cursor-${"c".repeat(64)}`;
 
-/** Creates one canonical source-Apply provenance summary. */
 function createOrigins(appliedAt: number, verifiedApplyCount = 1): readonly object[] {
   return [
     {
@@ -25,7 +24,6 @@ function createOrigins(appliedAt: number, verifiedApplyCount = 1): readonly obje
   ];
 }
 
-/** Creates one strict output-row fixture. */
 function createSummary(
   candidateRef: string,
   appliedAt: number,
@@ -47,7 +45,6 @@ function createSummary(
   };
 }
 
-/** Creates one strict first-page session fixture. */
 function createSession(): object {
   return {
     pageRef,

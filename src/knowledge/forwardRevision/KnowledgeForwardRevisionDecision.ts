@@ -32,13 +32,10 @@ export type {
   KnowledgeForwardRevisionSourceFreshnessBase,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
 
-/** Current strict terminal forward-Review decision version. */
 export const KNOWLEDGE_FORWARD_REVISION_DECISION_VERSION = 1 as const;
 
-/** Current strict dedicated forward-Apply claim version. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_CLAIM_VERSION = 1 as const;
 
-/** Defensive limits for terminal forward-Review material. */
 export const KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxPagePathCharacters,
@@ -47,7 +44,6 @@ export const KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS = Object.freeze({
   maxAfterContentBytes: KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxSelectedContentBytes,
 });
 
-/** Immutable evidence inherited from the selected proposal and original source. */
 export interface KnowledgeForwardRevisionSourceEvidence {
   readonly version: 1;
   readonly kind: "forward_revision_proposal_source_evidence";
@@ -67,7 +63,6 @@ export interface KnowledgeForwardRevisionSourceEvidence {
   readonly sourceRefs: readonly [string];
 }
 
-/** Dedicated NON-authoritative claim minted only as part of acceptance. */
 export interface KnowledgeForwardRevisionApplyClaimV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_CLAIM_VERSION;
   readonly kind: "forward_revision_apply_claim";
@@ -92,7 +87,6 @@ export interface KnowledgeForwardRevisionApplyClaimV1 {
   readonly acceptedAt: number;
 }
 
-/** Terminal accepted forward-Review record with exact body and dedicated claim. */
 export interface KnowledgeForwardRevisionAcceptedDecisionRecordV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_DECISION_VERSION;
   readonly kind: "forward_revision_decision_record";
@@ -114,7 +108,6 @@ export interface KnowledgeForwardRevisionAcceptedDecisionRecordV1 {
   readonly applyClaimDigest: string;
 }
 
-/** Terminal rejected forward-Review record; rejection never carries an Apply claim. */
 export interface KnowledgeForwardRevisionRejectedDecisionRecordV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_DECISION_VERSION;
   readonly kind: "forward_revision_decision_record";
@@ -127,12 +120,10 @@ export interface KnowledgeForwardRevisionRejectedDecisionRecordV1 {
   readonly rejectedDecisionDigest: string;
 }
 
-/** Strict terminal state of one independently published forward proposal. */
 export type KnowledgeForwardRevisionTerminalDecisionRecordV1 =
   | KnowledgeForwardRevisionAcceptedDecisionRecordV1
   | KnowledgeForwardRevisionRejectedDecisionRecordV1;
 
-/** Creator input whose only user-editable proposal material is `afterContent`. */
 export interface CreateKnowledgeForwardRevisionAcceptedDecisionInput {
   readonly proposal: unknown;
   readonly proposalDigest: string;
@@ -144,7 +135,6 @@ export interface CreateKnowledgeForwardRevisionAcceptedDecisionInput {
   readonly acceptedAt: number;
 }
 
-/** Creator input for a terminal rejection without any claim. */
 export interface CreateKnowledgeForwardRevisionRejectedDecisionInput {
   readonly proposal: unknown;
   readonly proposalDigest: string;
@@ -237,9 +227,8 @@ const CLAIM_KEYS = [
   "acceptedDecisionDigest",
   "acceptedAt",
 ] as const;
-/** Fixed value-free failure for malformed terminal forward-Review material. */
+
 export class KnowledgeForwardRevisionDecisionValidationError extends TypeError {
-  /** Creates a sanitized strict-contract failure. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision decision material does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionDecisionValidationError";
@@ -250,7 +239,6 @@ export class KnowledgeForwardRevisionDecisionValidationError extends TypeError {
 const VALIDATION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionDecisionValidationError");
 const authenticValidationErrors = new WeakSet<KnowledgeForwardRevisionDecisionValidationError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -284,7 +272,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one exact single-string tuple without invoking accessors. */
 function snapshotSingleStringTuple(value: unknown): readonly [string] | undefined {
   try {
     if (
@@ -313,7 +300,6 @@ function snapshotSingleStringTuple(value: unknown): readonly [string] | undefine
   }
 }
 
-/** Reports whether text consists only of paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -329,7 +315,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether identifier text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -338,7 +323,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Validates exact Review body text without Unicode normalization. */
 function isValidAfterContentText(value: string): boolean {
   if (!isUnicodeScalarText(value)) return false;
   for (let index = 0; index < value.length; index += 1) {
@@ -353,7 +337,6 @@ function isValidAfterContentText(value: string): boolean {
   return true;
 }
 
-/** Reports whether one value is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -365,7 +348,6 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Captures one canonical bounded Vault-relative page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -384,34 +366,28 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Reports whether one value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether one value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether one value is a positive safe integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Hashes one strict value with explicit domain separation. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Throws one authentic frozen sanitized failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionDecisionValidationError(VALIDATION_ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught failure was minted inside this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionDecisionValidationError {
@@ -422,7 +398,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Reads a union discriminant without invoking a hostile accessor. */
 function readDataDiscriminant(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -435,7 +410,6 @@ function readDataDiscriminant(value: unknown, key: string): unknown {
   }
 }
 
-/** Derives immutable proposal/original-source evidence with fixed scope semantics. */
 function deriveSourceEvidence(
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
   proposalDigest: string
@@ -463,7 +437,6 @@ function deriveSourceEvidence(
   });
 }
 
-/** Strictly verifies fixed-scope evidence against its proposal. */
 function snapshotSourceEvidence(
   value: unknown,
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
@@ -492,7 +465,6 @@ function snapshotSourceEvidence(
   return expected;
 }
 
-/** Creates the digest-bound terminal accepted payload before a claim exists. */
 function acceptedDecisionPayload(
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
   proposalDigest: string,
@@ -523,12 +495,10 @@ function acceptedDecisionPayload(
   });
 }
 
-/** Computes the canonical digest of an accepted terminal payload excluding its claim. */
 function digestAcceptedDecisionPayload(value: ReturnType<typeof acceptedDecisionPayload>): string {
   return digestValue("knowledge-forward-revision-accepted-decision-v1", value);
 }
 
-/** Derives the complete dedicated claim payload except its opaque id. */
 function applyClaimPayload(
   accepted: ReturnType<typeof acceptedDecisionPayload>,
   acceptedDecisionDigest: string
@@ -558,7 +528,6 @@ function applyClaimPayload(
   });
 }
 
-/** Derives a dedicated claim id from its accepted-decision-bound payload. */
 function deriveApplyClaimId(
   payload: Omit<KnowledgeForwardRevisionApplyClaimV1, "claimId">
 ): string {
@@ -568,7 +537,6 @@ function deriveApplyClaimId(
   )}`;
 }
 
-/** Mints a claim only from a complete accepted terminal payload. */
 function createApplyClaim(
   accepted: ReturnType<typeof acceptedDecisionPayload>,
   acceptedDecisionDigest: string
@@ -577,12 +545,10 @@ function createApplyClaim(
   return Object.freeze({ ...payload, claimId: deriveApplyClaimId(payload) });
 }
 
-/** Hashes one already-correlated dedicated claim. */
 function digestApplyClaim(value: Readonly<KnowledgeForwardRevisionApplyClaimV1>): string {
   return digestValue("knowledge-forward-revision-apply-claim-v1", value);
 }
 
-/** Strictly verifies one dedicated claim against its complete accepted payload. */
 function snapshotApplyClaimAgainstAccepted(
   value: unknown,
   accepted: ReturnType<typeof acceptedDecisionPayload>,
@@ -605,7 +571,6 @@ function snapshotApplyClaimAgainstAccepted(
   return expected;
 }
 
-/** Creates a terminal accepted record and atomically mints its dedicated claim. */
 export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
   value: CreateKnowledgeForwardRevisionAcceptedDecisionInput
 ): Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1> {
@@ -687,7 +652,6 @@ export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
   }
 }
 
-/** Strictly snapshots one terminal accepted forward-Review record. */
 export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1> {
@@ -787,7 +751,6 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
   }
 }
 
-/** Strictly snapshots a dedicated claim as part of its accepted record. */
 export function snapshotKnowledgeForwardRevisionApplyClaim(
   value: unknown,
   acceptedRecord: unknown
@@ -803,13 +766,6 @@ export function snapshotKnowledgeForwardRevisionApplyClaim(
   return accepted.applyClaim;
 }
 
-/**
- * Computes a self-consistency digest for one structurally canonical claim.
- *
- * This does not establish claim authenticity or write authority. Every Apply
- * boundary must snapshot the claim together with its exact accepted terminal
- * record and freshly re-prove the Runtime/Vault/Manifest transaction prestate.
- */
 export function createKnowledgeForwardRevisionApplyClaimDigest(value: unknown): string {
   const record = snapshotRecord(value, CLAIM_KEYS);
   if (!record) invalid();
@@ -867,7 +823,6 @@ export function createKnowledgeForwardRevisionApplyClaimDigest(value: unknown): 
   return digestApplyClaim(Object.freeze({ ...payload, claimId: claim.claimId }));
 }
 
-/** Creates a terminal rejected record without minting an Apply claim. */
 export function createKnowledgeForwardRevisionRejectedDecisionRecord(
   value: CreateKnowledgeForwardRevisionRejectedDecisionInput
 ): Readonly<KnowledgeForwardRevisionRejectedDecisionRecordV1> {
@@ -907,7 +862,6 @@ export function createKnowledgeForwardRevisionRejectedDecisionRecord(
   }
 }
 
-/** Strictly snapshots one terminal rejected forward-Review record. */
 export function snapshotKnowledgeForwardRevisionRejectedDecisionRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionRejectedDecisionRecordV1> {
@@ -957,7 +911,6 @@ export function snapshotKnowledgeForwardRevisionRejectedDecisionRecord(
   }
 }
 
-/** Strictly dispatches one terminal accepted or rejected forward-Review record. */
 export function snapshotKnowledgeForwardRevisionTerminalDecisionRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1> {
@@ -966,7 +919,6 @@ export function snapshotKnowledgeForwardRevisionTerminalDecisionRecord(
     : snapshotKnowledgeForwardRevisionRejectedDecisionRecord(value);
 }
 
-/** Computes one canonical digest over a complete strict terminal decision record. */
 export function createKnowledgeForwardRevisionTerminalDecisionRecordDigest(value: unknown): string {
   return digestValue(
     "knowledge-forward-revision-terminal-decision-record-v1",
@@ -974,7 +926,6 @@ export function createKnowledgeForwardRevisionTerminalDecisionRecordDigest(value
   );
 }
 
-/** Validates terminal decision material without retaining rejected values. */
 export function validateKnowledgeForwardRevisionTerminalDecisionRecord(
   value: unknown
 ): KnowledgeValidationResult {

@@ -1,6 +1,5 @@
 import { subscribeKnowledgeSetupSelectionChanges } from "@/knowledge/setup/KnowledgeSetupSelectionSubscription";
 
-/** Creates an inspectable synchronous event source. */
 function createSource() {
   const listeners = new Set<() => void>();
   return {

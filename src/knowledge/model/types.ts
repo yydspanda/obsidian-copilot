@@ -1,19 +1,13 @@
-/** Current version of the persisted knowledge contracts. */
 export const KNOWLEDGE_CONTRACT_VERSION = 1 as const;
 
-/** Current OKF version emitted and accepted by the first knowledge adapter. */
 export const SUPPORTED_OKF_VERSION = "0.1" as const;
 
-/** JSON primitive accepted by persisted knowledge metadata. */
 export type JsonPrimitive = string | number | boolean | null;
 
-/** Recursive JSON value accepted by persisted knowledge metadata. */
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-/** Controls when generated knowledge changes require user review. */
 export type KnowledgeReviewMode = "always" | "multi_file" | "trusted_generated_only";
 
-/** Identifies a user-configured knowledge bundle and its write boundary. */
 export interface KnowledgeBundleConfig {
   version: typeof KNOWLEDGE_CONTRACT_VERSION;
   id: string;
@@ -23,7 +17,6 @@ export interface KnowledgeBundleConfig {
   reviewMode: KnowledgeReviewMode;
 }
 
-/** Serializable failure information safe to persist and render. */
 export interface KnowledgeFailure {
   code: string;
   message: string;
@@ -31,17 +24,14 @@ export interface KnowledgeFailure {
   occurredAt: number;
 }
 
-/** Describes who owns the lifecycle of a generated page. */
 export type GeneratedPageOwnership = "generated" | "shared" | "user";
 
-/** Records one page produced or affected by an ingested source. */
 export interface GeneratedPageReference {
   path: string;
   ownership: GeneratedPageOwnership;
   contentHash?: string;
 }
 
-/** Last successfully committed compile state of one source. */
 export interface SourceCompileSnapshot {
   sourceContentHash: string;
   pipelineFingerprint: string;
@@ -50,17 +40,14 @@ export interface SourceCompileSnapshot {
   completedAt: number;
 }
 
-/** Most recent failed compile attempt, kept without replacing a committed snapshot. */
 export interface SourceCompileFailure {
   sourceContentHash: string;
   pipelineFingerprint: string;
   failure: KnowledgeFailure;
 }
 
-/** Defines whether a source remains user-owned or is copied into managed storage. */
 export type SourceCustody = "user_managed" | "managed_copy";
 
-/** Records durable source identity without duplicating transient queue state. */
 export interface SourceManifestEntry {
   sourceId: string;
   sourceKey: string;
@@ -71,7 +58,6 @@ export interface SourceManifestEntry {
   extensions?: Record<string, JsonValue>;
 }
 
-/** Versioned manifest for all sources in a knowledge bundle. */
 export interface SourceManifest {
   version: typeof KNOWLEDGE_CONTRACT_VERSION;
   bundleId: string;
@@ -80,7 +66,6 @@ export interface SourceManifest {
   extensions?: Record<string, JsonValue>;
 }
 
-/** Fields shared by every source locator. */
 export interface SourceLocatorBase {
   sourceId: string;
   artifactId: string;
@@ -89,7 +74,6 @@ export interface SourceLocatorBase {
   quoteHash: string;
 }
 
-/** Precise, source-backed location used by Wiki claims and model answers. */
 export type SourceLocator =
   | (SourceLocatorBase & {
       kind: "markdown_lines";
@@ -105,7 +89,6 @@ export type SourceLocator =
   | (SourceLocatorBase & { kind: "pdf_page"; page: number })
   | (SourceLocatorBase & { kind: "quote"; prefix?: string; suffix?: string });
 
-/** Expresses how one source location relates to a generated claim. */
 export interface ClaimCitation {
   citationId: string;
   claimId: string;
@@ -113,13 +96,11 @@ export interface ClaimCitation {
   locator: SourceLocator;
 }
 
-/** Common fields persisted for every OKF-compatible Markdown document. */
 export interface OkfDocumentBase {
   path: string;
   body: string;
 }
 
-/** Regular OKF concept document with extensible frontmatter. */
 export interface OkfConceptDocument extends OkfDocumentBase {
   kind: "concept";
   type: string;
@@ -132,21 +113,17 @@ export interface OkfConceptDocument extends OkfDocumentBase {
   citations: ClaimCitation[];
 }
 
-/** Reserved OKF index document. Only the bundle root may declare okfVersion. */
 export interface OkfIndexDocument extends OkfDocumentBase {
   kind: "index";
   okfVersion?: typeof SUPPORTED_OKF_VERSION;
 }
 
-/** Reserved append-oriented OKF log document. */
 export interface OkfLogDocument extends OkfDocumentBase {
   kind: "log";
 }
 
-/** Any Markdown document understood by the OKF adapter. */
 export type OkfDocument = OkfConceptDocument | OkfIndexDocument | OkfLogDocument;
 
-/** Work stage that may execute code or invoke a model. */
 export type KnowledgeIngestWorkStage =
   | "parsing"
   | "analyzing"
@@ -155,14 +132,13 @@ export type KnowledgeIngestWorkStage =
   | "validating"
   | "applying";
 
-/** Fields common to every durable ingest job state. */
 export interface KnowledgeIngestJobBase {
   id: string;
   bundleId: string;
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
-  /** Durable per-source observation revision, independent of wall-clock time. */
+
   inputRevision: number;
   attempt: number;
   rerunRequested: boolean;
@@ -170,7 +146,6 @@ export interface KnowledgeIngestJobBase {
   updatedAt: number;
 }
 
-/** Durable job state that prevents impossible stage/status combinations. */
 export type KnowledgeIngestJob = KnowledgeIngestJobBase &
   (
     | { status: "pending"; stage: "queued"; nextAttemptAt?: number }
@@ -204,7 +179,6 @@ export type KnowledgeIngestJob = KnowledgeIngestJobBase &
     | { status: "cancelled"; stage: "cancelled"; cancelledAt: number }
   );
 
-/** Fields shared by all proposed file changes. */
 export interface KnowledgeFileChangeBase {
   id: string;
   path: string;
@@ -212,7 +186,6 @@ export interface KnowledgeFileChangeBase {
   reason: string;
 }
 
-/** File change proposed by a knowledge operation. */
 export type KnowledgeFileChange = KnowledgeFileChangeBase &
   (
     | {
@@ -230,14 +203,12 @@ export type KnowledgeFileChange = KnowledgeFileChangeBase &
     | { operation: "delete"; beforeHash: string }
   );
 
-/** Deterministic validation summary computed before applying a ChangeSet. */
 export interface KnowledgeValidationSummary {
   okfValid: boolean;
   citationsValid: boolean;
   linksValid: boolean;
 }
 
-/** User-reviewable set of knowledge file changes. */
 export interface KnowledgeChangeSet {
   id: string;
   bundleId: string;
@@ -250,10 +221,8 @@ export interface KnowledgeChangeSet {
   createdAt: number;
 }
 
-/** Severity of a deterministic knowledge validation diagnostic. */
 export type KnowledgeDiagnosticSeverity = "error" | "warning";
 
-/** Structured validation issue suitable for tests and future UI rendering. */
 export interface KnowledgeDiagnostic {
   code: string;
   severity: KnowledgeDiagnosticSeverity;
@@ -261,18 +230,15 @@ export interface KnowledgeDiagnostic {
   message: string;
 }
 
-/** Aggregate result returned by deterministic knowledge validators. */
 export interface KnowledgeValidationResult {
   valid: boolean;
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Public parse result that does not expose the validation library. */
 export type KnowledgeParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; issues: KnowledgeDiagnostic[] };
 
-/** Input that fully identifies the behavior of the ingest pipeline. */
 export interface PipelineFingerprintInput {
   version: typeof KNOWLEDGE_CONTRACT_VERSION;
   contractVersion: number;
@@ -295,12 +261,10 @@ export interface PipelineFingerprintInput {
   citationContractVersion: number;
 }
 
-/** One exact generated-output observation used to decide whether a source is fresh. */
 export type OutputObservation =
   | { path: string; kind: "file"; contentHash: string }
   | { path: string; kind: "missing" | "directory" };
 
-/** Stable reasons a source must be ingested again. */
 export type SourceStaleReason =
   | "never_ingested"
   | "source_changed"
@@ -309,7 +273,6 @@ export type SourceStaleReason =
   | "output_changed"
   | "output_unverifiable";
 
-/** Deterministic freshness result for a source and its generated pages. */
 export type SourceFreshnessDecision =
   | { kind: "up_to_date" }
   | { kind: "needs_ingest"; reasons: SourceStaleReason[] };

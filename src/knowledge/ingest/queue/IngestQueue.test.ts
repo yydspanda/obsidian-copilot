@@ -71,11 +71,6 @@ interface Deferred<T> {
   reject(reason: unknown): void;
 }
 
-/**
- * Creates a manually controlled promise for execution race tests.
- *
- * @returns Promise and its external settlement functions
- */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -86,23 +81,10 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/**
- * Clones JSON-compatible persisted state for storage isolation tests.
- *
- * @param value - JSON-compatible value
- * @returns Detached clone
- */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/**
- * Derives one highest source observation for a synthetic test snapshot.
- *
- * @param jobs - Durable test jobs
- * @param reruns - Durable test rerun payloads
- * @returns One high-watermark per represented source
- */
 function deriveTestHighWatermarks(
   jobs: readonly KnowledgeIngestJob[],
   reruns: readonly IngestRerunRequest[]
@@ -123,13 +105,6 @@ function deriveTestHighWatermarks(
   return [...values.values()];
 }
 
-/**
- * Creates a valid queue snapshot suitable for storage seeding.
- *
- * @param bundleId - Bundle identity
- * @param overrides - Optional snapshot fields to replace
- * @returns Strict queue snapshot
- */
 function createSnapshot(
   bundleId = "personal",
   overrides: Partial<IngestQueueSnapshot> = {}
@@ -151,12 +126,6 @@ function createSnapshot(
   };
 }
 
-/**
- * Creates one valid durable pending job.
- *
- * @param overrides - Optional job fields to replace
- * @returns Pending ingest job
- */
 function createPendingJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     id: "job-1",
@@ -175,12 +144,6 @@ function createPendingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowledg
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates one valid terminal job that owns a source high-watermark.
- *
- * @param overrides - Optional job fields to replace
- * @returns Completed ingest history
- */
 function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob(),
@@ -193,12 +156,6 @@ function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowle
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates one valid non-applying processing job for active freshness tests.
- *
- * @param overrides - Optional job fields to replace
- * @returns Claimed ingest work
- */
 function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob({ id: "job-history" }),
@@ -210,7 +167,6 @@ function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowl
   } as KnowledgeIngestJob;
 }
 
-/** JSON-only in-memory adapter that enforces the queue storage CAS contract. */
 class InMemoryQueueStorage implements QueueStorage {
   private readonly values = new Map<string, unknown>();
   private readonly failures: PlannedWriteFailure[] = [];
@@ -222,33 +178,15 @@ class InMemoryQueueStorage implements QueueStorage {
   public readBarrier?: Promise<void>;
   public onRead?: () => void;
 
-  /**
-   * Seeds unknown persisted JSON without repository validation.
-   *
-   * @param bundleId - Storage key
-   * @param value - Unknown JSON value
-   */
   seed(bundleId: string, value: unknown): void {
     this.values.set(bundleId, cloneJson(value));
   }
 
-  /**
-   * Returns detached raw storage state.
-   *
-   * @param bundleId - Storage key
-   * @returns Persisted state or null
-   */
   get(bundleId: string): unknown {
     const value = this.values.get(bundleId);
     return value === undefined ? null : cloneJson(value);
   }
 
-  /**
-   * Returns one parsed queue snapshot for concise assertions.
-   *
-   * @param bundleId - Storage key
-   * @returns Strict persisted queue snapshot
-   */
   getSnapshot(bundleId: string): IngestQueueSnapshot {
     const parsed = parseIngestQueueSnapshot(this.get(bundleId));
     if (!parsed.ok) {
@@ -257,31 +195,14 @@ class InMemoryQueueStorage implements QueueStorage {
     return parsed.value;
   }
 
-  /**
-   * Plans one write failure, optionally simulating a concurrent storage change.
-   *
-   * @param error - Error thrown by the next write
-   * @param beforeThrow - Optional concurrent mutation
-   */
   planWriteFailure(error: Error, beforeThrow?: () => void): void {
     this.failures.push({ error, ...(beforeThrow ? { beforeThrow } : {}) });
   }
 
-  /**
-   * Plans a transport failure after the exact candidate has passed CAS and committed.
-   *
-   * @param error - Error reported after durable persistence
-   */
   planCommittedWriteFailure(error: Error): void {
     this.failures.push({ error, commitBeforeThrow: true });
   }
 
-  /**
-   * Reads detached unknown JSON.
-   *
-   * @param bundleId - Storage key
-   * @returns Persisted JSON or null
-   */
   async read(bundleId: string): Promise<unknown> {
     this.readCount += 1;
     this.onRead?.();
@@ -289,13 +210,6 @@ class InMemoryQueueStorage implements QueueStorage {
     return this.get(bundleId);
   }
 
-  /**
-   * Writes a complete snapshot only when the expected revision still matches.
-   *
-   * @param bundleId - Storage key
-   * @param snapshot - Complete next queue revision
-   * @param expectedRevision - Previously observed revision or null
-   */
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -338,42 +252,24 @@ class InMemoryQueueStorage implements QueueStorage {
   }
 }
 
-/** Mutable executor whose handler is replaceable between queue runs. */
 class TestExecutor implements IngestExecutor {
   public readonly calls: IngestExecutionContext[] = [];
 
-  /**
-   * Creates a scripted executor.
-   *
-   * @param handler - Function invoked for each claimed job
-   */
   constructor(
     public handler: (context: IngestExecutionContext) => Promise<IngestExecutionResult>
   ) {}
 
-  /**
-   * Records and delegates one execution.
-   *
-   * @param context - Claimed execution context
-   * @returns Scripted result
-   */
   async execute(context: IngestExecutionContext): Promise<IngestExecutionResult> {
     this.calls.push(context);
     return this.handler(context);
   }
 }
 
-/** Event sink that records notifications and may fail deliberately. */
 class TestEventSink implements EventSink {
   public readonly events: IngestQueueEvent[] = [];
   public shouldThrow = false;
   public pending?: Promise<void>;
 
-  /**
-   * Records a post-commit event or simulates observer failure.
-   *
-   * @param event - Queue event
-   */
   emit(event: IngestQueueEvent): void | Promise<void> {
     if (this.shouldThrow) {
       throw new Error("observer unavailable");
@@ -391,39 +287,19 @@ interface QueueHarness {
   setNow(value: number): void;
 }
 
-/** Mutable freshness admission port that records every detached Queue request. */
 class TestSourceFreshnessAdmission implements IngestSourceFreshnessAdmissionPort {
   public readonly calls: Readonly<IngestSourceFreshnessAdmissionRequest>[] = [];
 
-  /**
-   * Creates one scripted admission boundary.
-   *
-   * @param handler - Unknown result or failure returned for one exact observation
-   */
   constructor(
     private readonly handler: (request: Readonly<IngestSourceFreshnessAdmissionRequest>) => unknown
   ) {}
 
-  /**
-   * Records and delegates one admission evaluation.
-   *
-   * @param request - Frozen Queue-owned source identity
-   * @returns Scripted unknown adapter result
-   */
   async evaluate(request: Readonly<IngestSourceFreshnessAdmissionRequest>): Promise<unknown> {
     this.calls.push(request);
     return this.handler(request);
   }
 }
 
-/**
- * Creates a queue with deterministic ids, time, retry delays, and executor.
- *
- * @param handler - Optional scripted execution behavior
- * @param maxAttempts - Total execution bound
- * @param sourceFreshnessAdmission - Optional terminal-output admission evaluator
- * @returns Mutable queue test harness
- */
 function createHarness(
   handler: (context: IngestExecutionContext) => Promise<IngestExecutionResult> = async () => ({
     kind: "no_changes",
@@ -458,12 +334,6 @@ function createHarness(
   };
 }
 
-/**
- * Creates a standard enqueue request with optional exact input overrides.
- *
- * @param overrides - Request fields to replace
- * @returns Valid enqueue request
- */
 function createRequest(
   overrides: Partial<{
     bundleId: string;
@@ -484,13 +354,6 @@ function createRequest(
   };
 }
 
-/**
- * Creates one exact echoed freshness admission result.
- *
- * @param request - Queue admission identity to echo
- * @param decision - Unknown decision payload used by boundary tests
- * @returns Plain adapter result
- */
 function createFreshnessAdmission(
   request: Readonly<IngestSourceFreshnessAdmissionRequest>,
   decision: unknown = { kind: "up_to_date" }
@@ -505,12 +368,6 @@ function createFreshnessAdmission(
   };
 }
 
-/**
- * Creates one production-shaped no-change Manifest plan for Queue contract tests.
- *
- * @param inputRevision - Exact source revision bound to the plan
- * @returns Strict no-change Manifest commit plan
- */
 function createProductionNoChangesPlan(inputRevision = 1): NoChangesManifestCommitPlan {
   return createNoChangesManifestCommitPlan({
     bundleId: "personal",
@@ -529,12 +386,6 @@ function createProductionNoChangesPlan(inputRevision = 1): NoChangesManifestComm
   });
 }
 
-/**
- * Creates the exact queue attempt retained by a durable review record.
- *
- * @param overrides - Claim fields to replace
- * @returns Strict review job claim
- */
 function createReviewJobClaim(
   overrides: Partial<IngestReviewDecisionJobClaim> = {}
 ): IngestReviewDecisionJobClaim {
@@ -556,12 +407,6 @@ type PendingReviewDecisionOverrides = Omit<
   jobClaim?: Partial<IngestReviewDecisionJobClaim>;
 };
 
-/**
- * Creates one durable pending Review Store receipt.
- *
- * @param overrides - Receipt and nested claim fields to replace
- * @returns Strict pending decision receipt
- */
 function createPendingReviewDecision(
   overrides: PendingReviewDecisionOverrides = {}
 ): IngestPendingReviewDecisionReceipt {
@@ -578,12 +423,6 @@ function createPendingReviewDecision(
   };
 }
 
-/**
- * Creates an executor outcome whose proposal is already durable in Review Store.
- *
- * @param overrides - Pending receipt fields to replace
- * @returns Strict awaiting-review executor result
- */
 function createAwaitingReviewResult(
   overrides: PendingReviewDecisionOverrides = {}
 ): IngestExecutionResult {
@@ -598,12 +437,6 @@ type AcceptedReviewDecisionOverrides = Omit<
   jobClaim?: Partial<IngestReviewDecisionJobClaim>;
 };
 
-/**
- * Creates one terminal accepted Review Store receipt.
- *
- * @param overrides - Receipt and nested claim fields to replace
- * @returns Strict accepted decision receipt
- */
 function createAcceptedReviewDecision(
   overrides: AcceptedReviewDecisionOverrides = {}
 ): IngestAcceptedReviewDecisionReceipt {
@@ -629,12 +462,6 @@ type RejectedReviewDecisionOverrides = Omit<
   jobClaim?: Partial<IngestReviewDecisionJobClaim>;
 };
 
-/**
- * Creates one terminal rejected Review Store receipt.
- *
- * @param overrides - Receipt and nested claim fields to replace
- * @returns Strict rejected decision receipt
- */
 function createRejectedReviewDecision(
   overrides: RejectedReviewDecisionOverrides = {}
 ): IngestRejectedReviewDecisionReceipt {
@@ -651,12 +478,6 @@ function createRejectedReviewDecision(
   };
 }
 
-/**
- * Creates one valid committed ChangeSet receipt for queue reconciliation tests.
- *
- * @param overrides - Receipt fields to replace
- * @returns Durable transaction commit proof
- */
 type CommitReceiptOverrides = Omit<Partial<TransactionCommitReceipt>, "jobClaim"> & {
   jobClaim?: Partial<TransactionCommitReceipt["jobClaim"]>;
 };
@@ -685,12 +506,6 @@ function createCommitReceipt(overrides: CommitReceiptOverrides = {}): Transactio
   };
 }
 
-/**
- * Creates the exact queue claim persisted at the applying boundary.
- *
- * @param overrides - Claim fields to replace
- * @returns Durable apply claim marker
- */
 function createApplyClaimMarker(
   overrides: Partial<IngestApplyClaimMarker> = {}
 ): IngestApplyClaimMarker {

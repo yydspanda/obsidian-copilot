@@ -30,10 +30,8 @@ import { ObsidianKnowledgeCitationNavigator } from "@/knowledge/query/ObsidianKn
 
 const OPAQUE_RANDOM_BYTE_COUNT = 16;
 
-/** Browser-compatible cryptographic randomness required for opaque query capabilities. */
 export type KnowledgeQuerySecureRandomPort = Pick<Crypto, "getRandomValues">;
 
-/** Dependencies captured by one production, multi-Bundle scoped Query adapter. */
 export interface KnowledgeStudioScopedQueryAdapterInput {
   readonly app: App;
   readonly runtime: KnowledgeAppliedProvenanceReadPort;
@@ -53,26 +51,18 @@ interface KnowledgeStudioScopedQueryAdapterState {
 
 const scopedQueryAdapterStates = new WeakMap<object, KnowledgeStudioScopedQueryAdapterState>();
 
-/** Throws the platform cancellation category before performing an edge operation. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new DOMException("The operation was aborted", "AbortError");
   }
 }
 
-/** Converts cryptographically random bytes to a coordinator-safe opaque token. */
 function bytesToHex(bytes: Uint8Array): string {
   let token = "";
   for (const byte of bytes) token += byte.toString(16).padStart(2, "0");
   return token;
 }
 
-/**
- * Creates a browser-compatible 128-bit opaque-id source.
- *
- * @param secureRandom - Captured Web Crypto randomness owner
- * @returns Factory suitable for generation-scoped query and citation references
- */
 export function createKnowledgeQueryIdFactory(
   secureRandom: KnowledgeQuerySecureRandomPort
 ): KnowledgeQueryIdFactory {
@@ -90,7 +80,6 @@ export function createKnowledgeQueryIdFactory(
   };
 }
 
-/** Captures one strict, detached Bundle map without retaining mutable configuration. */
 function snapshotBundles(
   bundles: readonly KnowledgeBundleConfig[]
 ): ReadonlyMap<string, Readonly<KnowledgeBundleConfig>> {
@@ -111,7 +100,6 @@ function snapshotBundles(
   return byId;
 }
 
-/** Returns hidden generation state only for an authentic adapter instance. */
 function requireAdapterState(value: unknown): KnowledgeStudioScopedQueryAdapterState {
   if (typeof value !== "object" || value === null) throw new KnowledgeScopedQueryError();
   const state = scopedQueryAdapterStates.get(value);
@@ -119,7 +107,6 @@ function requireAdapterState(value: unknown): KnowledgeStudioScopedQueryAdapterS
   return state;
 }
 
-/** Creates a source-root-confined Obsidian navigation edge for one Bundle. */
 function createBundleCitationNavigationPort(
   navigator: ObsidianKnowledgeCitationNavigator,
   bundle: Readonly<KnowledgeBundleConfig>,
@@ -168,20 +155,9 @@ function createBundleCitationNavigationPort(
   });
 }
 
-/**
- * Routes Studio Query operations only to exact Bundle-scoped coordinators.
- *
- * Each coordinator reads the atomic applied-provenance projection, verifies
- * exact Wiki hashes through the captured target resolver, ranks only that
- * immutable in-memory corpus, and keeps actionable citations behind opaque
- * references. When production supplies its exact model-route lease, each
- * coordinator receives only a Bundle-bound grounded-answer port. This adapter
- * has no fallback-search or write authority.
- */
 export class KnowledgeStudioScopedQueryAdapter
   implements KnowledgeStudioQueryPort, KnowledgeStudioQueryWritebackPort
 {
-  /** Captures all configured Bundle readers and their exact Obsidian citation edges. */
   constructor(input: KnowledgeStudioScopedQueryAdapterInput) {
     if (
       !input ||
@@ -242,7 +218,6 @@ export class KnowledgeStudioScopedQueryAdapter
     Object.freeze(this);
   }
 
-  /** Returns the exact coordinator for one configured Bundle and current generation. */
   private requireCoordinator(bundleId: string): KnowledgeScopedQueryCoordinator {
     const state = requireAdapterState(this);
     if (state.closed) throw new KnowledgeScopedQueryError();
@@ -252,7 +227,6 @@ export class KnowledgeStudioScopedQueryAdapter
     return coordinator;
   }
 
-  /** Runs scoped retrieval and optional grounded synthesis without a fallback corpus. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -262,7 +236,6 @@ export class KnowledgeStudioScopedQueryAdapter
     return this.requireCoordinator(bundleId).query(bundleId, request, signal);
   }
 
-  /** Opens only a current coordinator-issued source citation reference. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -273,7 +246,6 @@ export class KnowledgeStudioScopedQueryAdapter
     return this.requireCoordinator(bundleId).openCitation(bundleId, queryId, citationRef, signal);
   }
 
-  /** Captures only the current opaque grounded answer through its Bundle coordinator. */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -284,12 +256,10 @@ export class KnowledgeStudioScopedQueryAdapter
     return this.requireCoordinator(bundleId).saveQueryToWiki(bundleId, queryId, request, signal);
   }
 
-  /** Revokes exact or Bundle-wide opaque Query authority for one configured Bundle. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     this.requireCoordinator(bundleId).revokeCurrent(bundleId, queryId);
   }
 
-  /** Permanently revokes every Bundle coordinator and issued opaque reference. */
   close(): void {
     const state = requireAdapterState(this);
     if (state.closed) return;

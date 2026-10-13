@@ -227,6 +227,17 @@ describe("ManagedBinaryConfigView", () => {
       expect(actions.cancelInstall).toHaveBeenCalledTimes(1);
     });
 
+    it("exposes the measured install percentage to assistive technology (https://github.com/Brevilabs/obsidian-copilot-private/issues/578)", () => {
+      renderView({
+        managed: {
+          ...MANAGED,
+          run: { kind: "running", label: "Downloading Codex adapter…", percent: 42 },
+        },
+      });
+
+      expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("42");
+    });
+
     it("keeps the source choice disabled while a managed install is running (https://github.com/Brevilabs/obsidian-copilot-private/issues/368)", () => {
       const { onSourceChange } = renderView({
         managed: {
@@ -268,6 +279,37 @@ describe("ManagedBinaryConfigView", () => {
         fireEvent.click(screen.getByRole("button", { name: "Auto-detect" }));
       });
       expect(actions.detectCustomPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("warns while choosing an unset custom binary path (https://github.com/Brevilabs/obsidian-copilot-private/issues/570)", () => {
+      renderView({ source: "custom" });
+
+      expect(screen.getByRole("note").textContent).toContain(
+        "Copilot is tested with the version managed by Copilot"
+      );
+      expect(screen.getByRole("note").textContent).toContain("Managed by Copilot");
+      expect(screen.getByPlaceholderText("/absolute/path/to/opencode")).toBeTruthy();
+    });
+
+    it("warns while a custom binary is in use (https://github.com/Brevilabs/obsidian-copilot-private/issues/570)", () => {
+      renderView({
+        source: "custom",
+        state: { kind: "ready", source: "custom" },
+        activeSource: "custom",
+        customPath: "/opt/homebrew/bin/opencode",
+      });
+
+      expect(screen.getByRole("note").textContent).toContain(
+        "Other versions may not work correctly"
+      );
+      expect(screen.getByRole("button", { name: "Clear" })).toBeTruthy();
+    });
+
+    it("shows no custom-binary warning on the managed view (https://github.com/Brevilabs/obsidian-copilot-private/issues/570)", () => {
+      renderView({ source: "managed", activeSource: "custom" });
+
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe(IN_USE_CUSTOM);
     });
 
     it("offers Clear instead of Apply once a custom path is applied (https://github.com/Brevilabs/obsidian-copilot-private/issues/368)", async () => {

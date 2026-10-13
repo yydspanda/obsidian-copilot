@@ -1,13 +1,3 @@
-/**
- * Tokenizes mixed Markdown text for lexical search.
- *
- * The token contract intentionally matches Search v3: ASCII words are
- * lower-cased, CJK runs produce overlapping bigrams, and hashtags retain both
- * their hashed and hierarchy-aware plain forms.
- *
- * @param value - Text to tokenize
- * @returns De-duplicated tokens in deterministic discovery order
- */
 export function tokenizeMixed(value: string): string[] {
   if (!value) {
     return [];
@@ -17,7 +7,6 @@ export function tokenizeMixed(value: string): string[] {
   const lowered = value.toLowerCase();
   let asciiSource = lowered;
 
-  // Preserve tags as first-class tokens while also making their hierarchy searchable.
   let tagMatches: RegExpMatchArray | null = null;
   try {
     tagMatches = lowered.match(/#[\p{L}\p{N}_/-]+/gu);

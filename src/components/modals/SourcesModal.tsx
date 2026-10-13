@@ -1,14 +1,18 @@
-// src/components/SourcesModal.tsx
 import { logError } from "@/logger";
 import { App, Modal, Setting, TFile } from "obsidian";
 
-export class SourcesModal extends Modal {
-  sources: { title: string; path: string; score: number; explanation?: unknown }[];
+interface ChatSource {
+  title: string;
+  path: string;
+  score: number;
+  explanation?: unknown;
+  outsideVaultLabel?: string;
+}
 
-  constructor(
-    app: App,
-    sources: { title: string; path: string; score: number; explanation?: unknown }[]
-  ) {
+export class SourcesModal extends Modal {
+  sources: ChatSource[];
+
+  constructor(app: App, sources: ChatSource[]) {
     super(app);
     this.sources = sources;
   }
@@ -18,14 +22,10 @@ export class SourcesModal extends Modal {
     contentEl.empty();
     new Setting(contentEl).setName("Sources").setHeading();
 
-    // Display all sources sorted by score (already sorted from chain)
     this.createSourceList(contentEl, this.sources);
   }
 
-  private createSourceList(
-    container: HTMLElement,
-    sources: { title: string; path: string; score: number; explanation?: unknown }[]
-  ) {
+  private createSourceList(container: HTMLElement, sources: ChatSource[]) {
     const list = container.createEl("ul");
     list.addClass("tw-list-none", "tw-p-0");
 
@@ -33,68 +33,73 @@ export class SourcesModal extends Modal {
       const item = list.createEl("li");
       item.addClass("tw-mb-4");
 
-      // Create collapsible container
       const itemContainer = item.createDiv();
       itemContainer.addClass("tw-cursor-pointer");
 
-      // Add expand/collapse indicator
       const expandIndicator = itemContainer.createSpan();
       expandIndicator.addClass("tw-mr-2", "tw-inline-block", "tw-w-4", "tw-transition-transform");
       expandIndicator.textContent = source.explanation ? "▶" : "";
 
-      // Display title, but show path in parentheses if there are duplicates
       const displayText =
         source.path && source.path !== source.title
           ? `${source.title} (${source.path})`
           : source.title;
 
-      const link = itemContainer.createEl("a", {
-        href: `obsidian://open?vault=${encodeURIComponent(this.app.vault.getName())}&file=${encodeURIComponent(source.path || source.title)}`,
-        text: displayText,
-      });
-      link.title = `${displayText} - drag to insert wikilink`;
-      link.draggable = true;
-      link.addEventListener("dragstart", (e) => {
-        const filePath = source.path || source.title;
-        const file = this.app.vault.getAbstractFileByPath(filePath);
-        if (file instanceof TFile) {
-          const dragManager = (
-            this.app as unknown as {
-              dragManager?: {
-                dragLink: (e: DragEvent, text: string) => unknown;
-                onDragStart: (e: DragEvent, data: unknown) => void;
-              };
-            }
-          ).dragManager;
-          if (!dragManager) return;
-          const linkText = this.app.metadataCache.fileToLinktext(file, "");
-          const dragData = dragManager.dragLink(e, linkText);
-          dragManager.onDragStart(e, dragData);
-        }
-      });
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // Use the path if available, otherwise fall back to title
-        this.app.workspace.openLinkText(source.path || source.title, "").catch(logError);
-      });
+      let link: HTMLElement;
+      if (source.outsideVaultLabel) {
+        // A result from another Miyo folder is not a note in this vault, so it is shown
+        // as text with its folder or Chat label instead of a vault link.
+        // https://github.com/logancyang/obsidian-copilot/issues/3508
+        link = itemContainer.createSpan({ text: displayText });
+        itemContainer.createSpan({
+          text: source.outsideVaultLabel,
+          cls: "tw-ml-2 tw-rounded-md tw-bg-secondary-alt tw-px-1.5 tw-py-0.5 tw-text-ui-smaller",
+        });
+      } else {
+        link = itemContainer.createEl("a", {
+          href: `obsidian://open?vault=${encodeURIComponent(this.app.vault.getName())}&file=${encodeURIComponent(source.path || source.title)}`,
+          text: displayText,
+        });
+        link.title = `${displayText} - drag to insert wikilink`;
+        link.draggable = true;
+        link.addEventListener("dragstart", (e) => {
+          const filePath = source.path || source.title;
+          const file = this.app.vault.getAbstractFileByPath(filePath);
+          if (file instanceof TFile) {
+            const dragManager = (
+              this.app as unknown as {
+                dragManager?: {
+                  dragLink: (e: DragEvent, text: string) => unknown;
+                  onDragStart: (e: DragEvent, data: unknown) => void;
+                };
+              }
+            ).dragManager;
+            if (!dragManager) return;
+            const linkText = this.app.metadataCache.fileToLinktext(file, "");
+            const dragData = dragManager.dragLink(e, linkText);
+            dragManager.onDragStart(e, dragData);
+          }
+        });
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.app.workspace.openLinkText(source.path || source.title, "").catch(logError);
+        });
+      }
 
-      // Display with 4 decimals to match SearchCore logs and avoid apparent ties
       if (typeof source.score === "number") {
         itemContainer.appendChild(
           this.contentEl.doc.createTextNode(` - Relevance score: ${source.score.toFixed(4)}`)
         );
       }
 
-      // Add explanation if available (initially hidden)
       let explanationDiv: HTMLElement | null = null;
       if (source.explanation) {
         explanationDiv = this.addExplanation(item, source.explanation);
-        explanationDiv.addClass("tw-hidden"); // Initially collapsed
+        explanationDiv.addClass("tw-hidden");
 
-        // Toggle expansion on click
         itemContainer.addEventListener("click", (e) => {
-          if (e.target === link) return; // Don't toggle when clicking the link
+          if (e.target === link) return;
 
           if (explanationDiv) {
             const isExpanded = !explanationDiv.hasClass("tw-hidden");
@@ -118,11 +123,9 @@ export class SourcesModal extends Modal {
       "tw-border-l-border"
     );
 
-    // Cast to a typed record for safe property access
     const exp = explanation as Record<string, unknown>;
     const details: string[] = [];
 
-    // Add lexical matches
     if (exp.lexicalMatches && (exp.lexicalMatches as unknown[]).length > 0) {
       const lexicalMatches = exp.lexicalMatches as { field: string; query: string }[];
       const fields = new Set(lexicalMatches.map((m) => m.field));
@@ -132,12 +135,10 @@ export class SourcesModal extends Modal {
       );
     }
 
-    // Add semantic score
     if (exp.semanticScore !== undefined && (exp.semanticScore as number) > 0) {
       details.push(`Semantic: ${((exp.semanticScore as number) * 100).toFixed(1)}% similarity`);
     }
 
-    // Add folder boost
     if (exp.folderBoost) {
       const fb = exp.folderBoost as { boostFactor: number; documentCount: number; folder?: string };
       details.push(
@@ -145,7 +146,6 @@ export class SourcesModal extends Modal {
       );
     }
 
-    // Add graph connections (new query-aware boost)
     if (exp.graphConnections) {
       const gc = exp.graphConnections as {
         backlinks: number;
@@ -165,20 +165,17 @@ export class SourcesModal extends Modal {
       }
     }
 
-    // Add old graph boost (if still present for backwards compatibility)
     if (exp.graphBoost && !exp.graphConnections) {
       const gb = exp.graphBoost as { boostFactor: number; connections: number };
       details.push(`Graph boost: ${gb.boostFactor.toFixed(2)}x (${gb.connections} connections)`);
     }
 
-    // Add base vs final score if boosted
     if (exp.baseScore !== exp.finalScore) {
       details.push(
         `Score: ${(exp.baseScore as number).toFixed(4)} → ${(exp.finalScore as number).toFixed(4)}`
       );
     }
 
-    // Create explanation text without "Why this ranked here:" header
     if (details.length > 0) {
       details.forEach((detail) => {
         const detailDiv = explanationDiv.createDiv();

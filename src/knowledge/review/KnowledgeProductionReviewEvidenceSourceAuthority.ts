@@ -2,7 +2,6 @@ import { KnowledgeSourceExecutionPlan } from "@/knowledge/ingest/KnowledgeSource
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeReviewEvidenceSourceAuthorityPort } from "@/knowledge/review/KnowledgeProductionReviewEvidenceCoordinator";
 
-/** Dependencies retained by one production Review evidence source-authority bridge. */
 export interface KnowledgeProductionReviewEvidenceSourceAuthorityInput {
   readonly plan: KnowledgeSourceExecutionPlan;
   readonly bundleId: string;
@@ -20,12 +19,10 @@ const authorityStates = new WeakMap<
   KnowledgeProductionReviewEvidenceSourceAuthorityState
 >();
 
-/** Creates the platform-standard cancellation category without retaining a reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Re-proves caller cancellation and workflow ownership at one boundary. */
 function assertInvocation(
   state: KnowledgeProductionReviewEvidenceSourceAuthorityState,
   signal: AbortSignal
@@ -35,7 +32,6 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Returns hidden state only for an authentic source-authority instance. */
 function requireAuthorityState(
   value: unknown
 ): KnowledgeProductionReviewEvidenceSourceAuthorityState {
@@ -51,19 +47,11 @@ function requireAuthorityState(
   return state;
 }
 
-/** Reports whether one input is a canonical non-empty identifier. */
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/**
- * Resolves current Review citation sources only through an authenticated workflow plan.
- *
- * Every invocation re-proves the exact Bundle Manifest/schema/profile generation, then
- * requires a unique Manifest source and an identical retained watch-plan path and key.
- */
 export class KnowledgeProductionReviewEvidenceSourceAuthority implements KnowledgeReviewEvidenceSourceAuthorityPort {
-  /** Captures one exact workflow plan and Bundle owner. */
   constructor(input: KnowledgeProductionReviewEvidenceSourceAuthorityInput) {
     if (
       typeof input !== "object" ||
@@ -86,7 +74,6 @@ export class KnowledgeProductionReviewEvidenceSourceAuthority implements Knowled
     Object.freeze(this);
   }
 
-  /** Re-proves and resolves one exact registered source as a path-only frozen receipt. */
   async resolve(
     bundleId: string,
     sourceId: string,

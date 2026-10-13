@@ -17,7 +17,6 @@ import {
 const STALE_RESULT = Object.freeze({ kind: "stale" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 
-/** Scalar-only terminal decision projection that discloses no accepted body or receipt. */
 export interface KnowledgeProductionForwardRevisionTerminalDecisionResult {
   readonly kind: "accepted" | "rejected";
   readonly outcome: "decided" | "already_decided";
@@ -28,7 +27,6 @@ export interface KnowledgeProductionForwardRevisionTerminalDecisionResult {
   readonly decisionStoreRevision: number;
 }
 
-/** Scalar-only result for an edited acceptance already equal to current Wiki bytes. */
 export interface KnowledgeProductionForwardRevisionNoChangeResult {
   readonly kind: "no_change";
   readonly proposalId: string;
@@ -36,7 +34,6 @@ export interface KnowledgeProductionForwardRevisionNoChangeResult {
   readonly contentHash: string;
 }
 
-/** Closed production decision result with no proposal, body, citation, or receipt material. */
 export type KnowledgeProductionForwardRevisionDecisionResult =
   | Readonly<KnowledgeProductionForwardRevisionTerminalDecisionResult>
   | Readonly<KnowledgeProductionForwardRevisionNoChangeResult>
@@ -51,12 +48,10 @@ interface CoordinatorState {
 
 const coordinatorStates = new WeakMap<object, Readonly<CoordinatorState>>();
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Re-proves the exact production generation and both owner-bound dependencies. */
 function assertCoordinatorCurrent(state: Readonly<CoordinatorState>, signal?: AbortSignal): void {
   try {
     if (signal?.aborted) throw createAbortError();
@@ -80,7 +75,6 @@ function assertCoordinatorCurrent(state: Readonly<CoordinatorState>, signal?: Ab
   }
 }
 
-/** Returns hidden state only for one exact module-created coordinator receiver. */
 function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   let prototype: object | null;
   try {
@@ -100,7 +94,6 @@ function requireCoordinatorState(value: unknown): Readonly<CoordinatorState> {
   return state;
 }
 
-/** Detaches one genuine terminal Runtime result into the public scalar-only result. */
 function projectTerminalResult(
   result: Readonly<KnowledgeForwardRevisionDecisionResult>,
   command: Readonly<KnowledgeForwardRevisionReviewCommandV1>
@@ -116,7 +109,6 @@ function projectTerminalResult(
   });
 }
 
-/** Maps a genuine validator failure without exposing lower-level causes or caller material. */
 function mapValidationFailure(
   state: Readonly<CoordinatorState>,
   error: unknown
@@ -142,7 +134,6 @@ function mapValidationFailure(
   return UNAVAILABLE_RESULT;
 }
 
-/** Maps a genuine Runtime decision failure into the closed public result vocabulary. */
 function mapDecisionFailure(
   error: unknown
 ): Readonly<KnowledgeProductionForwardRevisionDecisionResult> {
@@ -154,15 +145,7 @@ function mapDecisionFailure(
   return UNAVAILABLE_RESULT;
 }
 
-/**
- * Coordinates strict pending admission, genuine validation, and atomic Runtime decision.
- *
- * The coordinator never accepts a validation capability from its caller. Acceptance
- * passes the original process-local capability returned by its retained genuine
- * validator directly into the adjacent genuine Runtime decision call.
- */
 export class KnowledgeProductionForwardRevisionDecisionCoordinator {
-  /** Captures one exact production workflow generation and its least-authority ports. */
   constructor(
     validator: KnowledgeProductionForwardRevisionValidationCoordinator,
     decisions: KnowledgeRuntimeForwardRevisionDecisionPort,
@@ -181,7 +164,6 @@ export class KnowledgeProductionForwardRevisionDecisionCoordinator {
     }
   }
 
-  /** Requires one live exact coordinator owned by the supplied execution lifecycle. */
   static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
@@ -193,19 +175,6 @@ export class KnowledgeProductionForwardRevisionDecisionCoordinator {
     }
   }
 
-  /**
-   * Decides one strict command while preserving abort-before-CAS and commit-wins-after-CAS.
-   *
-   * Rejection enters Runtime directly after strict pending admission. Acceptance first
-   * completes the genuine deterministic validator sandwich. A byte-identical edited
-   * acceptance returns `no_change` and performs no Runtime mutation. Once the genuine
-   * decision port is invoked, it owns ambiguity recovery and the returned durable result
-   * is not replaced by a later caller abort or generation closure.
-   *
-   * @param commandValue - Strict command bound to one exact pending proposal
-   * @param signal - Caller cancellation signal honored until the decision CAS boundary
-   * @returns Frozen scalar-only terminal, no-change, stale, or unavailable result
-   */
   async decide(
     commandValue: unknown,
     signal: AbortSignal

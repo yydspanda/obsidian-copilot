@@ -1,4 +1,3 @@
-/** Fail-closed phases exposed while the plugin's knowledge feature starts. */
 export type KnowledgePluginStartupStatus =
   | "waiting_for_layout"
   | "runtime_unavailable"
@@ -13,13 +12,11 @@ export type KnowledgePluginStartupStatus =
   | "workflow_read_ready";
 
 interface KnowledgePluginStartupStateBase {
-  /** Latest-wins generation that published this observation. */
   generation: number;
-  /** Sanitized fail-closed startup phase. */
+
   status: KnowledgePluginStartupStatus;
 }
 
-/** Safe, immutable startup observation suitable for plugin/UI wiring. */
 export type KnowledgePluginStartupState =
   | (KnowledgePluginStartupStateBase & { status: "waiting_for_layout" })
   | (KnowledgePluginStartupStateBase & { status: "runtime_unavailable" })
@@ -55,19 +52,14 @@ export type KnowledgePluginStartupState =
       bundleIds: readonly string[];
     });
 
-/** Synchronous Runtime readiness proof checked before project files are read. */
 export interface KnowledgePluginRuntimeAvailabilityPort {
-  /** Reports whether the durable Runtime foundation initialized successfully. */
   isAvailable(): boolean;
 }
 
-/** Project initialization boundary that must finish after Obsidian layout readiness. */
 export interface KnowledgePluginProjectsPort {
-  /** Initializes project storage/cache before any Bundle configuration is loaded. */
   initialize(signal: AbortSignal): Promise<void>;
 }
 
-/** Safe aggregate returned after project-owned Bundle loading and validation. */
 export type KnowledgePluginBundleConfigLoadResult =
   | { kind: "unconfigured" }
   | { kind: "invalid"; diagnosticCodes: readonly string[] }
@@ -78,7 +70,6 @@ export type KnowledgePluginBundleConfigLoadResult =
       observation?: KnowledgePluginObservationStartupPort;
     };
 
-/** Sanitized one-shot result returned by the production recovery boundary. */
 export type KnowledgePluginRecoveryStartupResult =
   | { kind: "observed_clear" }
   | {
@@ -88,25 +79,20 @@ export type KnowledgePluginRecoveryStartupResult =
     }
   | { kind: "unavailable"; diagnosticCode: string };
 
-/** One-shot recovery capability captured from the exact configured generation. */
 export interface KnowledgePluginRecoveryStartupPort {
-  /** Runs recovery observation/roll-forward without releasing or claiming Queue work. */
   start(signal: AbortSignal): Promise<KnowledgePluginRecoveryStartupResult>;
-  /** Permanently closes this recovery generation and suppresses stale publication. */
+
   close(): void;
 }
 
-/** One long-lived observation capability started only after recovery is clear. */
 export interface KnowledgePluginObservationStartupPort {
-  /** Starts listener-first observation for the exact current startup generation. */
   start(signal: AbortSignal): Promise<KnowledgePluginObservationStartupResult>;
-  /** Re-proves observation and conditionally releases the held startup Queue. */
+
   release?(signal: AbortSignal): Promise<KnowledgePluginObservationReleaseResult>;
-  /** Permanently closes the live watcher and suppresses stale publication. */
+
   close(): void;
 }
 
-/** Sanitized observation result accepted by the startup barrier. */
 export type KnowledgePluginObservationStartupResult =
   | Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }>
   | Readonly<{
@@ -116,44 +102,34 @@ export type KnowledgePluginObservationStartupResult =
     }>
   | Readonly<{ kind: "diagnostic"; code: string }>;
 
-/** Sanitized result of the optional fresh Gate/release hand-off. */
 export type KnowledgePluginObservationReleaseResult =
   | Readonly<{ kind: "released"; bundleIds: readonly string[] }>
   | Readonly<{ kind: "blocked"; bundleId: string }>
   | Readonly<{ kind: "observation_changed"; bundleId: string }>;
 
-/** Read-only boundary for validated project knowledge Bundle configuration. */
 export interface KnowledgePluginBundleConfigPort {
-  /**
-   * Loads a safe aggregate only after project initialization succeeds.
-   */
   load(signal: AbortSignal): Promise<KnowledgePluginBundleConfigLoadResult>;
 }
 
-/**
- * Studio availability boundary used by the startup barrier.
- */
 export interface KnowledgeStudioStartupAvailabilityPort {
-  /** Installs an unavailable delegate/notice for the supplied safe startup state. */
   setUnavailable(state: KnowledgePluginStartupState): void;
-  /** Publishes exact Bundle selection after a released read adapter is staged. */
+
   setReadReady(
     state: Extract<KnowledgePluginStartupState, { status: "workflow_read_ready" }>
   ): void;
-  /** Publishes the exact stopped Bundle after its recovery-only delegate was staged. */
+
   setRecoveryReady?(
     state: Extract<
       KnowledgePluginStartupState,
       { status: "recovery_attention_required" | "recovery_blocked" }
     >
   ): void;
-  /** Publishes the exact stopped Bundle after its source-lifecycle-only delegate was staged. */
+
   setSourceRecoveryReady?(
     state: Extract<KnowledgePluginStartupState, { status: "source_recovery_required" }>
   ): void;
 }
 
-/** Dependencies of the pure plugin startup-ordering barrier. */
 export interface KnowledgePluginStartupBarrierDependencies {
   runtime: KnowledgePluginRuntimeAvailabilityPort;
   projects: KnowledgePluginProjectsPort;
@@ -161,7 +137,6 @@ export interface KnowledgePluginStartupBarrierDependencies {
   studio: KnowledgeStudioStartupAvailabilityPort;
 }
 
-/** Callback notified after a current generation publishes a safe state. */
 export type KnowledgePluginStartupStateListener = () => void;
 
 const BUNDLE_CONFIG_LOAD_FAILED = "bundle_config_load_failed";
@@ -190,12 +165,6 @@ const SAFE_RECOVERY_ATTENTION_KINDS = new Set([
   "transaction_recovery_required",
 ]);
 
-/**
- * Creates one frozen state with no raw error or untrusted configuration data.
- *
- * @param state - Safe state fields
- * @returns Immutable state observation
- */
 function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T {
   if (state.status === "bundle_invalid" || state.status === "recovery_unavailable") {
     Object.freeze(state.diagnosticCodes);
@@ -219,12 +188,6 @@ function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T 
   return Object.freeze(state);
 }
 
-/**
- * Extracts deterministic diagnostic codes without exposing paths, messages, or raw input.
- *
- * @param codes - Potentially repeated validation diagnostic codes
- * @returns Sorted immutable code collection
- */
 function sanitizeDiagnosticCodes(
   codes: readonly unknown[],
   fallback: string = BUNDLE_CONFIG_INVALID
@@ -235,7 +198,6 @@ function sanitizeDiagnosticCodes(
   return Object.freeze(Array.from(new Set(safeCodes.length > 0 ? safeCodes : [fallback])).sort());
 }
 
-/** Sanitizes recovery attention categories through the same closed text boundary. */
 function sanitizeAttentionKinds(kinds: readonly unknown[]): readonly string[] | undefined {
   if (
     kinds.length === 0 ||
@@ -246,14 +208,12 @@ function sanitizeAttentionKinds(kinds: readonly unknown[]): readonly string[] | 
   return Object.freeze(Array.from(new Set(kinds as readonly string[])).sort());
 }
 
-/** Accepts only the fixed recovery composer diagnostic vocabulary. */
 function sanitizeRecoveryDiagnosticCode(code: unknown): string {
   return typeof code === "string" && SAFE_RECOVERY_DIAGNOSTIC_CODES.has(code)
     ? code
     : RECOVERY_RESULT_INVALID;
 }
 
-/** Accepts only a complete, value-free observation convergence result. */
 function isObservationConverged(
   value: unknown
 ): value is Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }> {
@@ -273,13 +233,11 @@ function isObservationConverged(
   );
 }
 
-/** Strict source-only startup recovery evidence retained while observation stays blocked. */
 interface KnowledgeSourceObservationRecoveryResult {
   readonly bundleId: string;
   readonly blockerKinds: readonly ["source_observation_pending"];
 }
 
-/** Reads one dense singleton array without invoking an indexed accessor. */
 function isExactSingletonStringArray(candidate: unknown, expected: string): boolean {
   if (!Array.isArray(candidate) || Reflect.ownKeys(candidate).length !== 2) return false;
   const length = Object.getOwnPropertyDescriptor(candidate, "length");
@@ -295,12 +253,6 @@ function isExactSingletonStringArray(candidate: unknown, expected: string): bool
   );
 }
 
-/**
- * Accepts only the exact, single-Bundle recoverable observation blocker shape.
- *
- * Generic observation pending cannot open a lifecycle surface because it may
- * have no missing/delete/rename issue a user can resolve.
- */
 function readSourceObservationRecoveryResult(
   value: unknown,
   configuredBundleIds: readonly string[]
@@ -342,7 +294,6 @@ function readSourceObservationRecoveryResult(
   });
 }
 
-/** Finds a callable data method without evaluating accessors on an injected object. */
 function hasCallableDataMethod(value: object, key: string): boolean {
   try {
     let current: object | null = value;
@@ -359,12 +310,6 @@ function hasCallableDataMethod(value: object, key: string): boolean {
   return false;
 }
 
-/**
- * Validates and canonicalizes Bundle identifiers without retaining aggregate input.
- *
- * @param bundleIds - Identifiers supplied by the project configuration adapter
- * @returns Frozen, code-unit-sorted unique identifiers, or undefined for malformed input
- */
 function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
   if (!Array.isArray(bundleIds) || bundleIds.length === 0) {
     return undefined;
@@ -379,16 +324,6 @@ function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
   return Object.freeze(Array.from(new Set(safeBundleIds)).sort());
 }
 
-/**
- * Coordinates plugin prerequisites and one exact recovery-only generation.
- *
- * Recovery is supplied as an opaque one-shot port only after strict Bundle and
- * zero-network production preflight validation. A separate observation port may
- * internally re-prove observation, conditionally release its Queue, and start a
- * background Compiler→Review worker. The barrier never receives direct Queue,
- * model, no-journal, or Wiki-write capability. A successful release may publish
- * read-ready only after the production observation port stages its live adapter.
- */
 export class KnowledgePluginStartupBarrier {
   private generation = 0;
   private activeRun?: { generation: number; controller: AbortController };
@@ -400,38 +335,20 @@ export class KnowledgePluginStartupBarrier {
   private state: KnowledgePluginStartupState;
   private readonly listeners = new Set<KnowledgePluginStartupStateListener>();
 
-  /**
-   * Creates a fail-closed barrier and immediately resets the supplied Studio delegate.
-   *
-   * @param dependencies - Narrow plugin startup boundaries
-   */
   constructor(private readonly dependencies: KnowledgePluginStartupBarrierDependencies) {
     this.state = freezeStartupState({ generation: 0, status: "waiting_for_layout" });
     this.dependencies.studio.setUnavailable(this.state);
   }
 
-  /** Returns the latest immutable, sanitized startup observation. */
   getState(): KnowledgePluginStartupState {
     return this.state;
   }
 
-  /**
-   * Subscribes to current-generation state publications.
-   *
-   * @param listener - Callback that can read the latest state through `getState`
-   * @returns Idempotent unsubscribe callback
-   */
   subscribe(listener: KnowledgePluginStartupStateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  /**
-   * Runs the ordered checks after Obsidian reports layout readiness.
-   *
-   * A new call aborts and supersedes the prior generation. The Studio delegate
-   * is reset synchronously before the first awaited project operation.
-   */
   async startAfterLayout(): Promise<void> {
     this.activeRun?.controller.abort();
     this.closeActiveObservation();
@@ -485,12 +402,6 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
-  /**
-   * Cancels an active generation without allowing its eventual completion to publish.
-   *
-   * Cancellation itself remains fail-closed and returns observation to the
-   * pre-layout waiting phase for a future explicit rerun.
-   */
   cancel(): void {
     if (!this.activeRun && !this.activeRecovery && !this.activeObservation) {
       return;
@@ -503,11 +414,6 @@ export class KnowledgePluginStartupBarrier {
     this.publish(generation, freezeStartupState({ generation, status: "waiting_for_layout" }));
   }
 
-  /**
-   * Converts a Runtime readiness exception into the same safe unavailable result.
-   *
-   * @returns Whether the Runtime foundation is available
-   */
   private isRuntimeAvailable(): boolean {
     try {
       return this.dependencies.runtime.isAvailable();
@@ -516,25 +422,12 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
-  /**
-   * Reports whether an awaited continuation still owns publication authority.
-   *
-   * @param generation - Generation captured by the continuation
-   * @param signal - Run-local cancellation signal
-   * @returns Whether the continuation is current and not aborted
-   */
   private isCurrent(generation: number, signal: AbortSignal): boolean {
     return (
       !signal.aborted && this.generation === generation && this.activeRun?.generation === generation
     );
   }
 
-  /**
-   * Publishes sanitized invalid-Bundle evidence for the current generation.
-   *
-   * @param generation - Generation owning the validation result
-   * @param diagnosticCodes - Stable parser/validator codes
-   */
   private publishInvalidBundle(generation: number, diagnosticCodes: readonly string[]): void {
     this.publish(
       generation,
@@ -546,12 +439,6 @@ export class KnowledgePluginStartupBarrier {
     );
   }
 
-  /**
-   * Publishes one validated aggregate result without retaining its source object.
-   *
-   * @param generation - Generation owning the aggregate result
-   * @param result - Safe project configuration aggregate
-   */
   private async publishBundleResult(
     generation: number,
     result: KnowledgePluginBundleConfigLoadResult,
@@ -609,7 +496,6 @@ export class KnowledgePluginStartupBarrier {
     this.publishInvalidBundle(generation, [BUNDLE_CONFIG_RESULT_INVALID]);
   }
 
-  /** Reads an optional own data recovery port without invoking an accessor. */
   private readRecoveryPort(
     result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
   ): KnowledgePluginRecoveryStartupPort | undefined | null {
@@ -629,7 +515,6 @@ export class KnowledgePluginStartupBarrier {
     return candidate as KnowledgePluginRecoveryStartupPort;
   }
 
-  /** Reads an optional own data observation port without invoking an accessor. */
   private readObservationPort(
     result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
   ): KnowledgePluginObservationStartupPort | undefined | null {
@@ -648,7 +533,6 @@ export class KnowledgePluginStartupBarrier {
     return candidate as KnowledgePluginObservationStartupPort;
   }
 
-  /** Closes an observation supplied by a malformed or recovery-only result. */
   private closeObservationSafelyFromResult(
     result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
   ): void {
@@ -658,7 +542,6 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
-  /** Runs recovery and retains only an exact attention session for the recovery UI. */
   private async runRecovery(
     generation: number,
     signal: AbortSignal,
@@ -768,7 +651,6 @@ export class KnowledgePluginStartupBarrier {
     this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
   }
 
-  /** Starts and retains one observation session after a clear recovery result. */
   private async startObservation(
     generation: number,
     signal: AbortSignal,
@@ -829,7 +711,6 @@ export class KnowledgePluginStartupBarrier {
     return "observed";
   }
 
-  /** Publishes one fixed-code recovery failure without reclassifying Bundle configuration. */
   private publishRecoveryUnavailable(
     generation: number,
     bundleIds: readonly string[],
@@ -846,7 +727,6 @@ export class KnowledgePluginStartupBarrier {
     );
   }
 
-  /** Closes the currently running recovery capability during replacement or cancellation. */
   private closeActiveRecovery(): void {
     const recovery = this.activeRecovery;
     this.activeRecovery = undefined;
@@ -855,14 +735,12 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
-  /** Closes one exact retained recovery session without disturbing a replacement. */
   private closeRecoverySession(recovery: KnowledgePluginRecoveryStartupPort): void {
     if (this.activeRecovery !== recovery) return;
     this.activeRecovery = undefined;
     this.closeRecoverySafely(recovery);
   }
 
-  /** Closes the current long-lived observation capability during replacement/cancellation. */
   private closeActiveObservation(): void {
     const session = this.activeObservation;
     this.activeObservation = undefined;
@@ -871,11 +749,6 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
-  /**
-   * Closes an observation only while the exact generation session still owns it.
-   *
-   * @param session - Observation session captured before an awaited continuation
-   */
   private closeObservationSession(session: {
     generation: number;
     port: KnowledgePluginObservationStartupPort;
@@ -885,7 +758,6 @@ export class KnowledgePluginStartupBarrier {
     this.closeObservationSafely(session.port);
   }
 
-  /** Isolates observation cleanup so generation invalidation remains authoritative. */
   private closeObservationSafely(
     observation: KnowledgePluginObservationStartupPort | undefined
   ): void {
@@ -894,24 +766,19 @@ export class KnowledgePluginStartupBarrier {
       observation.close();
     } catch {
       // Observation authority is already revoked by generation and signal checks.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 
-  /** Isolates recovery cleanup so fail-closed lifecycle state remains authoritative. */
   private closeRecoverySafely(recovery: KnowledgePluginRecoveryStartupPort): void {
     try {
       recovery.close();
     } catch {
       // Recovery publication authority is already revoked by generation and signal checks.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 
-  /**
-   * Resets Studio first, then exposes the same unavailable state to observers.
-   *
-   * @param generation - Generation owning the publication
-   * @param state - Frozen safe state
-   */
   private publish(generation: number, state: KnowledgePluginStartupState): void {
     if (generation !== this.generation) {
       return;
@@ -942,6 +809,7 @@ export class KnowledgePluginStartupBarrier {
         listener();
       } catch {
         // Observers are non-authoritative and cannot interrupt startup or one another.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
   }

@@ -36,13 +36,11 @@ const EFFECTIVE_HEAD_KEYS = [
   "origin",
 ] as const;
 
-/** Exact source-base and effective-head fields shared by applied-Wiki readers. */
 export type KnowledgeAppliedWikiEffectivePageHead = Pick<
   KnowledgeEffectiveManifestPage,
   "sourceAppliedContentHash" | "effectiveContentHash" | "contentHash" | "origin"
 >;
 
-/** Page identity used to correlate a detached effective-head projection. */
 export interface KnowledgeAppliedWikiEffectivePageHeadContext {
   readonly bundleId?: string;
   readonly pagePath: string;
@@ -51,9 +49,7 @@ export interface KnowledgeAppliedWikiEffectivePageHeadContext {
   readonly sourceIds?: readonly string[];
 }
 
-/** Sanitized rejection for an invalid applied-Wiki effective head. */
 export class KnowledgeAppliedWikiEffectivePageHeadError extends TypeError {
-  /** Creates one value-free effective-head validation failure. */
   constructor() {
     super("Applied Wiki effective-page head does not satisfy the strict contract");
     this.name = "KnowledgeAppliedWikiEffectivePageHeadError";
@@ -61,12 +57,10 @@ export class KnowledgeAppliedWikiEffectivePageHeadError extends TypeError {
   }
 }
 
-/** Throws one fixed effective-head validation failure. */
 function invalid(): never {
   throw new KnowledgeAppliedWikiEffectivePageHeadError();
 }
 
-/** Snapshots an exact plain data record without invoking accessors. */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -95,7 +89,6 @@ function snapshotExactRecord(
   }
 }
 
-/** Reads one enumerable own data kind without invoking an accessor. */
 function readKind(value: unknown): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -106,7 +99,6 @@ function readKind(value: unknown): unknown {
   }
 }
 
-/** Snapshots a canonical v2 forward overlay without accepting legacy wire shapes. */
 function snapshotForwardOverlay(value: unknown): Readonly<KnowledgeForwardRevisionOverlayEntry> {
   const record = snapshotExactRecord(value, FORWARD_REVISION_OVERLAY_V2_KEYS);
   if (
@@ -123,7 +115,6 @@ function snapshotForwardOverlay(value: unknown): Readonly<KnowledgeForwardRevisi
   }
 }
 
-/** Snapshots and correlates one effective-page origin with its owning page. */
 function snapshotOrigin(
   value: unknown,
   context: Readonly<KnowledgeAppliedWikiEffectivePageHeadContext>,
@@ -159,16 +150,6 @@ function snapshotOrigin(
   return Object.freeze({ kind: "forward_revision" as const, overlay });
 }
 
-/**
- * Strictly snapshots one applied-Wiki source base, effective head, and exact origin.
- *
- * Legacy overlay records are migration inputs at the Manifest boundary only; a
- * production read projection must already carry the canonical v2 lineage.
- *
- * @param value - Unknown exact four-field effective-head record
- * @param context - Already-validated owning page identity and contributing Sources
- * @returns Detached frozen effective-head authority
- */
 export function snapshotKnowledgeAppliedWikiEffectivePageHead(
   value: unknown,
   context: Readonly<KnowledgeAppliedWikiEffectivePageHeadContext>

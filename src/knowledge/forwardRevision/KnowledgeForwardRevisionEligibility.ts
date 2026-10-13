@@ -3,30 +3,24 @@ import {
   snapshotKnowledgeForwardRevisionIntent,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
 
-/** Current exact-file classification used by forward-revision protocol precheck. */
 export type KnowledgeForwardRevisionCurrentState = "applied" | "drifted" | "missing";
 
-/** Bounded historical detail availability used by forward-revision admission. */
 export type KnowledgeForwardRevisionHistoricalDetailState =
   | "available"
   | "too_large"
   | "stale"
   | "unavailable";
 
-/** Durable workflow gate observed before a forward revision may enter Review. */
 export type KnowledgeForwardRevisionBlocker =
   | "none"
   | "source_busy"
   | "transaction_busy"
   | "recovery_required";
 
-/** Deterministic validation state observed before durable proposal admission. */
 export type KnowledgeForwardRevisionValidationState = "valid" | "invalid" | "unavailable";
 
-/** Existing exact-intent relationship observed before durable proposal admission. */
 export type KnowledgeForwardRevisionPendingProposalState = "none" | "exact" | "conflict";
 
-/** Stable facts required by every intentionally narrow protocol admission precheck. */
 interface KnowledgeForwardRevisionProtocolAdmissionCommonInput {
   readonly intent: unknown;
   readonly historicalDetail: KnowledgeForwardRevisionHistoricalDetailState;
@@ -49,28 +43,24 @@ interface KnowledgeForwardRevisionProtocolAdmissionCommonInput {
   readonly blocker: KnowledgeForwardRevisionBlocker;
 }
 
-/** Applied observation carries both exact current-file hashes. */
 interface KnowledgeForwardRevisionAppliedObservation {
   readonly currentState: "applied";
   readonly currentContentHash: string;
   readonly vaultObservedBeforeHash: string;
 }
 
-/** Drift observation carries one exact changed Vault observation in both hash slots. */
 interface KnowledgeForwardRevisionDriftedObservation {
   readonly currentState: "drifted";
   readonly currentContentHash: string;
   readonly vaultObservedBeforeHash: string;
 }
 
-/** Missing observation cannot claim current Vault bytes. */
 interface KnowledgeForwardRevisionMissingObservation {
   readonly currentState: "missing";
   readonly currentContentHash: null;
   readonly vaultObservedBeforeHash: null;
 }
 
-/** Pure strictly discriminated facts for the narrow protocol admission precheck. */
 export type KnowledgeForwardRevisionProtocolAdmissionInput =
   KnowledgeForwardRevisionProtocolAdmissionCommonInput &
     (
@@ -79,7 +69,6 @@ export type KnowledgeForwardRevisionProtocolAdmissionInput =
       | KnowledgeForwardRevisionMissingObservation
     );
 
-/** Closed safe reasons why the first protocol admission precheck cannot proceed. */
 export type KnowledgeForwardRevisionProtocolIneligibilityReason =
   | "current_drifted"
   | "current_missing"
@@ -107,7 +96,6 @@ export type KnowledgeForwardRevisionProtocolIneligibilityReason =
   | "intent_mismatch"
   | "input_invalid";
 
-/** Closed result of the pure first-release protocol admission precheck. */
 export type KnowledgeForwardRevisionProtocolAdmission =
   | Readonly<{ eligible: true; intentId: string; intentDigest: string }>
   | Readonly<{ eligible: false; reason: KnowledgeForwardRevisionProtocolIneligibilityReason }>;
@@ -145,7 +133,6 @@ const results = new Map<
   Readonly<{ eligible: false; reason: KnowledgeForwardRevisionProtocolIneligibilityReason }>
 >();
 
-/** Returns one shared frozen closed failure result. */
 function ineligible(
   reason: KnowledgeForwardRevisionProtocolIneligibilityReason
 ): Readonly<{ eligible: false; reason: KnowledgeForwardRevisionProtocolIneligibilityReason }> {
@@ -156,7 +143,6 @@ function ineligible(
   return created;
 }
 
-/** Reads one exact plain record entirely through own enumerable data descriptors. */
 function snapshotRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -187,7 +173,6 @@ function snapshotRecord(value: unknown): Readonly<Record<string, unknown>> | und
   }
 }
 
-/** Captures one bounded dense source-id array without invoking accessors. */
 function snapshotSourceIds(value: unknown): readonly string[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -221,7 +206,6 @@ function snapshotSourceIds(value: unknown): readonly string[] | undefined {
   }
 }
 
-/** Reports whether a value is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -233,7 +217,6 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -249,7 +232,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -258,22 +240,10 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/**
- * Prechecks whether exact facts satisfy the deliberately narrow R3c-a protocol.
- *
- * This is protocol admission only, not complete or user-visible feature
- * eligibility. Every future durable boundary must independently re-prove all
- * authority. The function never throws. Reasons are evaluated in stable order
- * so a caller cannot infer later workflow state from invalid or stale input.
- *
- * @param value - Unknown descriptor-safe eligibility facts
- * @returns Frozen closed eligibility result
- */
 export function classifyKnowledgeForwardRevisionProtocolAdmission(
   value: unknown
 ): KnowledgeForwardRevisionProtocolAdmission {

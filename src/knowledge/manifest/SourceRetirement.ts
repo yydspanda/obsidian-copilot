@@ -11,22 +11,13 @@ import type {
 } from "@/knowledge/model/types";
 import { sha256 } from "@/utils/hash";
 
-/** Reserved Bundle-level Manifest extension containing durable source tombstones. */
 export const KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY =
   "obsidianCopilotKnowledgeSourceRetirements" as const;
 
-/** Current strict source-retirement tombstone format. */
 export const KNOWLEDGE_SOURCE_RETIREMENT_VERSION = 1 as const;
 
-/** Why an active source identity was explicitly retired. */
 export type KnowledgeSourceRetirementReason = "user_requested" | "source_missing";
 
-/**
- * Immutable historical source state retained after the source leaves the active Manifest set.
- *
- * The complete source entry keeps Apply and no-change proofs auditable while
- * `manifest.entries` remains an active-only operational projection.
- */
 export interface KnowledgeSourceRetirementRecord {
   version: typeof KNOWLEDGE_SOURCE_RETIREMENT_VERSION;
   retirementId: string;
@@ -38,7 +29,6 @@ export interface KnowledgeSourceRetirementRecord {
   source: SourceManifestEntry;
 }
 
-/** Input used to create one content-addressed retirement record. */
 export interface CreateKnowledgeSourceRetirementRecordInput {
   bundleId: string;
   requestToken: string;
@@ -70,7 +60,6 @@ const sourceRetirementRecordSchema: z.ZodType<KnowledgeSourceRetirementRecord> =
 
 const sourceRetirementRecordsSchema = z.array(sourceRetirementRecordSchema);
 
-/** Converts one Zod issue path to a stable diagnostic field. */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") return `${result}[${segment}]`;
@@ -79,7 +68,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/** Maps strict tombstone parse failures without retaining rejected values. */
 function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.map((issue) => ({
     code: `source_retirement_schema_${issue.code}`,
@@ -89,17 +77,14 @@ function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/** Returns a detached JSON clone of one strict JSON-compatible value. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Compares identifiers without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates the canonical record core whose digest forms retirementId. */
 function createRetirementIdentityCore(
   input: CreateKnowledgeSourceRetirementRecordInput
 ): Omit<KnowledgeSourceRetirementRecord, "retirementId"> {
@@ -114,19 +99,12 @@ function createRetirementIdentityCore(
   };
 }
 
-/** Computes one content-addressed source-retirement identity. */
 function createRetirementId(core: Omit<KnowledgeSourceRetirementRecord, "retirementId">): string {
   return `knowledge-source-retirement-${sha256(
     `knowledge-source-retirement-v1\n${canonicalizeJson(core as unknown as JsonValue)}`
   )}`;
 }
 
-/**
- * Strictly parses the reserved tombstone extension from one Source Manifest.
- *
- * @param manifest - Strict outer Manifest whose extension bag is inspected
- * @returns Detached retirement records or stable diagnostics
- */
 export function parseKnowledgeSourceRetirements(
   manifest: Readonly<SourceManifest>
 ): KnowledgeParseResult<KnowledgeSourceRetirementRecord[]> {
@@ -175,12 +153,6 @@ export function parseKnowledgeSourceRetirements(
   return { ok: true, value: records };
 }
 
-/**
- * Creates one strict content-addressed retirement tombstone.
- *
- * @param input - Exact source state and retirement commit boundary
- * @returns Detached strict tombstone
- */
 export function createKnowledgeSourceRetirementRecord(
   input: CreateKnowledgeSourceRetirementRecordInput
 ): KnowledgeSourceRetirementRecord {
@@ -196,13 +168,6 @@ export function createKnowledgeSourceRetirementRecord(
   return cloneJson(parsed.data);
 }
 
-/**
- * Finds one retired source by stable source identity.
- *
- * @param manifest - Strict Manifest containing protected retirement history
- * @param sourceId - Stable source identifier
- * @returns Detached tombstone, undefined, or a strict parse failure
- */
 export function findKnowledgeSourceRetirement(
   manifest: Readonly<SourceManifest>,
   sourceId: string
@@ -214,13 +179,6 @@ export function findKnowledgeSourceRetirement(
   return parsed.value.find((record) => record.source.sourceId === sourceId);
 }
 
-/**
- * Returns active and retired history for one source without treating a tombstone as active.
- *
- * @param manifest - Strict current Source Manifest
- * @param sourceId - Stable source identifier
- * @returns Active entry first, otherwise the archived tombstone entry
- */
 export function findKnowledgeSourceHistoryEntry(
   manifest: Readonly<SourceManifest>,
   sourceId: string
@@ -231,12 +189,6 @@ export function findKnowledgeSourceHistoryEntry(
   );
 }
 
-/**
- * Lists every active and retired source history entry.
- *
- * @param manifest - Strict current Source Manifest
- * @returns Detached entries with active identities first
- */
 export function listKnowledgeSourceHistoryEntries(
   manifest: Readonly<SourceManifest>
 ): SourceManifestEntry[] {
@@ -250,13 +202,6 @@ export function listKnowledgeSourceHistoryEntries(
   ];
 }
 
-/**
- * Moves one active source into protected Bundle retirement history.
- *
- * @param manifest - Exact current Manifest
- * @param record - Tombstone whose revision and source must match the transition
- * @returns Next strict Manifest proposal
- */
 export function projectKnowledgeSourceRetirement(
   manifest: Readonly<SourceManifest>,
   record: Readonly<KnowledgeSourceRetirementRecord>

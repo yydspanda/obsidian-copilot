@@ -16,7 +16,6 @@ import { createFileContentHash } from "@/knowledge/model/fingerprint";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 
-/** Creates one resolver with an inspectable strict request seam. */
 function createResolver(
   implementation: (
     requests: readonly CompilerTargetRequest[],
@@ -44,7 +43,6 @@ function createResolver(
   };
 }
 
-/** Requires one sanitized reader error code. */
 async function expectReaderError(promise: Promise<unknown>, code: string): Promise<void> {
   await expect(promise).rejects.toMatchObject({
     name: "KnowledgeOutputObservationReaderError",

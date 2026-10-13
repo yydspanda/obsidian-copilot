@@ -16,13 +16,11 @@ import { sha256 } from "@/utils/hash";
 const MAX_SNAPSHOT_NODES = 100_000;
 const MAX_SNAPSHOT_DEPTH = 64;
 
-/** Minimal durable Manifest authority required by source registration. */
 export type KnowledgeSourceRegistrationManifestPort = Pick<
   SourceManifestRepository,
   "load" | "registerSource"
 >;
 
-/** One already-authorized source registration request. */
 export interface KnowledgeSourceRegistrationRequest {
   bundleId: string;
   sourceRoot: string;
@@ -32,18 +30,15 @@ export interface KnowledgeSourceRegistrationRequest {
   existingPathPolicy: "reuse_path" | "exact";
 }
 
-/** Exact durable effect produced by registration. */
 export interface KnowledgeSourceRegistrationResult {
   status: "registered" | "already_registered";
   entry: SourceManifestEntry;
 }
 
-/** Read-only compatibility result returned before a caller-owned file mutation. */
 export interface KnowledgeSourceRegistrationPreflightResult {
   status: "available" | "already_registered";
 }
 
-/** Narrow generation proof injected by the owning production adapter. */
 export interface KnowledgeSourceRegistrationGenerationPort {
   assertCurrent(): void;
 }
@@ -61,21 +56,17 @@ interface JsonSnapshotBudget {
   remainingNodes: number;
 }
 
-/** Reports an existing path whose durable registration metadata is not reusable. */
 export class KnowledgeSourceRegistrationMetadataConflictError extends Error {
-  /** Creates a value-free metadata conflict without retaining source data or paths. */
   constructor() {
     super("The existing knowledge source registration metadata does not match");
     this.name = "KnowledgeSourceRegistrationMetadataConflictError";
   }
 }
 
-/** Creates the standard cancellation category for stale registration work. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Proves caller cancellation and the owning production generation together. */
 function assertCurrent(
   signal: AbortSignal,
   generation: KnowledgeSourceRegistrationGenerationPort
@@ -89,12 +80,10 @@ function assertCurrent(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Compares strings by code unit without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Reads one enumerable own data property without invoking an accessor. */
 function readDataProperty(value: object, key: string): unknown {
   let descriptor: PropertyDescriptor | undefined;
   try {
@@ -108,7 +97,6 @@ function readDataProperty(value: object, key: string): unknown {
   return descriptor.value;
 }
 
-/** Captures one detached, bounded JSON value without evaluating accessors. */
 function snapshotJsonValue(
   value: unknown,
   budget: JsonSnapshotBudget = { remainingNodes: MAX_SNAPSHOT_NODES },
@@ -189,7 +177,6 @@ function snapshotJsonValue(
   }
 }
 
-/** Requires one strict non-empty string without normalizing its identity. */
 function captureIdentifier(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError("Knowledge source registration input is invalid");
@@ -197,7 +184,6 @@ function captureIdentifier(value: unknown): string {
   return value;
 }
 
-/** Snapshots the complete registration request before the first async boundary. */
 function captureRegistrationRequest(value: unknown): KnowledgeSourceRegistrationSnapshot {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Knowledge source registration input is invalid");
@@ -251,7 +237,6 @@ function captureRegistrationRequest(value: unknown): KnowledgeSourceRegistration
   });
 }
 
-/** Captures and validates one complete Manifest returned by the injected port. */
 function captureManifest(value: unknown, bundleId: string): Readonly<SourceManifest> {
   const snapshot = snapshotJsonValue(value);
   const parsed = parseSourceManifest(snapshot);
@@ -265,7 +250,6 @@ function captureManifest(value: unknown, bundleId: string): Readonly<SourceManif
   return snapshot as unknown as Readonly<SourceManifest>;
 }
 
-/** Captures and validates one registered entry returned after the durable write. */
 function captureRegisteredEntry(value: unknown, bundleId: string): SourceManifestEntry {
   const entry = snapshotJsonValue(value);
   const manifest = Object.freeze({
@@ -281,20 +265,12 @@ function captureRegisteredEntry(value: unknown, bundleId: string): SourceManifes
   return entry as unknown as SourceManifestEntry;
 }
 
-/** Creates one stable opaque source identity from its canonical Windows path identity. */
 function createSourceId(bundleId: string, sourcePath: string): string {
   return `source-${sha256(
     `obsidian-copilot-knowledge-source-v1\n${bundleId.length}:${bundleId}\n${toWindowsPathKey(sourcePath)}`
   )}`;
 }
 
-/**
- * Compares exact caller-owned registration metadata while tolerating Runtime-owned keys.
- *
- * Runtime commit metadata is added after successful apply, so an exact replay
- * checks every requested extension key but does not require the persisted bag to
- * contain only those keys.
- */
 function matchesExactRegistration(
   entry: SourceManifestEntry,
   request: Readonly<KnowledgeSourceRegistrationSnapshot>
@@ -313,30 +289,12 @@ function matchesExactRegistration(
   return true;
 }
 
-/**
- * Reusable, least-authority source registration primitive.
- *
- * Callers must decide parser eligibility and file custody before invoking this
- * class. The core independently enforces the supplied source root, reuses an
- * existing path identity, and performs no Queue, file, model, or UI work.
- */
 export class KnowledgeSourceRegistrationCore {
-  /** Creates one registration core over an injected Manifest and generation proof. */
   constructor(
     private readonly manifest: KnowledgeSourceRegistrationManifestPort,
     private readonly generation: KnowledgeSourceRegistrationGenerationPort
   ) {}
 
-  /**
-   * Proves whether one exact registration can be reused before a file is copied.
-   *
-   * This is an advisory read-set, not a reservation. {@link register} repeats the
-   * same proof after the caller-owned file operation and remains authoritative.
-   *
-   * @param request - Authorized Bundle, root, path, custody, and provenance
-   * @param signal - Caller and generation cancellation
-   * @returns Whether the path is absent or already carries compatible metadata
-   */
   async preflight(
     request: Readonly<KnowledgeSourceRegistrationRequest>,
     signal: AbortSignal
@@ -371,14 +329,6 @@ export class KnowledgeSourceRegistrationCore {
     return Object.freeze({ status: "already_registered" });
   }
 
-  /**
-   * Registers one source idempotently inside its exact authorized root.
-   *
-   * @param request - Authorized Bundle, root, path, custody, and provenance
-   * @param signal - Caller and generation cancellation
-   * @param onDurableRegistration - Recovery hook invoked immediately after a new durable write
-   * @returns Exact durable registration result
-   */
   async register(
     request: Readonly<KnowledgeSourceRegistrationRequest>,
     signal: AbortSignal,
@@ -437,9 +387,7 @@ export class KnowledgeSourceRegistrationCore {
     ) {
       throw new KnowledgeSourceRegistrationMetadataConflictError();
     }
-    // The Manifest write is already durable at this boundary. Notify the owner
-    // before post-write reproof so it can schedule recovery even when cancellation
-    // or generation replacement wins immediately after commit.
+
     onDurableRegistration?.();
     assertCurrent(signal, this.generation);
     return { status: "registered", entry };

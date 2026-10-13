@@ -23,11 +23,6 @@ const DISPLAY_NAME_TO_LEGACY_PROVIDER: Record<string, ChatModelProviders> = {
   siliconflow: ChatModelProviders.SILICONFLOW,
 };
 
-/**
- * Legacy selections used `wireModelId|ChatModelProviders`; keep them resolvable
- * during migration. A model may have been persisted under different provider
- * spellings depending on how it was selected, so enumerate every plausible form.
- */
 function getLegacyChatModelKeys(entry: ResolvedChatBackendEntry): readonly string[] {
   const providers = new Set<ChatModelProviders>([
     mapProviderTypeToChatModelProvider(entry.provider),
@@ -71,12 +66,6 @@ export function hasAmbiguousPersistedChatModelSelection(
   ).hasAmbiguousOwner;
 }
 
-/**
- * Finds exact selection matches before considering the narrow DeepSeek Flash alias.
- *
- * @param entries - Enabled backend rows from the current registry snapshot
- * @param selection - Persisted configured-model ID or legacy `name|provider` key
- */
 export function findChatBackendEntryMatches(
   entries: readonly EnabledBackendEntry[],
   selection: string
@@ -88,19 +77,18 @@ export function findChatBackendEntryMatches(
     .matches;
 }
 
-/**
- * Resolve a persisted chat selection. New writes are configured-model IDs, while legacy
- * `name|provider` keys remain readable for settings, project files, and command frontmatter.
- */
 export function findChatBackendEntry(
   entries: readonly EnabledBackendEntry[],
   preferredSelection: string | undefined,
+  fallbackToFirst = true,
   inventory?: ChatModelSelectionInventory
 ): ResolvedChatBackendEntry | undefined {
   const okEntries = entries.filter(
     (entry): entry is ResolvedChatBackendEntry => entry.state === "ok"
   );
-  if (!preferredSelection) return okEntries[0];
+  // Commands must ask for a model instead of silently changing providers. https://github.com/Brevilabs/obsidian-copilot-private/issues/616
+  const fallback = fallbackToFirst ? okEntries[0] : undefined;
+  if (!preferredSelection) return fallback;
 
   const resolution = resolveDeepSeekChatModelSelection(
     okEntries,
@@ -115,14 +103,14 @@ export function findChatBackendEntry(
   // providers retain the historical stale-selection fallback.
   // https://github.com/yydspanda/obsidian-copilot/issues/3
   if (resolution.mustFailClosed) return undefined;
-  return resolution.matches[0] ?? okEntries[0];
+  return resolution.matches[0] ?? fallback;
 }
 
-/** Return the configured-model ID represented by either a new or legacy selection. */
 export function resolveChatModelSelectionId(
   entries: readonly EnabledBackendEntry[],
   selection: string | undefined,
+  fallbackToFirst = true,
   inventory?: ChatModelSelectionInventory
 ): string | undefined {
-  return findChatBackendEntry(entries, selection, inventory)?.configuredModelId;
+  return findChatBackendEntry(entries, selection, fallbackToFirst, inventory)?.configuredModelId;
 }

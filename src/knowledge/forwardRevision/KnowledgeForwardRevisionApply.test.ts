@@ -77,7 +77,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates the exact latest applied source state shared by acceptance and Apply. */
 function createAppliedAuthority(runtimeRevision = 20): KnowledgeForwardRevisionAcceptanceAuthority {
   const runtimeDigest = runtimeRevision === 20 ? HASH_E : HASH_D;
   return {
@@ -111,7 +110,6 @@ function createAppliedAuthority(runtimeRevision = 20): KnowledgeForwardRevisionA
   };
 }
 
-/** Creates one pending proposal bound to the current generated page. */
 function createProposal() {
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
@@ -181,7 +179,6 @@ function createProposal() {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates a deterministic validation receipt for the exact accepted body. */
 function createValidationReceipt(
   proposal: ReturnType<typeof createProposal>,
   authority: KnowledgeForwardRevisionAcceptanceAuthority,
@@ -237,7 +234,6 @@ function createValidationReceipt(
   };
 }
 
-/** Creates one exact current source Manifest entry. */
 function createSourceEntry(): SourceManifestEntry {
   return {
     sourceId: "source-1",
@@ -264,7 +260,6 @@ function createSourceEntry(): SourceManifestEntry {
   };
 }
 
-/** Creates a complete accepted-to-committed forward Apply fixture. */
 function createApplyFixture() {
   const proposal = createProposal();
   const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
@@ -323,7 +318,6 @@ function createApplyFixture() {
   };
 }
 
-/** Creates one exact no-write terminal proof for an active recovery journal. */
 function createRecoveryTerminalForJournal(
   journal: Readonly<KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2>,
   observedAt: number
@@ -373,7 +367,6 @@ function createRecoveryTerminalForJournal(
   });
 }
 
-/** Reconstructs one authentic v1 ledger fixture from shared canonical scalar fields. */
 function createLegacyLedgerFixture(
   ledger: ReturnType<typeof createKnowledgeForwardRevisionApplyLedgerRecord>
 ) {

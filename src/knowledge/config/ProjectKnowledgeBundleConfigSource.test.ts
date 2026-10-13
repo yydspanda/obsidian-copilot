@@ -4,13 +4,6 @@ import {
 } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 
-/**
- * Creates a valid Bundle with independent default boundaries.
- *
- * @param id - Stable Bundle identity
- * @param overrides - Fields to replace for one scenario
- * @returns Strict Bundle configuration
- */
 function createBundle(
   id: string,
   overrides: Partial<KnowledgeBundleConfig> = {}

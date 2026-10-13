@@ -2,15 +2,12 @@ jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPor
   type Operation = () => Promise<unknown>;
   const operations = new WeakMap<object, Operation>();
 
-  /** Test-only exact adapter used to exercise lease authenticity and revocation. */
   class MockKnowledgeProductionForwardRevisionProposalActionAdapter {
-    /** Mints one exact adapter around a controlled operation. */
     constructor(operation: Operation) {
       operations.set(this, operation);
       Object.freeze(this);
     }
 
-    /** Requires one exact test adapter instance. */
     static assert(
       value: unknown
     ): asserts value is MockKnowledgeProductionForwardRevisionProposalActionAdapter {
@@ -25,7 +22,6 @@ jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPor
       }
     }
 
-    /** Runs the operation retained by this exact adapter. */
     async proposeKnownOutput(): Promise<unknown> {
       const operation = operations.get(this);
       if (!operation) throw new DOMException("The operation was aborted", "AbortError");
@@ -48,7 +44,6 @@ const SESSION = Object.freeze({}) as Readonly<KnowledgeKnownAppliedWikiOutputsSe
 const OUTPUT_REF = `known-wiki-output-${"5".repeat(64)}`;
 const REVIEW_REF = `forward-studio-review-${"7".repeat(64)}`;
 
-/** Mints one test-authentic adapter through the mocked production boundary. */
 function createAdapter(
   operation: () => Promise<unknown> = async () => Object.freeze({ kind: "stale" as const })
 ): KnowledgeProductionForwardRevisionProposalActionAdapter {
@@ -58,7 +53,6 @@ function createAdapter(
   return new Constructor(operation);
 }
 
-/** Requires one operation to throw platform-standard cancellation. */
 function expectAbortError(operation: () => void): void {
   let caught: unknown;
   try {

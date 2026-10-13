@@ -31,7 +31,6 @@ const VALIDATION_PENDING: KnowledgeValidationSummary = {
   linksValid: false,
 };
 
-/** Creates the exact Windows knowledge Bundle used by apply-validator tests. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -43,7 +42,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one parser-owned text artifact with an optionally distinct identity. */
 function createArtifact(overrides: Partial<TextArtifactObservation> = {}): TextArtifactObservation {
   return {
     kind: "text",
@@ -55,7 +53,6 @@ function createArtifact(overrides: Partial<TextArtifactObservation> = {}): TextA
   };
 }
 
-/** Creates one structurally valid quote locator for the primary artifact. */
 function createLocator(excerpt = SOURCE_TEXT): SourceLocator {
   return {
     kind: "quote",
@@ -67,7 +64,6 @@ function createLocator(excerpt = SOURCE_TEXT): SourceLocator {
   };
 }
 
-/** Creates one material citation backed by the primary parser artifact. */
 function createCitation(excerpt = SOURCE_TEXT): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -77,7 +73,6 @@ function createCitation(excerpt = SOURCE_TEXT): ClaimCitation {
   };
 }
 
-/** Creates one valid generated OKF concept page. */
 function createConceptChange(
   afterContent = `---\ntype: topic\ntitle: Apply Validation\ntags: [knowledge]\nconfidence: 0.9\n---\n\n# Apply Validation\n\n${SOURCE_TEXT}\n`,
   path = "Wiki/Apply Validation.md"
@@ -94,7 +89,6 @@ function createConceptChange(
   };
 }
 
-/** Creates one structurally valid delete that production generation must reject. */
 function createDeleteChange(): Extract<KnowledgeFileChange, { operation: "delete" }> {
   return {
     id: "change-delete",
@@ -106,7 +100,6 @@ function createDeleteChange(): Extract<KnowledgeFileChange, { operation: "delete
   };
 }
 
-/** Creates one proposed review ChangeSet around exact supplied material. */
 function createChangeSet(
   changes: KnowledgeFileChange[] = [createConceptChange()],
   citations: ClaimCitation[] = [createCitation()],
@@ -125,7 +118,6 @@ function createChangeSet(
   };
 }
 
-/** Creates the exact input passed to deterministic review-time validation. */
 function createReviewInput(
   candidate: KnowledgeChangeSet,
   proposal: KnowledgeChangeSet = createChangeSet()
@@ -143,7 +135,6 @@ function createReviewInput(
   };
 }
 
-/** Runs one review validation with a live caller-owned cancellation signal. */
 async function validateReview(candidate: KnowledgeChangeSet) {
   const validator = new KnowledgeProductionReviewCandidateValidator(createBundle(), [
     createArtifact(),

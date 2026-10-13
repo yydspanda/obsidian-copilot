@@ -33,14 +33,11 @@ import {
 import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 import { sha256 } from "@/utils/hash";
 
-/** Official DeepSeek OpenAI-compatible API origin reviewed for this route. */
 export const KNOWLEDGE_DEEPSEEK_API_BASE_URL = "https://api.deepseek.com" as const;
 
-/** Exact non-streaming chat endpoint; redirects and alternate hosts are rejected. */
 export const KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT =
   "https://api.deepseek.com/chat/completions" as const;
 
-/** Current DeepSeek transport behavior and resource contract. */
 export const KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT = Object.freeze({
   version: 1,
   contextTokens: 1_000_000,
@@ -79,7 +76,6 @@ const DEEPSEEK_MODEL_IDENTITY_POLICY = SUPPORTED_DEEPSEEK_MODEL_IDENTITIES.map(
   })
 );
 
-/** Exact reviewed transport behavior identity for pipeline fingerprinting. */
 export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
   `knowledge-deepseek-private-route-v2\n${canonicalizeJson({
     endpoint: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
@@ -93,7 +89,6 @@ export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
   })}`
 );
 
-/** Exact reviewed transport behavior identity for read-only grounded answers. */
 export const KNOWLEDGE_DEEPSEEK_GROUNDED_ANSWER_ROUTE_IDENTITY = sha256(
   `knowledge-deepseek-grounded-answer-route-v2\n${canonicalizeJson({
     endpoint: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
@@ -107,7 +102,6 @@ export const KNOWLEDGE_DEEPSEEK_GROUNDED_ANSWER_ROUTE_IDENTITY = sha256(
 
 const GROUNDED_ANSWER_MAX_OUTPUT_TOKENS = 8_192;
 
-/** Minimal streamed HTTP response required from a native-fetch-compatible port. */
 export interface KnowledgeDeepSeekHttpResponse {
   status: number;
   redirected: boolean;
@@ -116,13 +110,11 @@ export interface KnowledgeDeepSeekHttpResponse {
   body: ReadableStream<Uint8Array> | null;
 }
 
-/** Narrow HTTP capability injected by the Windows production composer. */
 export type KnowledgeDeepSeekFetchPort = (
   url: string,
   init: RequestInit
 ) => Promise<KnowledgeDeepSeekHttpResponse>;
 
-/** Stable, credential-free DeepSeek transport failure categories. */
 export type KnowledgeDeepSeekTransportErrorCode =
   | "dependency_invalid"
   | "profile_invalid"
@@ -162,16 +154,13 @@ const DEEPSEEK_TRANSPORT_ERROR_CODES = new Set<KnowledgeDeepSeekTransportErrorCo
   "response_invalid",
 ]);
 
-/** Creates one authentic sanitized DeepSeek transport failure. */
 function createDeepSeekTransportError(
   code: KnowledgeDeepSeekTransportErrorCode
 ): KnowledgeDeepSeekTransportError {
   return new KnowledgeDeepSeekTransportError(DEEPSEEK_TRANSPORT_ERROR_TOKEN, code);
 }
 
-/** Sanitized provider failure retaining no URL, prompt, response, key, or cause. */
 export class KnowledgeDeepSeekTransportError extends Error {
-  /** Creates one error only when called by this module's private helper. */
   constructor(token: symbol, code: KnowledgeDeepSeekTransportErrorCode) {
     super("The private DeepSeek knowledge request failed");
     if (token !== DEEPSEEK_TRANSPORT_ERROR_TOKEN || !DEEPSEEK_TRANSPORT_ERROR_CODES.has(code)) {
@@ -182,13 +171,11 @@ export class KnowledgeDeepSeekTransportError extends Error {
     Object.freeze(this);
   }
 
-  /** Reads one authentic error without accepting constructor/prototype forgery. */
   static inspect(value: unknown): KnowledgeDeepSeekTransportErrorCode | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     return deepSeekTransportErrorCodes.get(value);
   }
 
-  /** Returns the stable sanitized transport code retained in hidden state. */
   get code(): KnowledgeDeepSeekTransportErrorCode {
     const code = KnowledgeDeepSeekTransportError.inspect(this);
     if (code === undefined) {
@@ -201,7 +188,6 @@ export class KnowledgeDeepSeekTransportError extends Error {
 Object.freeze(KnowledgeDeepSeekTransportError.prototype);
 Object.freeze(KnowledgeDeepSeekTransportError);
 
-/** Reads only module-recorded DeepSeek failure identity, never an exposed mutable property. */
 function classifyDeepSeekTransportFailure(
   error: unknown
 ): KnowledgePrivateModelProviderFailureCode | undefined {
@@ -243,26 +229,21 @@ interface JsonSnapshotBudget {
   characters: number;
 }
 
-/** Internal cancellation class used without inspecting arbitrary thrown values. */
 class KnowledgeDeepSeekAbortError extends Error {
-  /** Creates one sanitized cancellation. */
   constructor() {
     super("The private DeepSeek knowledge request was aborted");
     this.name = "AbortError";
   }
 }
 
-/** Creates a sanitized cancellation without retaining an arbitrary abort reason. */
 function createAbortError(): Error {
   return new KnowledgeDeepSeekAbortError();
 }
 
-/** Compares strings by code unit without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Checks an exact own string-key set without reading property values. */
 function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -278,7 +259,6 @@ function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean 
   }
 }
 
-/** Reads one enumerable own data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("Expected an object");
@@ -290,7 +270,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Reads one optional enumerable own data property without invoking an accessor. */
 function readOptionalDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("Expected an object");
@@ -303,7 +282,6 @@ function readOptionalDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Creates one detached JSON snapshot before any asynchronous provider work. */
 function snapshotProfile(profile: KnowledgeBundlePipelineProfile): KnowledgeBundlePipelineProfile {
   try {
     return snapshotJsonValue(
@@ -317,7 +295,6 @@ function snapshotProfile(profile: KnowledgeBundlePipelineProfile): KnowledgeBund
   }
 }
 
-/** Creates a detached frozen JSON graph without invoking accessors. */
 function snapshotJsonValue(
   value: unknown,
   budget: JsonSnapshotBudget,
@@ -398,7 +375,6 @@ function snapshotJsonValue(
   }
 }
 
-/** Validates exact DeepSeek behavior without silently dropping generic settings. */
 function captureConfiguration(value: unknown): CapturedDeepSeekConfiguration {
   try {
     const expectedKeys = [...REQUIRED_CONFIGURATION_KEYS, ...OPTIONAL_CONFIGURATION_KEYS].filter(
@@ -476,7 +452,6 @@ function captureConfiguration(value: unknown): CapturedDeepSeekConfiguration {
   }
 }
 
-/** Captures a complete profile so non-model prompt behavior remains route-bound. */
 function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedDeepSeekProfile {
   const profile = snapshotProfile(profileValue);
   try {
@@ -552,7 +527,6 @@ function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedD
   }
 }
 
-/** Validates a credential without retaining it in an error or public descriptor. */
 function captureCredential(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -566,7 +540,6 @@ function captureCredential(value: unknown): string {
   return value;
 }
 
-/** Maps an HTTP status to a stable category without reading the response body. */
 function createHttpError(status: number): KnowledgeDeepSeekTransportError {
   if (status === 400 || status === 422) {
     return createDeepSeekTransportError("request_rejected");
@@ -580,26 +553,25 @@ function createHttpError(status: number): KnowledgeDeepSeekTransportError {
   return createDeepSeekTransportError("http_failed");
 }
 
-/** Starts best-effort reader cancellation without delaying the authoritative failure. */
 function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
   try {
     void reader.cancel().catch(() => undefined);
   } catch {
     // Cancellation is advisory after the caller's authority has already failed.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Starts unread-body cancellation without consuming data or delaying a failure. */
 function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
   if (!body) return;
   try {
     void body.cancel().catch(() => undefined);
   } catch {
     // A failed cancellation must not expose provider or native-fetch details.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Reads a non-streaming API envelope incrementally so bytes are bounded pre-decode. */
 async function readBoundedResponseBytes(
   response: KnowledgeDeepSeekHttpResponse,
   signal: AbortSignal
@@ -678,12 +650,12 @@ async function readBoundedResponseBytes(
       reader.releaseLock();
     } catch {
       // The reader may already be released or errored; no provider detail escapes.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
   return bounded.slice(0, totalBytes);
 }
 
-/** Parses only the provider envelope and returns the untouched JSON content string. */
 function parseProviderResponse(
   bytes: Uint8Array,
   expectedModel: string,
@@ -763,7 +735,6 @@ function parseProviderResponse(
   }
 }
 
-/** Creates the exact DeepSeek request body for one compiler stage. */
 function createRequestBody(
   stage: KnowledgePrivateModelStage,
   request: Readonly<CompilerGenerationRequest>,
@@ -808,7 +779,6 @@ function createRequestBody(
   return encoded;
 }
 
-/** Executes one already-encoded exact POST with no retry, fallback, or repair. */
 async function executeDeepSeekRequest(
   body: string,
   expectedModel: string,
@@ -868,7 +838,6 @@ async function executeDeepSeekRequest(
   return parseProviderResponse(bytes, expectedModel, maxTokens);
 }
 
-/** Executes one exact Compiler POST with no transport-level retry, fallback, or repair. */
 async function invokeDeepSeek(
   stage: KnowledgePrivateModelStage,
   request: Readonly<CompilerGenerationRequest>,
@@ -890,7 +859,6 @@ async function invokeDeepSeek(
   );
 }
 
-/** Creates the exact one-shot DeepSeek body for a grounded-answer request. */
 function createGroundedAnswerRequestBody(
   request: Readonly<KnowledgeGroundedAnswerRequest>,
   captured: CapturedDeepSeekProfile
@@ -933,7 +901,6 @@ function createGroundedAnswerRequestBody(
   return Object.freeze({ body: encoded, maxTokens });
 }
 
-/** Executes one exact grounded-answer POST through the reviewed private transport. */
 async function invokeGroundedAnswerDeepSeek(
   request: Readonly<KnowledgeGroundedAnswerRequest>,
   signal: AbortSignal,
@@ -954,13 +921,6 @@ async function invokeGroundedAnswerDeepSeek(
   );
 }
 
-/**
- * Creates one full-profile-bound private DeepSeek route.
- *
- * The caller must pass a native-fetch-backed port already bound to the owning
- * Windows renderer lifecycle. The factory captures only the exact profile,
- * plaintext credential, and port; it never reads settings or logs provider data.
- */
 export function createKnowledgeDeepSeekPrivateRoute(
   profile: KnowledgeBundlePipelineProfile,
   apiKeyValue: string,
@@ -981,13 +941,6 @@ export function createKnowledgeDeepSeekPrivateRoute(
   );
 }
 
-/**
- * Creates one Bundle-bound, read-only DeepSeek grounded-answer model route.
- *
- * It shares only the reviewed HTTP mechanics with the Compiler route. The
- * prompt, request authority, response schema, and lifecycle port remain
- * independent, so Query cannot invoke either Compiler stage.
- */
 export function createKnowledgeDeepSeekGroundedAnswerModelRoute(
   profile: KnowledgeBundlePipelineProfile,
   apiKeyValue: string,

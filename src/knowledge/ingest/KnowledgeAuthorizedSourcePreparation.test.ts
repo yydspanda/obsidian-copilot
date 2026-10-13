@@ -38,7 +38,6 @@ const SCHEMA_BYTES = new TextEncoder().encode("# Knowledge schema\n");
 const SOURCE_BYTES = new TextEncoder().encode("# Source\nExact text\n");
 const SOURCE_HASH = createSourceContentHash(SOURCE_BYTES);
 
-/** Creates the one project-owned Bundle used by authorization tests. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -51,7 +50,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: "project-personal", config };
 }
 
-/** Creates the exact durable Manifest shared by Runtime and workflow authorities. */
 function createManifest(revision = 1): SourceManifest {
   return {
     version: 1,
@@ -68,7 +66,6 @@ function createManifest(revision = 1): SourceManifest {
   };
 }
 
-/** Creates a valid same-revision Runtime Manifest that disagrees with workflow authority. */
 function createMismatchedRuntimeManifest(): SourceManifest {
   const manifest = createManifest();
   const sourcePath = "Sources/Runtime-Only.md";
@@ -78,7 +75,6 @@ function createMismatchedRuntimeManifest(): SourceManifest {
   };
 }
 
-/** Creates the one parser profile advertised by the test plan. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -88,7 +84,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates a detached, credential-free pipeline profile. */
 function createProfile(temperature = 0.2): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -129,7 +124,6 @@ interface WorkflowHarness {
   };
 }
 
-/** Creates a strict authentic workflow-plan loader with mutable test authorities. */
 function createWorkflowHarness(): WorkflowHarness {
   const owner = createOwner();
   const executionOwner = createKnowledgeExecutionOwner();
@@ -182,7 +176,6 @@ function createWorkflowHarness(): WorkflowHarness {
   };
 }
 
-/** Runs one handler inside an authentic Runtime-backed Queue execution context. */
 async function runWithClaim(
   pipelineFingerprint: string,
   executionOwner: KnowledgeExecutionOwner,
@@ -207,7 +200,6 @@ async function runWithClaim(
   expect(result).toMatchObject({ kind: "executed", status: "completed" });
 }
 
-/** Captures one sanitized preparation error. */
 async function expectPreparationError(
   action: () => Promise<unknown>,
   code: KnowledgeAuthorizedSourcePreparationError["code"]

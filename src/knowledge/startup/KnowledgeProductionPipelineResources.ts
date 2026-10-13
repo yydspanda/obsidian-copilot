@@ -11,37 +11,26 @@ import {
 import { PdfPageKnowledgeByteParser } from "@/knowledge/parser/PdfPageKnowledgeByteParser";
 import { Utf8TextKnowledgeByteParser } from "@/knowledge/parser/Utf8TextKnowledgeByteParser";
 
-/** Exact production compiler behavior version included in every pipeline fingerprint. */
 // Full-source writing must not reuse a prior model-selected no-target outcome.
 // https://github.com/yydspanda/obsidian-copilot/issues/20
 export const KNOWLEDGE_PRODUCTION_COMPILER_VERSION = "knowledge-compiler-v4" as const;
 
-/** Current bounded UTF-8 source policy for the first Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS = Object.freeze({
   maxBytes: MAX_KNOWLEDGE_SOURCE_BYTES,
   maxCharacters: 8_000_000,
 });
 
-/** Current bounded PDF source policy for the Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS = Object.freeze({
   maxBytes: MAX_KNOWLEDGE_SOURCE_BYTES,
   maxPages: MAX_KNOWLEDGE_PARSED_PDF_PAGES,
   maxCharacters: 8_000_000,
 });
 
-/** Owned parser capabilities and their matching secret-free profile projection. */
 export interface KnowledgeProductionPipelineResources {
   parsers: readonly KnowledgeByteParser[];
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
 }
 
-/**
- * Creates one reviewed production parser registry and its exact profile options.
- *
- * The same factory is intended for startup preflight and the future worker so a
- * parser or compiler behavior change necessarily changes the pipeline identity.
- * No setting, credential, Vault service, or network capability enters this value.
- */
 export function createKnowledgeProductionPipelineResources(): KnowledgeProductionPipelineResources {
   const textParser = new Utf8TextKnowledgeByteParser({
     id: "knowledge-utf8-text",

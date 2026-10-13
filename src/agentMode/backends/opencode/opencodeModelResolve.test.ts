@@ -4,7 +4,6 @@ import { ChatModelProviders } from "@/constants";
 import {
   COPILOT_PLUS_OPENCODE_PROVIDER_ID,
   copilotPlusModelId,
-  isOpencodeZenWireId,
   mapProviderToOpencodeId,
   normalizeOpencodeSelectionBaseId,
   opencodeEnabledModelEntries,
@@ -12,7 +11,6 @@ import {
   resolveOpencodeConfiguredModelIdentity,
 } from "./opencodeModelResolve";
 
-/** Build a minimal `Provider` row for a given origin + type. */
 function makeProvider(
   providerId: string,
   origin: ProviderOrigin,
@@ -29,7 +27,6 @@ function makeProvider(
   };
 }
 
-/** Build a minimal `ConfiguredModel` row. */
 function makeModel(configuredModelId: string, providerId: string, wireId: string): ConfiguredModel {
   return {
     configuredModelId,
@@ -39,11 +36,6 @@ function makeModel(configuredModelId: string, providerId: string, wireId: string
   };
 }
 
-/**
- * Assemble a `CopilotSettings`-shaped object with only the slices
- * `opencodeEnabledModelEntries` reads. Cast through `unknown` since the resolver
- * touches just `backends` / `configuredModels` / `providers`.
- */
 function makeSettings(args: {
   enabledModels?: string[];
   configuredModels?: ConfiguredModel[];
@@ -61,7 +53,7 @@ function makeSettings(args: {
 
 describe("opencodeModelResolve", () => {
   describe("mapProviderToOpencodeId()", () => {
-    it("maps a BYOK provider with a catalog id to that id, non-native", () => {
+    it("maps a BYOK provider with a catalog id to that catalog id as non-native", () => {
       const provider = makeProvider("p1", { kind: "byok", catalogProviderId: "anthropic" });
       expect(mapProviderToOpencodeId(provider)).toEqual({ id: "anthropic", native: false });
     });
@@ -119,10 +111,6 @@ describe("opencodeModelResolve", () => {
       expect(mapProviderToOpencodeId(provider)).toEqual({ id: "p1", native: false });
     });
 
-    it("returns null for a google BYOK provider without a catalog id", () => {
-      expect(mapProviderToOpencodeId(makeProvider("p1", { kind: "byok" }, "google"))).toBeNull();
-    });
-
     it("maps copilot-plus origin to the reserved copilot-plus id, non-native", () => {
       const provider = makeProvider("p1", { kind: "copilot-plus" });
       expect(mapProviderToOpencodeId(provider)).toEqual({ id: "copilot-plus", native: false });
@@ -134,16 +122,6 @@ describe("opencodeModelResolve", () => {
         id: "opencode-provider",
         native: true,
       });
-    });
-  });
-
-  describe("isOpencodeZenWireId()", () => {
-    it("matches the opencode/ prefix only", () => {
-      expect(isOpencodeZenWireId("opencode/big-pickle")).toBe(true);
-      expect(isOpencodeZenWireId("opencode/deepseek-v4-flash-free")).toBe(true);
-      expect(isOpencodeZenWireId("lmstudio/gpt-oss-20b")).toBe(false);
-      expect(isOpencodeZenWireId("openrouter/anthropic/claude")).toBe(false);
-      expect(isOpencodeZenWireId("opencode-zen/x")).toBe(false); // prefix must be exactly `opencode/`
     });
   });
 
@@ -415,6 +393,196 @@ describe("opencodeModelResolve", () => {
       expect(entry.name).toBe("Big X");
     });
 
+    it("labels a custom OpenAI-compatible provider's models with the provider's display name instead of its UUID route id (https://github.com/logancyang/obsidian-copilot/issues/3496)", () => {
+      const customProviderId = "d5df8680-65f4-4c4b-81d2-7797550f47fe";
+      const settings = makeSettings({
+        enabledModels: ["named", "unnamed"],
+        providers: {
+          [customProviderId]: {
+            ...makeProvider(customProviderId, { kind: "byok" }, "openai-compatible"),
+            displayName: "custom-provider",
+          },
+        },
+        configuredModels: [
+          {
+            configuredModelId: "named",
+            providerId: customProviderId,
+            info: { id: "auto", displayName: "custom-model" },
+            configuredAt: 0,
+          },
+          {
+            configuredModelId: "unnamed",
+            providerId: customProviderId,
+            info: { id: "fast", displayName: "" },
+            configuredAt: 0,
+          },
+        ],
+      });
+      const [named, unnamed] = opencodeEnabledModelEntries(settings);
+      expect(named.baseModelId).toBe(`${customProviderId}/auto`);
+      expect(named.label).toBe("custom-provider/custom-model");
+      expect(unnamed.label).toBe("custom-provider/fast");
+    });
+
+    it("leaves a custom provider's models unlabeled when its display name is blank, so opencode's route-id label shows (https://github.com/logancyang/obsidian-copilot/issues/3496)", () => {
+      const customProviderId = "d5df8680-65f4-4c4b-81d2-7797550f47fe";
+      const settings = makeSettings({
+        enabledModels: ["named"],
+        providers: {
+          [customProviderId]: {
+            ...makeProvider(customProviderId, { kind: "byok" }, "openai-compatible"),
+            displayName: "   ",
+          },
+        },
+        configuredModels: [
+          {
+            configuredModelId: "named",
+            providerId: customProviderId,
+            info: { id: "auto", displayName: "custom-model" },
+            configuredAt: 0,
+          },
+        ],
+      });
+      const [entry] = opencodeEnabledModelEntries(settings);
+      expect(entry.baseModelId).toBe(`${customProviderId}/auto`);
+      expect(entry.label).toBeUndefined();
+    });
+
+    it("leaves Copilot Plus, catalog BYOK, and agent-native models unlabeled so opencode's own label shows (https://github.com/logancyang/obsidian-copilot/issues/3496)", () => {
+      const settings = makeSettings({
+        enabledModels: ["plus", "catalog", "native"],
+        providers: {
+          plus: makeProvider("plus", { kind: "copilot-plus" }),
+          catalog: byokProvider({ providerId: "catalog" }),
+          native: makeProvider("native", { kind: "agent", agentType: "opencode" }),
+        },
+        configuredModels: [
+          makeModel("plus", "plus", "copilot-plus-flash"),
+          makeModel("catalog", "catalog", "qwen/qwen3-max"),
+          makeModel("native", "native", "opencode/big-pickle"),
+        ],
+      });
+      const entries = opencodeEnabledModelEntries(settings);
+      expect(entries.map((e) => e.baseModelId)).toEqual([
+        "copilot-plus/copilot-plus-flash",
+        "openrouter/qwen/qwen3-max",
+        "opencode/big-pickle",
+      ]);
+      expect(entries.map((e) => e.label)).toEqual([undefined, undefined, undefined]);
+    });
+
+    it("treats agent-origin (native) models as ok regardless of key", () => {
+      const settings = makeSettings({
+        enabledModels: ["cm1"],
+        providers: { p1: makeProvider("p1", { kind: "agent", agentType: "opencode" }) },
+        configuredModels: [makeModel("cm1", "p1", "opencode/big-pickle")],
+      });
+      const [entry] = opencodeEnabledModelEntries(settings);
+      expect(entry.baseModelId).toBe("opencode/big-pickle");
+      expect(entry.credentialState).toBe("ok");
+    });
+
+    it("flags opencode Zen models (opencode/ prefix) as free, others not", () => {
+      const settings = makeSettings({
+        enabledModels: ["zen", "lms"],
+        providers: { p1: makeProvider("p1", { kind: "agent", agentType: "opencode" }) },
+        configuredModels: [
+          makeModel("zen", "p1", "opencode/big-pickle"),
+          makeModel("lms", "p1", "lmstudio/gpt-oss-20b"),
+        ],
+      });
+      const byId = new Map(opencodeEnabledModelEntries(settings).map((e) => [e.baseModelId, e]));
+      expect(byId.get("opencode/big-pickle")?.isFree).toBe(true);
+      expect(byId.get("lmstudio/gpt-oss-20b")?.isFree).toBe(false);
+    });
+
+    it("flags cloud-hosted models with needsSelfHostWarning when Self-Host Mode is on", () => {
+      const settings = makeSettings({
+        enableSelfHostMode: true,
+        enabledModels: ["cloud", "local"],
+        providers: {
+          pc: makeProvider(
+            "pc",
+            { kind: "byok", catalogProviderId: "openai" },
+            "anthropic",
+            "https://api.openai.com/v1"
+          ),
+          pl: makeProvider(
+            "pl",
+            { kind: "byok", catalogProviderId: "ollama" },
+            "anthropic",
+            "http://localhost:11434/v1"
+          ),
+        },
+        configuredModels: [makeModel("cloud", "pc", "gpt-4o"), makeModel("local", "pl", "llama3")],
+      });
+      const byId = new Map(opencodeEnabledModelEntries(settings).map((e) => [e.baseModelId, e]));
+      expect(byId.get("openai/gpt-4o")?.needsSelfHostWarning).toBe(true);
+      expect(byId.get("ollama/llama3")?.needsSelfHostWarning).toBe(false);
+    });
+
+    it("does not flag cloud models when Self-Host Mode is off", () => {
+      const settings = makeSettings({
+        enableSelfHostMode: false,
+        enabledModels: ["cloud"],
+        providers: {
+          pc: makeProvider(
+            "pc",
+            { kind: "byok", catalogProviderId: "openai" },
+            "anthropic",
+            "https://api.openai.com/v1"
+          ),
+        },
+        configuredModels: [makeModel("cloud", "pc", "gpt-4o")],
+      });
+      expect(opencodeEnabledModelEntries(settings)[0].needsSelfHostWarning).toBe(false);
+    });
+
+    it("returns the shared frozen empty array when nothing is enabled", () => {
+      const first = opencodeEnabledModelEntries(makeSettings({ enabledModels: [] }));
+      const second = opencodeEnabledModelEntries(makeSettings({ enabledModels: [] }));
+      expect(first).toHaveLength(0);
+      expect(first).toBe(second);
+    });
+
+    it("builds the `<provider>/<model>` wire base id for copilot-plus models", () => {
+      const settings = makeSettings({
+        enabledModels: ["cm1"],
+        providers: { p1: makeProvider("p1", { kind: "copilot-plus" }) },
+        configuredModels: [makeModel("cm1", "p1", "copilot-plus-flash")],
+      });
+      expect(opencodeEnabledModelEntries(settings)[0].baseModelId).toBe(
+        "copilot-plus/copilot-plus-flash"
+      );
+    });
+
+    it("skips models whose provider row is missing", () => {
+      const settings = makeSettings({
+        enabledModels: ["cm1"],
+        providers: {},
+        configuredModels: [makeModel("cm1", "p1", "claude-sonnet-4-6")],
+      });
+      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
+    });
+
+    it("skips models whose configured-model row is missing", () => {
+      const settings = makeSettings({
+        enabledModels: ["missing"],
+        providers: { p1: makeProvider("p1", { kind: "byok", catalogProviderId: "anthropic" }) },
+        configuredModels: [],
+      });
+      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
+    });
+
+    it("skips models on unroutable providers (BYOK without catalog id)", () => {
+      const settings = makeSettings({
+        enabledModels: ["cm1"],
+        providers: { p1: makeProvider("p1", { kind: "byok" }, "google") },
+        configuredModels: [makeModel("cm1", "p1", "some-google-model")],
+      });
+      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
+    });
+
     it("https://github.com/yydspanda/obsidian-copilot/issues/3 exposes canonical Flash and V4 Pro as distinct official DeepSeek options", () => {
       const deepseek = makeProvider(
         "deepseek-official",
@@ -479,128 +647,10 @@ describe("opencodeModelResolve", () => {
 
       expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
     });
-
-    it("treats agent-origin (native) models as ok regardless of key", () => {
-      const settings = makeSettings({
-        enabledModels: ["cm1"],
-        providers: { p1: makeProvider("p1", { kind: "agent", agentType: "opencode" }) },
-        configuredModels: [makeModel("cm1", "p1", "opencode/big-pickle")],
-      });
-      const [entry] = opencodeEnabledModelEntries(settings);
-      expect(entry.baseModelId).toBe("opencode/big-pickle");
-      expect(entry.credentialState).toBe("ok");
-    });
-
-    it("flags opencode Zen models (opencode/ prefix) as free, others not", () => {
-      const settings = makeSettings({
-        enabledModels: ["zen", "lms"],
-        providers: { p1: makeProvider("p1", { kind: "agent", agentType: "opencode" }) },
-        configuredModels: [
-          makeModel("zen", "p1", "opencode/big-pickle"),
-          makeModel("lms", "p1", "lmstudio/gpt-oss-20b"),
-        ],
-      });
-      const byId = new Map(opencodeEnabledModelEntries(settings).map((e) => [e.baseModelId, e]));
-      expect(byId.get("opencode/big-pickle")?.isFree).toBe(true);
-      expect(byId.get("lmstudio/gpt-oss-20b")?.isFree).toBe(false);
-    });
-
-    it("flags cloud-hosted models with needsSelfHostWarning when Self-Host Mode is on", () => {
-      // opencode is self-hostable, but it can host cloud BYOK providers — those
-      // models must still carry the cloud-egress warning; local ones must not.
-      const settings = makeSettings({
-        enableSelfHostMode: true,
-        enabledModels: ["cloud", "local"],
-        providers: {
-          pc: makeProvider(
-            "pc",
-            { kind: "byok", catalogProviderId: "openai" },
-            "anthropic",
-            "https://api.openai.com/v1"
-          ),
-          pl: makeProvider(
-            "pl",
-            { kind: "byok", catalogProviderId: "ollama" },
-            "anthropic",
-            "http://localhost:11434/v1"
-          ),
-        },
-        configuredModels: [makeModel("cloud", "pc", "gpt-4o"), makeModel("local", "pl", "llama3")],
-      });
-      const byId = new Map(opencodeEnabledModelEntries(settings).map((e) => [e.baseModelId, e]));
-      expect(byId.get("openai/gpt-4o")?.needsSelfHostWarning).toBe(true);
-      expect(byId.get("ollama/llama3")?.needsSelfHostWarning).toBe(false);
-    });
-
-    it("does not flag cloud models when Self-Host Mode is off", () => {
-      const settings = makeSettings({
-        enableSelfHostMode: false,
-        enabledModels: ["cloud"],
-        providers: {
-          pc: makeProvider(
-            "pc",
-            { kind: "byok", catalogProviderId: "openai" },
-            "anthropic",
-            "https://api.openai.com/v1"
-          ),
-        },
-        configuredModels: [makeModel("cloud", "pc", "gpt-4o")],
-      });
-      expect(opencodeEnabledModelEntries(settings)[0].needsSelfHostWarning).toBe(false);
-    });
-
-    it("returns the shared frozen empty array when nothing is enabled", () => {
-      const first = opencodeEnabledModelEntries(makeSettings({ enabledModels: [] }));
-      const second = opencodeEnabledModelEntries(makeSettings({ enabledModels: [] }));
-      expect(first).toHaveLength(0);
-      // Referential stability: the same frozen constant on every empty call.
-      expect(first).toBe(second);
-    });
-
-    it("builds the `<provider>/<model>` wire base id for copilot-plus models", () => {
-      const settings = makeSettings({
-        enabledModels: ["cm1"],
-        providers: { p1: makeProvider("p1", { kind: "copilot-plus" }) },
-        configuredModels: [makeModel("cm1", "p1", "copilot-plus-flash")],
-      });
-      expect(opencodeEnabledModelEntries(settings)[0].baseModelId).toBe(
-        "copilot-plus/copilot-plus-flash"
-      );
-    });
-
-    it("skips models whose provider row is missing", () => {
-      const settings = makeSettings({
-        enabledModels: ["cm1"],
-        providers: {},
-        configuredModels: [makeModel("cm1", "p1", "claude-sonnet-4-6")],
-      });
-      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
-    });
-
-    it("skips models whose configured-model row is missing", () => {
-      const settings = makeSettings({
-        enabledModels: ["missing"],
-        providers: { p1: makeProvider("p1", { kind: "byok", catalogProviderId: "anthropic" }) },
-        configuredModels: [],
-      });
-      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
-    });
-
-    it("skips models on unroutable providers (BYOK without catalog id)", () => {
-      const settings = makeSettings({
-        enabledModels: ["cm1"],
-        providers: { p1: makeProvider("p1", { kind: "byok" }, "google") },
-        configuredModels: [makeModel("cm1", "p1", "some-google-model")],
-      });
-      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
-    });
   });
 
   describe("COPILOT_PLUS_OPENCODE_PROVIDER_ID", () => {
     it("equals the Copilot provider id host code builds wire ids from", () => {
-      // `plusUtils.isUsingLicensedModels` reconstructs the prefixed wire id from
-      // `ChatModelProviders.COPILOT_PLUS`, because this module sits behind the
-      // desktop-only Agent Mode barrel. Drift would silently stop it matching.
       expect(COPILOT_PLUS_OPENCODE_PROVIDER_ID).toBe(ChatModelProviders.COPILOT_PLUS);
     });
   });
@@ -633,8 +683,6 @@ describe("opencodeModelResolve", () => {
     });
 
     it("answers for a configured model that no backend has enabled yet", () => {
-      // No `backends.opencode` slice at all: provider sync configures a model
-      // before enrolling it, and the id must be available in between.
       const settings = makeSettings({
         providers: { "plus-1": plusProvider },
         configuredModels: [makeModel("cm1", "plus-1", "copilot-plus-flash")],

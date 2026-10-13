@@ -8,7 +8,6 @@ import {
   type KnowledgeStartupReleasePort,
 } from "@/knowledge/recovery/KnowledgeStartupRelease";
 
-/** Creates one detached observed-clear Gate result for coordinator tests. */
 function createGateResult(
   disposition: KnowledgeStartupGateResult["disposition"] = "observed_clear"
 ): KnowledgeStartupGateResult {

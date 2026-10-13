@@ -16,13 +16,10 @@ import {
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_MAX_AUTHORITY_READ_ATTEMPTS = 3;
 
-/** Lifecycle assertion captured by one production freshness generation. */
 export interface KnowledgeSourceFreshnessGenerationPort {
-  /** Throws when the exact production generation no longer owns admission. */
   assertCurrent(): void;
 }
 
-/** Complete read-only dependencies for one production admission generation. */
 export interface KnowledgeSourceFreshnessAdmissionDependencies {
   authority: KnowledgeRuntimeSourceFreshnessAuthorityPort;
   outputs: KnowledgeOutputObservationReaderPort;
@@ -30,7 +27,6 @@ export interface KnowledgeSourceFreshnessAdmissionDependencies {
   maxAuthorityReadAttempts?: number;
 }
 
-/** Stable sanitized production freshness failures. */
 export type KnowledgeSourceFreshnessAdmissionErrorCode =
   | "dependency_invalid"
   | "request_invalid"
@@ -39,9 +35,7 @@ export type KnowledgeSourceFreshnessAdmissionErrorCode =
   | "output_unavailable"
   | "generation_stale";
 
-/** Sanitized admission failure that retains no Runtime or Vault payload. */
 export class KnowledgeSourceFreshnessAdmissionError extends Error {
-  /** Creates one value-free freshness admission error. */
   constructor(public readonly code: KnowledgeSourceFreshnessAdmissionErrorCode) {
     super("Knowledge source freshness could not be established");
     this.name = "KnowledgeSourceFreshnessAdmissionError";
@@ -49,7 +43,6 @@ export class KnowledgeSourceFreshnessAdmissionError extends Error {
   }
 }
 
-/** Creates one sanitized admission error without retaining its cause. */
 function createAdmissionError(
   code: KnowledgeSourceFreshnessAdmissionErrorCode
 ): KnowledgeSourceFreshnessAdmissionError {
@@ -58,7 +51,6 @@ function createAdmissionError(
 
 type UnknownDataMethod = (this: unknown, ...args: unknown[]) => unknown;
 
-/** Finds one data method without invoking getters or accepting an exotic chain. */
 function findDataMethod(
   value: unknown,
   key: string
@@ -83,7 +75,6 @@ function findDataMethod(
   return null;
 }
 
-/** Captures the two untrusted asynchronous read ports once. */
 function captureReadPorts(dependencies: KnowledgeSourceFreshnessAdmissionDependencies): {
   readAuthority: (bundleId: string, sourceId: string) => Promise<unknown>;
   observeOutputs: KnowledgeOutputObservationReaderPort["observe"];
@@ -116,7 +107,6 @@ function captureReadPorts(dependencies: KnowledgeSourceFreshnessAdmissionDepende
   });
 }
 
-/** Snapshots one exact Queue-created admission request. */
 function snapshotRequest(
   value: Readonly<IngestSourceFreshnessAdmissionRequest>
 ): Readonly<IngestSourceFreshnessAdmissionRequest> {
@@ -180,7 +170,6 @@ function snapshotRequest(
   }
 }
 
-/** Deep-freezes one deterministic freshness decision for the Queue boundary. */
 function freezeDecision(decision: SourceFreshnessDecision): Readonly<SourceFreshnessDecision> {
   if (decision.kind === "up_to_date") return Object.freeze({ kind: "up_to_date" as const });
   return Object.freeze({
@@ -189,7 +178,6 @@ function freezeDecision(decision: SourceFreshnessDecision): Readonly<SourceFresh
   });
 }
 
-/** Creates one exact plain Queue response. */
 function createAdmission(
   request: Readonly<IngestSourceFreshnessAdmissionRequest>,
   decision: SourceFreshnessDecision
@@ -200,7 +188,6 @@ function createAdmission(
   });
 }
 
-/** Reports whether two authority reads prove the same source-success generation. */
 function sameSourceAuthority(
   before: KnowledgeRuntimeSourceFreshnessAuthority,
   after: KnowledgeRuntimeSourceFreshnessAuthority
@@ -246,13 +233,6 @@ function sameSourceAuthority(
       : false;
 }
 
-/**
- * Re-proves exact Runtime success and generated output bytes before Queue reuse.
- *
- * Any uncertainty causes either a conservative new ingest decision or a
- * sanitized failure before Queue persistence. Only an exact authority sandwich
- * may return `up_to_date`.
- */
 export class KnowledgeSourceFreshnessAdmission implements IngestSourceFreshnessAdmissionPort {
   private readonly readAuthority: ReturnType<typeof captureReadPorts>["readAuthority"];
   private readonly observeOutputs: ReturnType<typeof captureReadPorts>["observeOutputs"];
@@ -261,7 +241,6 @@ export class KnowledgeSourceFreshnessAdmission implements IngestSourceFreshnessA
   private readonly controller = new AbortController();
   private closed = false;
 
-  /** Captures one Runtime/output/generation read authority set. */
   constructor(dependencies: KnowledgeSourceFreshnessAdmissionDependencies) {
     const captured = captureReadPorts(dependencies);
     this.readAuthority = captured.readAuthority;
@@ -270,14 +249,12 @@ export class KnowledgeSourceFreshnessAdmission implements IngestSourceFreshnessA
     this.maxAuthorityReadAttempts = captured.maxAuthorityReadAttempts;
   }
 
-  /** Synchronously revokes future reads and aborts an in-flight output observation. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.controller.abort();
   }
 
-  /** Evaluates one Queue observation without receiving persistence or write authority. */
   async evaluate(candidate: Readonly<IngestSourceFreshnessAdmissionRequest>): Promise<unknown> {
     const request = snapshotRequest(candidate);
     for (let attempt = 0; attempt < this.maxAuthorityReadAttempts; attempt += 1) {
@@ -338,7 +315,6 @@ export class KnowledgeSourceFreshnessAdmission implements IngestSourceFreshnessA
     throw createAdmissionError("authority_changed");
   }
 
-  /** Requires the captured production generation before and after async reads. */
   private requireCurrent(): void {
     if (this.closed || this.controller.signal.aborted) {
       throw createAdmissionError("generation_stale");
@@ -353,7 +329,6 @@ export class KnowledgeSourceFreshnessAdmission implements IngestSourceFreshnessA
     }
   }
 
-  /** Reads and strictly detaches one Runtime authority projection. */
   private async readAndParseAuthority(
     request: Readonly<IngestSourceFreshnessAdmissionRequest>
   ): Promise<KnowledgeRuntimeSourceFreshnessAuthority | null> {

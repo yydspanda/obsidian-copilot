@@ -25,7 +25,6 @@ const SCHEMA_PATH = "Knowledge/schema.md";
 const SOURCE_BYTES = new TextEncoder().encode("Grounded fact.\n");
 const SCHEMA_BYTES = new TextEncoder().encode("# Schema\n");
 
-/** Creates one complete current Manifest source registration. */
 function createManifest(sourcePath = SOURCE_PATH): SourceManifest {
   return {
     version: 1,
@@ -42,7 +41,6 @@ function createManifest(sourcePath = SOURCE_PATH): SourceManifest {
   };
 }
 
-/** Creates the parser profile retained by the authentic execution plan. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -52,7 +50,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates the secret-free pipeline profile re-proved at evidence click time. */
 function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -84,12 +81,10 @@ function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates one exact source or schema byte receipt. */
 function createArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
 
-/** Builds one authentic plan whose live Manifest can be changed after loading. */
 async function createPlanHarness(): Promise<{
   plan: KnowledgeSourceExecutionPlan;
   setManifest(value: SourceManifest): void;
@@ -98,9 +93,8 @@ async function createPlanHarness(): Promise<{
   let manifest = createManifest();
   let current = true;
   const parser: KnowledgeByteParser = {
-    /** Returns the exact parser profile bound during plan loading. */
     getProfile: () => createParserProfile(),
-    /** Returns one deterministic parser artifact; evidence resolution never invokes it. */
+
     parse: async () => ({
       artifact: {
         kind: "text" as const,

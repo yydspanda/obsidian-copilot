@@ -19,10 +19,6 @@ const meta = {
 } satisfies Meta<Props>;
 export default meta;
 
-/**
- * A no-journal proposal whose Knowledge state changed after generation keeps explicit Abandon
- * available but must not advertise Continue as viable.
- */
 export const KnowledgeChangedSinceProposalGeneration: StoryObj<Props> = {
   args: {
     model: {

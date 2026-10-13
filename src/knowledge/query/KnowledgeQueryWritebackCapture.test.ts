@@ -9,7 +9,6 @@ import {
 
 const EXCERPT = "The durable source states the exact fact.";
 
-/** Creates one exact source citation used by a captured answer claim. */
 function createCitation(): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -28,7 +27,6 @@ function createCitation(): ClaimCitation {
   };
 }
 
-/** Creates one complete supported-answer capture input. */
 function createInput(): KnowledgeQueryWritebackCaptureInput {
   return {
     bundleId: "personal",

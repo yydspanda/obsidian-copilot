@@ -6,7 +6,6 @@ import React, { useEffect, useRef, useState } from "react";
 
 const TestTFile = ObsidianTFile as unknown as new (sourcePath: string) => TFile;
 
-/** Minimal harness that installs the production drop listeners on one element. */
 function DropHarness({
   app,
   setContextNotes,
@@ -39,7 +38,6 @@ function DropHarness({
   );
 }
 
-/** Creates one Obsidian URI DataTransfer projection for a Vault nav drag. */
 function createUriDataTransfer(sourcePaths: string | string[], vaultName = "Test"): DataTransfer {
   const paths = typeof sourcePaths === "string" ? [sourcePaths] : sourcePaths;
   const item = {
@@ -61,7 +59,6 @@ function createUriDataTransfer(sourcePaths: string | string[], vaultName = "Test
   } as unknown as DataTransfer;
 }
 
-/** Creates a minimal App whose Vault resolves each file by its exact path. */
 function createApp(...files: TFile[]): App {
   return {
     vault: {
@@ -77,7 +74,6 @@ interface FakeDropItem {
   kind: "string" | "file";
 }
 
-/** Creates the minimal DataTransfer projection used by the overlay regression test. */
 function createOverlayDataTransfer(items: FakeDropItem[]): DataTransfer {
   return {
     types: [],
@@ -86,7 +82,6 @@ function createOverlayDataTransfer(items: FakeDropItem[]): DataTransfer {
   } as unknown as DataTransfer;
 }
 
-/** Dispatches one cancellable drag event with an attached DataTransfer projection. */
 function dispatchOverlayDrag(
   type: "dragOver" | "drop",
   target: HTMLElement,
@@ -97,7 +92,6 @@ function dispatchOverlayDrag(
   fireEvent(target, event);
 }
 
-/** Reproduces an inner drop zone that owns persistence and stops bubble propagation. */
 function OverlayHarness({ app }: { app: App }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerZoneRef = useRef<HTMLDivElement>(null);

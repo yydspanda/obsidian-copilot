@@ -17,12 +17,6 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 
-/**
- * Creates a valid pending job for queue contract tests.
- *
- * @param overrides - Optional job fields to replace
- * @returns Strict durable pending job
- */
 function createPendingJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     id: "job-1",
@@ -41,12 +35,6 @@ function createPendingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowledg
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates a valid processing job for queue contract tests.
- *
- * @param overrides - Optional job fields to replace
- * @returns Strict durable processing job
- */
 function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob(),
@@ -59,12 +47,6 @@ function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowl
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates a valid completed job for apply-commit acknowledgement tests.
- *
- * @param overrides - Optional completed-job fields to replace
- * @returns Strict durable completed job
- */
 function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob(),
@@ -78,12 +60,6 @@ function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowle
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates a cancelled review job for rejection-marker tests.
- *
- * @param overrides - Optional cancelled-job fields to replace
- * @returns Strict durable cancelled job
- */
 function createCancelledReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob(),
@@ -96,12 +72,6 @@ function createCancelledReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): 
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates a valid awaiting-review job for pending-anchor tests.
- *
- * @param overrides - Optional job fields to replace
- * @returns Strict durable awaiting-review job
- */
 function createAwaitingReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
   return {
     ...createPendingJob(),
@@ -114,12 +84,6 @@ function createAwaitingReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): K
   } as KnowledgeIngestJob;
 }
 
-/**
- * Creates one durable pending review anchor.
- *
- * @param overrides - Optional anchor fields to replace
- * @returns Strict pending review marker
- */
 function createPendingReview(overrides: Partial<IngestPendingReview> = {}): IngestPendingReview {
   return {
     kind: "durable",
@@ -132,12 +96,6 @@ function createPendingReview(overrides: Partial<IngestPendingReview> = {}): Inge
   } as IngestPendingReview;
 }
 
-/**
- * Creates one exact durable review-rejection marker.
- *
- * @param overrides - Optional marker fields to replace
- * @returns Strict review rejection
- */
 function createReviewRejection(
   overrides: Partial<IngestReviewRejection> = {}
 ): IngestReviewRejection {
@@ -152,12 +110,6 @@ function createReviewRejection(
   };
 }
 
-/**
- * Creates a marker proving file commit preceded completed-job acknowledgement.
- *
- * @param overrides - Optional marker fields to replace
- * @returns Strict version-2 apply-commit marker
- */
 function createApplyCommitMarker(
   overrides: Partial<IngestApplyCommitMarker> = {}
 ): IngestApplyCommitMarker {
@@ -178,12 +130,6 @@ function createApplyCommitMarker(
   };
 }
 
-/**
- * Creates the exact claim retained while an applying job is active or interrupted.
- *
- * @param overrides - Optional claim fields to replace
- * @returns Strict apply-claim marker
- */
 function createApplyClaimMarker(
   overrides: Partial<IngestApplyClaimMarker> = {}
 ): IngestApplyClaimMarker {
@@ -199,12 +145,6 @@ function createApplyClaimMarker(
   };
 }
 
-/**
- * Creates exact durable proof that an accepted apply was abandoned before journaling.
- *
- * @param overrides - Optional abandonment fields to replace
- * @returns Strict apply-abandonment tombstone
- */
 function createApplyAbandonment(
   overrides: Partial<IngestApplyAbandonment> = {}
 ): IngestApplyAbandonment {
@@ -227,13 +167,6 @@ function createApplyAbandonment(
   };
 }
 
-/**
- * Derives one highest source observation for a synthetic storage snapshot.
- *
- * @param jobs - Durable test jobs
- * @param reruns - Durable test rerun payloads
- * @returns One high-watermark per represented source
- */
 function deriveTestHighWatermarks(
   jobs: readonly KnowledgeIngestJob[],
   reruns: readonly IngestRerunRequest[]
@@ -254,12 +187,6 @@ function deriveTestHighWatermarks(
   return [...values.values()];
 }
 
-/**
- * Creates a valid queue snapshot for structural and semantic tests.
- *
- * @param overrides - Optional snapshot fields to replace
- * @returns Strict queue snapshot
- */
 function createSnapshot(overrides: Partial<IngestQueueSnapshot> = {}): IngestQueueSnapshot {
   const jobs = overrides.jobs ?? [createPendingJob()];
   const reruns = overrides.reruns ?? [];
@@ -278,12 +205,6 @@ function createSnapshot(overrides: Partial<IngestQueueSnapshot> = {}): IngestQue
   };
 }
 
-/**
- * Returns stable diagnostic codes emitted by queue validation.
- *
- * @param value - Queue value to validate
- * @returns Diagnostic codes in emission order
- */
 function diagnosticCodes(value: unknown): string[] {
   return validateIngestQueueSnapshot(value).diagnostics.map((diagnostic) => diagnostic.code);
 }

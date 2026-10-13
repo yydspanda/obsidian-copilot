@@ -17,7 +17,6 @@ const MAX_BYTES = 1_024;
 const MAX_PAGES = 8;
 const MAX_CHARACTERS = 1_024;
 
-/** Creates one exact parser request over already observed PDF bytes. */
 function createRequest(bytes = new TextEncoder().encode("%PDF-1.7\nexact bytes")) {
   return {
     sourceId: "source-pdf",
@@ -27,7 +26,6 @@ function createRequest(bytes = new TextEncoder().encode("%PDF-1.7\nexact bytes")
   } satisfies KnowledgeByteParserRequest;
 }
 
-/** Creates the built-in PDF parser with stable test limits. */
 function createParser(
   extractPages: PdfPageTextExtractor,
   limits: Partial<

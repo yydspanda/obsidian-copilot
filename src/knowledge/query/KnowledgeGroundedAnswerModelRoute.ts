@@ -7,7 +7,6 @@ import {
 
 const ROUTE_TOKEN = Symbol("KnowledgeGroundedAnswerModelRoute.constructor");
 
-/** Private transport closure retained only in module-owned route state. */
 export type KnowledgeGroundedAnswerModelInvoke = (
   request: Readonly<KnowledgeGroundedAnswerRequest>,
   signal: AbortSignal
@@ -25,7 +24,6 @@ interface LinkedAbortSignal {
   dispose(): void;
 }
 
-/** Requires one canonical Bundle identity without normalizing it. */
 function assertBundleId(value: unknown): asserts value is string {
   if (
     typeof value !== "string" ||
@@ -37,7 +35,6 @@ function assertBundleId(value: unknown): asserts value is string {
   }
 }
 
-/** Requires only the cross-realm AbortSignal surface consumed by this route. */
 function assertAbortSignal(value: unknown): asserts value is AbortSignal {
   if (
     typeof value !== "object" ||
@@ -50,7 +47,6 @@ function assertAbortSignal(value: unknown): asserts value is AbortSignal {
   }
 }
 
-/** Returns hidden state only for an authentic route instance. */
 function requireRouteState(value: unknown): KnowledgeGroundedAnswerModelRouteState {
   if (typeof value !== "object" || value === null) throw new KnowledgeGroundedAnswerError();
   const state = routeStates.get(value);
@@ -58,16 +54,13 @@ function requireRouteState(value: unknown): KnowledgeGroundedAnswerModelRouteSta
   return state;
 }
 
-/** Creates the standard cancellation used after lifecycle revocation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Links caller and lifecycle cancellation for exactly one provider invocation. */
 function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   const controller = new AbortController();
 
-  /** Propagates one parent cancellation without retaining its reason. */
   function abort(): void {
     controller.abort();
   }
@@ -87,9 +80,7 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   });
 }
 
-/** Opaque Bundle-specific route that never exposes its credential or transport closure. */
 export class KnowledgeGroundedAnswerModelRoute {
-  /** Rejects direct construction without the module-private provider factory token. */
   constructor(token: symbol, bundleId: string, invoke: KnowledgeGroundedAnswerModelInvoke) {
     if (token !== ROUTE_TOKEN || typeof invoke !== "function") {
       throw new KnowledgeGroundedAnswerError();
@@ -99,12 +90,10 @@ export class KnowledgeGroundedAnswerModelRoute {
     Object.freeze(this);
   }
 
-  /** Rejects spread copies, prototype forgeries, and ordinary route-shaped records. */
   static assert(value: unknown): asserts value is KnowledgeGroundedAnswerModelRoute {
     requireRouteState(value);
   }
 
-  /** Reports whether this private route belongs to one exact Bundle. */
   matchesBundleId(bundleId: string): boolean {
     try {
       assertBundleId(bundleId);
@@ -118,7 +107,6 @@ export class KnowledgeGroundedAnswerModelRoute {
 Object.freeze(KnowledgeGroundedAnswerModelRoute.prototype);
 Object.freeze(KnowledgeGroundedAnswerModelRoute);
 
-/** Seals one reviewed provider transport behind an opaque Bundle route. */
 export function bindKnowledgeGroundedAnswerModelRoute(
   bundleId: string,
   invoke: KnowledgeGroundedAnswerModelInvoke
@@ -126,7 +114,6 @@ export function bindKnowledgeGroundedAnswerModelRoute(
   return new KnowledgeGroundedAnswerModelRoute(ROUTE_TOKEN, bundleId, invoke);
 }
 
-/** Permanently erases one route's retained transport closure after owner revocation. */
 export function revokeKnowledgeGroundedAnswerModelRoute(
   route: KnowledgeGroundedAnswerModelRoute
 ): void {
@@ -134,12 +121,6 @@ export function revokeKnowledgeGroundedAnswerModelRoute(
   routeStates.delete(route);
 }
 
-/**
- * Creates a narrow model port whose every call is fenced by the owning lifecycle.
- *
- * The returned object has no route descriptor, credential, close, or arbitrary
- * prompt capability. It accepts only authentic requests minted by the Query Core.
- */
 export function createKnowledgeGroundedAnswerModelPort(
   route: KnowledgeGroundedAnswerModelRoute,
   assertCurrent: () => void,

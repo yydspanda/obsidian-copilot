@@ -19,7 +19,6 @@ const DEFAULT_CONTEXT: RetryContext = {
   rateLimited: false,
 };
 
-/** Creates a policy with explicit deterministic configuration overrides. */
 function createPolicy(
   config: Partial<RetryPolicyConfig> = {},
   random: () => number = () => 0.5
@@ -27,7 +26,6 @@ function createPolicy(
   return new ExponentialRetryPolicy({ ...DEFAULT_CONFIG, ...config }, random);
 }
 
-/** Captures a required thrown value without relying on Jest's untyped matcher overload. */
 function captureError(action: () => void): unknown {
   try {
     action();

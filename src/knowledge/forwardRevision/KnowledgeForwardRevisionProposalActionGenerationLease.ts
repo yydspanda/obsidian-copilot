@@ -1,6 +1,5 @@
 import { KnowledgeProductionForwardRevisionProposalActionAdapter } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
 
-/** Exact capabilities used to publish one revocable proposal-action generation. */
 export interface KnowledgeForwardRevisionProposalActionGenerationLeaseInput {
   readonly delegate: KnowledgeProductionForwardRevisionProposalActionAdapter;
   readonly subscribeInvalidation: (listener: () => void) => () => void;
@@ -23,21 +22,19 @@ interface LeaseState {
 
 const states = new WeakMap<object, LeaseState>();
 
-/** Creates platform-standard cancellation without retaining a caller reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Invokes cleanup without allowing a stale cleanup failure to revive authority. */
 function closeSafely(operation: () => void): void {
   try {
     operation();
   } catch {
     // The local action authority remains closed even when upstream cleanup is stale.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Captures an exact five-field lease input through enumerable data descriptors. */
 function snapshotInput(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionProposalActionGenerationLeaseInput> {
@@ -94,7 +91,6 @@ function snapshotInput(
   }
 }
 
-/** Returns hidden state only for one exact module-authentic action lease. */
 function requireState(value: unknown): LeaseState {
   if (
     typeof value !== "object" ||
@@ -108,7 +104,6 @@ function requireState(value: unknown): LeaseState {
   return state;
 }
 
-/** Withdraws one exact published adapter without touching a newer generation. */
 function withdraw(state: LeaseState): void {
   state.active = false;
   if (!state.published) return;
@@ -116,9 +111,7 @@ function withdraw(state: LeaseState): void {
   closeSafely(() => state.input.revokeDelegate(state.input.delegate));
 }
 
-/** Revocable installation lease for the production proposal action adapter. */
 export class KnowledgeForwardRevisionProposalActionGenerationLease {
-  /** Subscribes invalidation before publishing one exact current adapter. */
   constructor(inputValue: KnowledgeForwardRevisionProposalActionGenerationLeaseInput) {
     const input = snapshotInput(inputValue);
     const state: LeaseState = {
@@ -148,7 +141,6 @@ export class KnowledgeForwardRevisionProposalActionGenerationLease {
     }
   }
 
-  /** Re-proves both this installation and its upstream production generation. */
   assertCurrent(): void {
     const state = requireState(this);
     if (!state.active || state.closed) throw createAbortError();
@@ -161,7 +153,6 @@ export class KnowledgeForwardRevisionProposalActionGenerationLease {
     if (!state.active || state.closed) throw createAbortError();
   }
 
-  /** Idempotently closes invalidation and conditionally revokes the exact adapter. */
   close(): void {
     const state = requireState(this);
     if (state.closed) return;

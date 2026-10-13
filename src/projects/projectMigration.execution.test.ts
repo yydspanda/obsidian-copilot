@@ -115,8 +115,6 @@ function backupProject(content: string | undefined): ProjectConfig {
   return JSON.parse(json[1]) as ProjectConfig;
 }
 
-// Unlike the cancellation suite, this executes the actual frontmatter, content
-// verification, rollback and backup helpers against an inspectable memory Vault.
 describe("projectMigration", () => {
   describe("migrateProjectsFromSettingsToVault()", () => {
     let owner: ReturnType<typeof beginProjectStateLifecycle>;

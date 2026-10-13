@@ -1,6 +1,5 @@
 import type { JsonValue } from "@/knowledge/model/types";
 
-/** Shared defensive limits for dedicated forward-Apply durable leaves. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_PROTOCOL_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPathCharacters: 1_024,
@@ -13,13 +12,11 @@ export const KNOWLEDGE_FORWARD_REVISION_APPLY_PROTOCOL_LIMITS = Object.freeze({
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-/** Mutable accounting used only while detaching hostile JSON graphs. */
 interface JsonCaptureBudget {
   nodes: number;
   stringCharacters: number;
 }
 
-/** Reports whether text consists exclusively of paired Unicode scalar values. */
 export function isForwardApplyUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -35,7 +32,6 @@ export function isForwardApplyUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported C0 or C1 control. */
 export function hasForwardApplyControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -44,7 +40,6 @@ export function hasForwardApplyControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether an unknown value is a bounded canonical identifier. */
 export function isForwardApplyIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -56,22 +51,18 @@ export function isForwardApplyIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether an unknown value is a lowercase SHA-256 digest. */
 export function isForwardApplyDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether an unknown value is a non-negative safe integer. */
 export function isForwardApplyNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether an unknown value is a positive safe integer. */
 export function isForwardApplyPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Reports whether exact file text is bounded and safe to persist. */
 export function isForwardApplyBody(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -95,7 +86,6 @@ export function isForwardApplyBody(value: unknown): value is string {
   );
 }
 
-/** Captures one strict dense JSON value without invoking candidate accessors. */
 function captureJsonValue(
   value: unknown,
   depth: number,
@@ -175,12 +165,10 @@ function captureJsonValue(
   }
 }
 
-/** Detaches a bounded strict JSON graph without invoking candidate code. */
 export function captureForwardApplyJson(value: unknown): JsonValue | undefined {
   return captureJsonValue(value, 0, { nodes: 0, stringCharacters: 0 }, new Set<object>());
 }
 
-/** Captures one exact-key plain record through data descriptors only. */
 export function captureForwardApplyRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -214,7 +202,6 @@ export function captureForwardApplyRecord(
   }
 }
 
-/** Bounded descriptor-only walk used before freezing a detached graph in place. */
 function freezeJsonValue(
   value: unknown,
   depth: number,
@@ -301,7 +288,6 @@ function freezeJsonValue(
   }
 }
 
-/** Deeply freezes one bounded already-detached JSON-compatible graph. */
 export function freezeForwardApplyJson<T>(value: T): Readonly<T> {
   try {
     freezeJsonValue(value, 0, { nodes: 0, stringCharacters: 0 }, new Set<object>());

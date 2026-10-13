@@ -22,7 +22,6 @@ import { sha256 } from "@/utils/hash";
 
 const AUTHORIZED_PREPARATION_TOKEN = Symbol("KnowledgeAuthorizedSourcePreparation.constructor");
 
-/** Compiler foundation released only through an authentic execution capability. */
 export interface KnowledgeAuthorizedCompilePreparation {
   operation: KnowledgeSourceCompileOperation;
   bundle: KnowledgeBundleConfig;
@@ -32,7 +31,6 @@ export interface KnowledgeAuthorizedCompilePreparation {
   artifacts: readonly SourceArtifactObservation[];
 }
 
-/** Stable, value-free authorization failure categories. */
 export type KnowledgeAuthorizedSourcePreparationErrorCode =
   | "authority_invalid"
   | "authority_reused"
@@ -44,9 +42,7 @@ export type KnowledgeAuthorizedSourcePreparationErrorCode =
   | "preparation_mismatch"
   | "preparation_invalid";
 
-/** Sanitized source-authorization failure retaining no path, source text, or lower-level cause. */
 export class KnowledgeAuthorizedSourcePreparationError extends Error {
-  /** Creates one stable authorization failure. */
   constructor(public readonly code: KnowledgeAuthorizedSourcePreparationErrorCode) {
     super("The knowledge source preparation is not authorized for execution");
     this.name = "KnowledgeAuthorizedSourcePreparationError";
@@ -73,14 +69,12 @@ const authorizedPreparationStates = new WeakMap<
 >();
 const reservedPreparationAuthorities = new WeakSet<KnowledgeIngestExecutionAuthority>();
 
-/** Creates a sanitized cancellation without retaining an arbitrary abort reason. */
 function createAbortError(): Error {
   const error = new Error("The authorized knowledge source operation was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/** Creates one deterministic digest for detached JSON-compatible authority material. */
 function digestJson(domain: string, value: unknown): string {
   try {
     return sha256(`${domain}\n${canonicalizeJson(value as JsonValue)}`);
@@ -89,7 +83,6 @@ function digestJson(domain: string, value: unknown): string {
   }
 }
 
-/** Returns hidden state only for an authentic module-issued preparation. */
 function requireAuthorizedPreparationState(
   value: unknown
 ): KnowledgeAuthorizedSourcePreparationState {
@@ -103,7 +96,6 @@ function requireAuthorizedPreparationState(
   return state;
 }
 
-/** Requires the exact Runtime Manifest authority before any source or parser work. */
 function assertManifestAuthority(
   snapshot: Readonly<KnowledgeSourceBundleAuthoritySnapshot>,
   expectedRevision: number,
@@ -120,7 +112,6 @@ function assertManifestAuthority(
   }
 }
 
-/** Requires an exact secret-free profile and schema across two authority reads. */
 function assertBundleAuthorityStable(
   initial: Readonly<KnowledgeSourceBundleAuthoritySnapshot>,
   current: Readonly<KnowledgeSourceBundleAuthoritySnapshot>
@@ -135,7 +126,6 @@ function assertBundleAuthorityStable(
   }
 }
 
-/** Requires the parsed foundation to echo the exact durable claim and re-proved Bundle data. */
 function createAuthorizedPreparation(
   value: Awaited<ReturnType<KnowledgeSourceExecutionPlan["prepare"]>>,
   claim: Readonly<KnowledgeIngestExecutionProofRequest>,
@@ -170,7 +160,6 @@ function createAuthorizedPreparation(
   });
 }
 
-/** Re-proves Runtime around the complete mutable workflow authority set. */
 async function reproveState(
   state: KnowledgeAuthorizedSourcePreparationState,
   expectedStage: KnowledgeAuthorizedExecutionStage
@@ -205,9 +194,7 @@ async function reproveState(
   }
 }
 
-/** Opaque source foundation joined to one exact durable Queue/Runtime authority. */
 export class KnowledgeAuthorizedSourcePreparation {
-  /** Rejects direct construction without the module-private binder token. */
   constructor(token: symbol) {
     if (token !== AUTHORIZED_PREPARATION_TOKEN) {
       throw new KnowledgeAuthorizedSourcePreparationError("preparation_invalid");
@@ -215,17 +202,10 @@ export class KnowledgeAuthorizedSourcePreparation {
     Object.freeze(this);
   }
 
-  /** Requires an authentic process-local authorized preparation. */
   static assert(value: unknown): asserts value is KnowledgeAuthorizedSourcePreparation {
     requireAuthorizedPreparationState(value);
   }
 
-  /**
-   * Checks whether this preparation belongs to one exact Queue/Runtime/workflow owner.
-   *
-   * The owner remains opaque: callers receive only an identity comparison and
-   * cannot extract the Runtime, QueueStorage, workflow plan, or proof authority.
-   */
   static matchesExecutionOwner(
     value: KnowledgeAuthorizedSourcePreparation,
     owner: KnowledgeExecutionOwner
@@ -239,27 +219,22 @@ export class KnowledgeAuthorizedSourcePreparation {
     }
   }
 
-  /** Returns the exact Queue-owned cancellation signal. */
   getSignal(): AbortSignal {
     return requireAuthorizedPreparationState(this).signal;
   }
 
-  /** Returns the immutable non-secret durable claim identity. */
   getClaim(): Readonly<KnowledgeIngestExecutionProofRequest> {
     return requireAuthorizedPreparationState(this).claim;
   }
 
-  /** Returns the exact retained secret-free pipeline profile. */
   getProfile(): KnowledgeBundlePipelineProfile {
     return requireAuthorizedPreparationState(this).profile;
   }
 
-  /** Returns parsed compiler input that remains gated by this authentic capability. */
   getPreparation(): Readonly<KnowledgeAuthorizedCompilePreparation> {
     return requireAuthorizedPreparationState(this).preparation;
   }
 
-  /** Re-proves Runtime before and after all current Manifest/schema/profile authority. */
   async reprove(expectedStage: KnowledgeAuthorizedExecutionStage): Promise<void> {
     const state = requireAuthorizedPreparationState(this);
     await reproveState(state, expectedStage);
@@ -275,9 +250,7 @@ export class KnowledgeAuthorizedSourcePreparation {
 Object.freeze(KnowledgeAuthorizedSourcePreparation.prototype);
 Object.freeze(KnowledgeAuthorizedSourcePreparation);
 
-/** Issues authorized preparations only after a Runtime→workflow→Runtime proof sandwich. */
 export class KnowledgeAuthorizedSourcePreparationBinder {
-  /** Authenticates and parses one exact claimed source without accepting caller job DTOs. */
   async prepare(
     plan: KnowledgeSourceExecutionPlan,
     authority: KnowledgeIngestExecutionAuthority

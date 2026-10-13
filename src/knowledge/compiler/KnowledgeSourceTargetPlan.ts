@@ -3,11 +3,6 @@ import type { KnowledgeCompileInput } from "@/knowledge/compiler/CompilerModelPo
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/**
- * Plans source-associated destinations without giving the model write authority.
- *
- * @param input - Compiler-validated source identity and existing page authority.
- */
 export function createKnowledgeSourceTargetPlan(
   input: KnowledgeCompileInput
 ): CompilerWritingTarget[] {

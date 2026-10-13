@@ -35,7 +35,6 @@ const UNAVAILABLE_OPTIONS: KnowledgeSetupOptions = Object.freeze({
 });
 const MAX_RULES_BYTES = 1_000_000;
 
-/** Tests the presence of configuration, including explicit invalid or null values. */
 function hasBundle(project: KnowledgeSetupServiceProjectRecord["project"]): boolean {
   return project.knowledgeBundle !== undefined;
 }
@@ -51,7 +50,6 @@ function bundleFor(request: Readonly<KnowledgeSetupRequest>): KnowledgeBundleCon
   };
 }
 
-/** Project identity retained by setup, without giving it the Project manager's write surface. */
 export interface KnowledgeSetupServiceProjectRecord {
   project: Pick<
     ProjectConfig,
@@ -60,7 +58,6 @@ export interface KnowledgeSetupServiceProjectRecord {
   filePath: string;
 }
 
-/** Current owners and local registries injected at the plugin boundary. */
 export interface KnowledgeSetupServiceDependencies {
   app: App;
   getProjectRecords(): readonly KnowledgeSetupServiceProjectRecord[];
@@ -73,14 +70,11 @@ export interface KnowledgeSetupServiceDependencies {
   loadNodeRuntime?: ObsidianNodeRuntimeLoader;
 }
 
-/** Configures one existing Project without importing sources or making model requests. */
 export class KnowledgeSetupService implements KnowledgeSetupPort {
   private configuring = false;
 
-  /** @param dependencies Current Project/model owners and the exact Vault filesystem edge. */
   constructor(private readonly dependencies: KnowledgeSetupServiceDependencies) {}
 
-  /** Returns local choices without reading credentials, importing files, or testing a provider. */
   getOptions(): KnowledgeSetupOptions {
     if (!this.dependencies.isCurrent()) return UNAVAILABLE_OPTIONS;
     const records = this.dependencies.getProjectRecords();
@@ -112,12 +106,6 @@ export class KnowledgeSetupService implements KnowledgeSetupPort {
     };
   }
 
-  /**
-   * Creates missing setup artifacts and attaches a Bundle to one unchanged Project.
-   * Existing files are never replaced, and no source becomes registered by this operation.
-   * @param input Explicit form choices captured for this submission.
-   * @param signal Cancellation for this submission; published artifacts are not deleted on failure.
-   */
   async configure(
     input: Readonly<KnowledgeSetupRequest>,
     signal: AbortSignal
@@ -365,7 +353,6 @@ export class KnowledgeSetupService implements KnowledgeSetupPort {
   }
 }
 
-/** Inert paths used only to ask the model policy for local picker eligibility. */
 const MODEL_PROBE_REQUEST: KnowledgeSetupRequest = Object.freeze({
   projectId: "setup",
   configuredModelId: "",

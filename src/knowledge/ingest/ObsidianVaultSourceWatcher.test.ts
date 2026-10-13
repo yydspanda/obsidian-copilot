@@ -1,11 +1,9 @@
 jest.mock("obsidian", () => {
   class TFile {
-    /** Creates one mutable fake Vault file. */
     constructor(public path: string) {}
   }
 
   class TFolder {
-    /** Creates one mutable fake Vault folder. */
     constructor(public path: string) {}
   }
 
@@ -61,13 +59,6 @@ import { KnowledgeSourceObservationStartupReconciler } from "@/knowledge/startup
 const SCHEMA_BYTES = new TextEncoder().encode("# Test schema\r\n规则：精确字节\n");
 const SCHEMA_HASH = createSourceContentHash(SCHEMA_BYTES);
 
-/**
- * Creates one strict caller-projected test pipeline profile.
- *
- * @param bundleId - Owning Bundle identity
- * @param variant - Behavior variant expected by legacy watcher assertions
- * @returns Complete Bundle pipeline profile
- */
 function createPipelineProfile(
   bundleId: string,
   variant: "a" | "b"
@@ -98,7 +89,6 @@ function createPipelineProfile(
   };
 }
 
-/** Creates the exact Bundle config shared by watcher test fixtures and hashes. */
 function createTestBundle(bundleId: string): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -110,13 +100,6 @@ function createTestBundle(bundleId: string): KnowledgeBundleConfig {
   };
 }
 
-/**
- * Computes the exact source fingerprint emitted by a test pipeline variant.
- *
- * @param bundleId - Exact Bundle identity and behavior boundary
- * @param variant - Pipeline behavior variant
- * @returns Lowercase pipeline fingerprint
- */
 function createTestPipelineFingerprint(bundleId: string, variant: "a" | "b"): string {
   const profile = createPipelineProfile(bundleId, variant);
   const parser = profile.parsers[0];
@@ -148,11 +131,6 @@ interface Deferred<T> {
   reject(error: unknown): void;
 }
 
-/**
- * Creates an externally controlled Promise for lifecycle interleaving tests.
- *
- * @returns Deferred Promise and settlement callbacks
- */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -163,11 +141,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/**
- * Flushes bounded Promise turns until a synchronous predicate becomes true.
- *
- * @param predicate - Completion predicate
- */
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (predicate()) return;
@@ -176,54 +149,24 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   throw new Error("Timed out waiting for test condition");
 }
 
-/**
- * Creates a detached ArrayBuffer from exact byte values.
- *
- * @param bytes - Byte values to copy
- * @returns Detached binary payload
- */
 function createBuffer(...bytes: number[]): ArrayBuffer {
   return Uint8Array.from(bytes).buffer;
 }
 
-/**
- * Encodes exact UTF-8 text into a detached ArrayBuffer.
- *
- * @param text - Text whose BOM and line endings remain significant
- * @returns Exact encoded bytes
- */
 function encodeText(text: string): ArrayBuffer {
   return new Uint8Array(new TextEncoder().encode(text)).buffer;
 }
 
-/**
- * Creates a mutable fake TFile despite Obsidian's opaque public constructor.
- *
- * @param path - Vault-relative path
- * @returns Fake TFile
- */
 function createFile(path: string): TFile {
   const FileConstructor = TFile as unknown as new (path: string) => TFile;
   return new FileConstructor(path);
 }
 
-/**
- * Creates a mutable fake TFolder despite Obsidian's opaque public constructor.
- *
- * @param path - Vault-relative path
- * @returns Fake TFolder
- */
 function createFolder(path: string): TFolder {
   const FolderConstructor = TFolder as unknown as new (path: string) => TFolder;
   return new FolderConstructor(path);
 }
 
-/**
- * Creates one source specification consumed by the strict watch-plan fixture.
- *
- * @param patch - Fields to replace
- * @returns Complete watched source
- */
 function createSource(patch: Partial<WatchedKnowledgeSource> = {}): WatchedKnowledgeSource {
   const sourcePath = patch.sourcePath ?? "Sources/研究.md";
   return {
@@ -236,7 +179,6 @@ function createSource(patch: Partial<WatchedKnowledgeSource> = {}): WatchedKnowl
   };
 }
 
-/** One committed generated page owned by a watcher source fixture. */
 interface GeneratedOutputFixture {
   bundleId?: string;
   sourceId: string;
@@ -245,16 +187,6 @@ interface GeneratedOutputFixture {
   contentHash: string;
 }
 
-/**
- * Builds an opaque plan through the same strict authority boundary as production.
- *
- * Test sources use their expected fingerprint only to select a complete profile;
- * the builder independently recomputes every actual source fingerprint.
- *
- * @param sources - Durable source specifications grouped by Bundle
- * @param generatedOutputs - Successful Manifest pages used by the reverse index
- * @returns Strict immutable plan accepted by the watcher
- */
 function createWatchPlan(
   sources: readonly WatchedKnowledgeSource[],
   generatedOutputs: readonly GeneratedOutputFixture[] = []
@@ -327,12 +259,6 @@ function createWatchPlan(
   );
 }
 
-/**
- * Builds one Bundle authority whose durable Manifest currently has no sources.
- *
- * @param bundleId - Empty Bundle identity
- * @returns Strict plan that still requires a Bundle handoff
- */
 function createEmptyBundleWatchPlan(bundleId = "personal"): KnowledgeSourceWatchPlan {
   const bundle = createTestBundle(bundleId);
   return buildKnowledgeSourceWatchPlan([
@@ -348,7 +274,6 @@ function createEmptyBundleWatchPlan(bundleId = "personal"): KnowledgeSourceWatch
 type VaultEventName = "create" | "modify" | "delete" | "rename";
 type VaultEventHandler = (file: TAbstractFile, oldPath?: string) => void;
 
-/** Minimal exact-Vault harness for event, lifecycle, and binary-read tests. */
 class VaultHarness {
   readonly files = new Map<string, ArrayBuffer>();
   readonly loadedFiles = new Map<string, TFile>();
@@ -403,18 +328,10 @@ class VaultHarness {
     }),
   } as unknown as jest.Mocked<Vault>;
 
-  /** Returns one minimal App bound to this exact Vault. */
   createApp(): App {
     return { vault: this.vault } as unknown as App;
   }
 
-  /**
-   * Adds one loaded fake file and exact bytes.
-   *
-   * @param path - Vault-relative path
-   * @param bytes - Exact file bytes
-   * @returns Mutable fake file
-   */
   addFile(path: string, bytes: ArrayBuffer): TFile {
     const file = createFile(path);
     this.loadedFiles.set(path, file);
@@ -422,13 +339,6 @@ class VaultHarness {
     return file;
   }
 
-  /**
-   * Emits one Vault event through every active EventRef.
-   *
-   * @param name - Vault event name
-   * @param file - File or folder event target
-   * @param oldPath - Previous path for rename
-   */
   trigger(name: VaultEventName, file: TAbstractFile, oldPath?: string): void {
     for (const handler of [...(this.handlers.get(name)?.values() ?? [])]) {
       handler(file, oldPath);
@@ -436,7 +346,6 @@ class VaultHarness {
   }
 }
 
-/** Recording durable hand-off with injectable allocation and commit behavior. */
 class RecordingHandoff implements VaultSourceObservationHandoffPort {
   readonly allocateRequestReferences: {
     bundleId: string;
@@ -464,10 +373,8 @@ class RecordingHandoff implements VaultSourceObservationHandoffPort {
   ) => Promise<CommitSourceInputObservationResult>;
   private revision = 0;
 
-  /** Creates a hand-off whose calls append to an optional global order. */
   constructor(private readonly order: string[] = []) {}
 
-  /** Allocates one deterministic fake observation token. */
   async allocate(request: {
     bundleId: string;
     sourceId: string;
@@ -494,7 +401,6 @@ class RecordingHandoff implements VaultSourceObservationHandoffPort {
     return allocation;
   }
 
-  /** Commits one deterministic fake durable settlement. */
   async commit(
     request: BindSourceInputObservationRequest
   ): Promise<CommitSourceInputObservationResult> {
@@ -517,29 +423,24 @@ class RecordingHandoff implements VaultSourceObservationHandoffPort {
   }
 }
 
-/** Recording non-authoritative notification sink. */
 class RecordingSink {
   readonly notifications: VaultSourceWatcherNotification[] = [];
 
-  /** Records one detached watcher notification. */
   emit(notification: VaultSourceWatcherNotification): void {
     this.notifications.push({ ...notification });
   }
 }
 
-/** Serialized in-memory atomic runtime file used by the watcher/Queue integration test. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail = Promise.resolve();
 
-  /** Initializes the file once without replacing existing bytes. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) {
       this.content = initialContent;
     }
   }
 
-  /** Reads the exact current runtime text. */
   async read(): Promise<string> {
     if (this.content === undefined) {
       throw new Error("Runtime file is absent");
@@ -547,7 +448,6 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
     return this.content;
   }
 
-  /** Serializes one deterministic full-file transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     let release!: () => void;
     const previous = this.tail;
@@ -2498,7 +2398,6 @@ describe("ObsidianVaultSourceWatcher", () => {
     const queue = new IngestQueue(
       storage,
       {
-        /** Fails if observation startup unexpectedly starts Queue execution. */
         execute: async () => {
           throw new Error("Observation startup must not run Queue work");
         },
@@ -2589,7 +2488,6 @@ describe("ObsidianVaultSourceWatcher", () => {
     const queue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(runtime),
       {
-        /** Fails if the watcher unexpectedly starts worker execution. */
         execute: async () => {
           throw new Error("Watcher must not execute Queue work");
         },

@@ -67,16 +67,13 @@ const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
 const MAX_REVIEW_TARGET_CHARACTERS = 20_000_000;
 const EMPTY_OUTDATED_REVIEW_IDS: readonly string[] = Object.freeze([]);
 
-/** Narrow Runtime reads and hints required by the live Studio adapter. */
 export type KnowledgeStudioRuntimePort = Pick<
   KnowledgeRuntimeStore,
   "readStudioBundle" | "subscribeStudioBundle"
 >;
 
-/** Optional generation-owned external hint source; callbacks carry no authoritative state. */
 export type KnowledgeStudioVaultHintPort = (bundleId: string, onHint: () => void) => () => void;
 
-/** Query capabilities accepted from one exact production generation. */
 type KnowledgeStudioRuntimeQueryPort = Pick<
   KnowledgeStudioQueryPort,
   "query" | "openCitation" | "revokeCurrent"
@@ -84,14 +81,12 @@ type KnowledgeStudioRuntimeQueryPort = Pick<
   Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">> &
   Partial<Readonly<{ supportsWriteback(): boolean }>>;
 
-/** Generation-bound configuration identity; no source contents or execution authority. */
 export interface KnowledgeStudioReviewSource {
   bundleId: string;
   sourceId: string;
   pipelineFingerprint: string;
 }
 
-/** Dependencies captured by one exact production Studio generation. */
 export interface KnowledgeStudioRuntimeReadAdapterInput {
   runtime: KnowledgeStudioRuntimePort;
   bundles: readonly KnowledgeBundleConfig[];
@@ -108,7 +103,6 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   maxConsistencyAttempts?: number;
 }
 
-/** Captures one evidence-navigation method without retaining an accessor. */
 function captureReviewEvidencePort(value: unknown): KnowledgeStudioReviewEvidencePort {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeStudioRuntimeReadError();
@@ -148,7 +142,6 @@ function captureReviewEvidencePort(value: unknown): KnowledgeStudioReviewEvidenc
 
 type KnowledgeSourceLifecycleMethodKey = "loadSources" | "checkAgain" | "retireSource";
 
-/** Captures one lifecycle data method without invoking an accessor. */
 function captureSourceLifecycleDataMethod(
   owner: object,
   key: KnowledgeSourceLifecycleMethodKey
@@ -173,7 +166,6 @@ function captureSourceLifecycleDataMethod(
   throw new KnowledgeStudioRuntimeReadError();
 }
 
-/** Snapshots one exact generation-owned source lifecycle capability. */
 function captureSourceLifecyclePort(value: unknown): KnowledgeSourceLifecyclePort {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeStudioRuntimeReadError();
@@ -200,14 +192,12 @@ function captureSourceLifecyclePort(value: unknown): KnowledgeSourceLifecyclePor
   });
 }
 
-/** Exact durable record, target read-set, and plan produced by one consistent observation. */
 export interface KnowledgeStudioReviewContext {
   record: PendingChangeSetReviewRecord;
   observations: readonly KnowledgeReviewTargetObservation[];
   plan: KnowledgeReviewPlan;
 }
 
-/** Inputs required to reconstruct one exact command-time Review context. */
 export interface KnowledgeStudioReviewContextLoadInput {
   runtime: KnowledgeStudioRuntimePort;
   bundle: KnowledgeBundleConfig;
@@ -218,9 +208,7 @@ export interface KnowledgeStudioReviewContextLoadInput {
   maxConsistencyAttempts?: number;
 }
 
-/** Fixed read failure that never retains paths, file contents, or adapter causes. */
 export class KnowledgeStudioRuntimeReadError extends Error {
-  /** Creates one sanitized read-only adapter failure. */
   constructor() {
     super("Knowledge Studio could not construct a consistent Runtime snapshot");
     this.name = "KnowledgeStudioRuntimeReadError";
@@ -237,7 +225,6 @@ interface CapturedKnowledgeStudioQueryState {
 
 const capturedKnowledgeStudioQueryStates = new WeakMap<object, CapturedKnowledgeStudioQueryState>();
 
-/** Finds one callable data method without invoking an accessor. */
 function captureQueryDataMethod(
   owner: object,
   key: "query" | "openCitation" | "revokeCurrent" | "saveQueryToWiki"
@@ -262,7 +249,6 @@ function captureQueryDataMethod(
   throw new KnowledgeStudioRuntimeReadError();
 }
 
-/** Captures one optional data method without invoking an accessor. */
 function captureOptionalQueryDataMethod(
   owner: object,
   key: "saveQueryToWiki"
@@ -288,16 +274,13 @@ function captureOptionalQueryDataMethod(
   }
 }
 
-/** Returns hidden state only for an authentic captured Query capability. */
 function requireCapturedQueryState(value: object): CapturedKnowledgeStudioQueryState {
   const state = capturedKnowledgeStudioQueryStates.get(value);
   if (!state) throw new KnowledgeStudioRuntimeReadError();
   return state;
 }
 
-/** Immutable method snapshot that cannot be swapped through the caller's input object. */
 class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPort {
-  /** Captures exact data methods and their receiver without exposing them as properties. */
   constructor(owner: object) {
     const saveQueryToWiki = captureOptionalQueryDataMethod(owner, "saveQueryToWiki");
     capturedKnowledgeStudioQueryStates.set(this, {
@@ -318,7 +301,6 @@ class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPor
     Object.freeze(this);
   }
 
-  /** Invokes the exact Query method captured for this adapter generation. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -328,7 +310,6 @@ class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPor
     return Reflect.apply(state.query, state.owner, [bundleId, request, signal]);
   }
 
-  /** Invokes the exact opaque citation method captured for this adapter generation. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -339,19 +320,16 @@ class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPor
     return Reflect.apply(state.openCitation, state.owner, [bundleId, queryId, citationRef, signal]);
   }
 
-  /** Invokes the exact synchronous revocation method captured for this generation. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     const state = requireCapturedQueryState(this);
     const result = Reflect.apply(state.revokeCurrent, state.owner, [bundleId, queryId]);
     if (result !== undefined) throw new KnowledgeStudioRuntimeReadError();
   }
 
-  /** Reports whether the captured generation exposed reviewed writeback. */
   supportsWriteback(): boolean {
     return requireCapturedQueryState(this).saveQueryToWiki !== undefined;
   }
 
-  /** Invokes the exact current-answer capture method retained by this generation. */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -367,7 +345,6 @@ class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPor
 Object.freeze(CapturedKnowledgeStudioQueryPort.prototype);
 Object.freeze(CapturedKnowledgeStudioQueryPort);
 
-/** Captures an optional own Query data property without invoking a getter. */
 function captureOptionalQueryPort(
   input: KnowledgeStudioRuntimeReadAdapterInput
 ): CapturedKnowledgeStudioQueryPort | undefined {
@@ -387,26 +364,21 @@ function captureOptionalQueryPort(
   return new CapturedKnowledgeStudioQueryPort(value);
 }
 
-/** Internal control signal requesting another complete atomic read. */
 class KnowledgeStudioConsistencyRetry extends Error {
-  /** Creates a value-free retry signal. */
   constructor() {
     super("Knowledge Studio state changed during observation");
     this.name = "KnowledgeStudioConsistencyRetry";
   }
 }
 
-/** Throws the platform cancellation category at every asynchronous boundary. */
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Compares stable identifiers without locale-dependent ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates a detached strict Bundle map for one adapter generation. */
 function snapshotBundles(
   bundles: readonly KnowledgeBundleConfig[]
 ): ReadonlyMap<string, KnowledgeBundleConfig> {
@@ -428,7 +400,6 @@ function snapshotBundles(
   return result;
 }
 
-/** Reports whether one Queue job exactly owns a pending Review record. */
 function jobMatchesReview(job: KnowledgeIngestJob, record: PendingChangeSetReviewRecord): boolean {
   return (
     job.status === "awaiting_review" &&
@@ -442,7 +413,6 @@ function jobMatchesReview(job: KnowledgeIngestJob, record: PendingChangeSetRevie
   );
 }
 
-/** Reports whether one Queue anchor exactly names a pending Review record. */
 function anchorMatchesReview(
   snapshot: IngestQueueSnapshot,
   record: PendingChangeSetReviewRecord
@@ -462,13 +432,6 @@ function anchorMatchesReview(
   );
 }
 
-/**
- * Selects only exact Queue-anchored pending records and rejects dangling anchors.
- *
- * A proposal saved just before Queue hand-off is intentionally hidden. The
- * opposite state is invalid because Queue claims user-review readiness without
- * the durable proposal it names.
- */
 function selectPendingReviews(
   queue: IngestQueueSnapshot,
   review: ChangeSetReviewSnapshot
@@ -491,7 +454,6 @@ function selectPendingReviews(
     );
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) throw new KnowledgeStudioRuntimeReadError();
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -501,7 +463,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Requires an exact own string-key set on one resolver result item. */
 function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   try {
@@ -517,7 +478,6 @@ function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
   }
 }
 
-/** Validates that a resolver-returned path is the requested Windows target. */
 function assertObservedPath(path: unknown, request: CompilerTargetRequest): void {
   const parsed = typeof path === "string" ? parseVaultPath(path) : undefined;
   if (
@@ -529,7 +489,6 @@ function assertObservedPath(path: unknown, request: CompilerTargetRequest): void
   }
 }
 
-/** Converts one strict compiler target observation into a Review observation. */
 function toReviewObservation(
   value: unknown,
   request: CompilerTargetRequest,
@@ -566,7 +525,6 @@ function toReviewObservation(
   throw new KnowledgeStudioRuntimeReadError();
 }
 
-/** Strictly snapshots one complete resolver result in request order. */
 function parseTargetObservations(
   value: unknown,
   requests: readonly CompilerTargetRequest[]
@@ -594,7 +552,6 @@ function parseTargetObservations(
   });
 }
 
-/** Builds strict read requests from one Bundle-validated proposal. */
 function createTargetRequests(record: PendingChangeSetReviewRecord): CompilerTargetRequest[] {
   return record.proposal.changes.map((change) => ({
     targetId: change.id,
@@ -604,7 +561,6 @@ function createTargetRequests(record: PendingChangeSetReviewRecord): CompilerTar
   }));
 }
 
-/** Deep-freezes one internally constructed Review plan before UI publication. */
 function freezeReviewPlan(plan: KnowledgeReviewPlan): KnowledgeReviewPlan {
   for (const file of plan.files) {
     for (const block of file.blocks) {
@@ -622,7 +578,6 @@ function freezeReviewPlan(plan: KnowledgeReviewPlan): KnowledgeReviewPlan {
   return Object.freeze(plan);
 }
 
-/** Resolves current target state, mapping transient Vault unavailability safely. */
 async function resolveReviewTargets(
   resolver: CompilerTargetResolver,
   requests: readonly CompilerTargetRequest[],
@@ -645,7 +600,6 @@ async function resolveReviewTargets(
   }
 }
 
-/** Builds all exact pending Review plans for one atomic Runtime projection. */
 async function createReviewContexts(
   projection: KnowledgeRuntimeStudioBundleSnapshot,
   bundle: KnowledgeBundleConfig,
@@ -677,13 +631,6 @@ async function createReviewContexts(
   return contexts;
 }
 
-/**
- * Reconstructs one command-time Review context from a consistent Runtime/Vault read-set.
- *
- * The rendered plan is never reused as authority. Queue and Review are read from
- * one Runtime envelope, targets are observed afresh, and the outer Runtime
- * revision is re-read before the context is returned.
- */
 export async function loadKnowledgeStudioReviewContext(
   input: KnowledgeStudioReviewContextLoadInput
 ): Promise<KnowledgeStudioReviewContext | undefined> {
@@ -726,7 +673,6 @@ export async function loadKnowledgeStudioReviewContext(
   throw new KnowledgeStudioRuntimeReadError();
 }
 
-/** Creates one opaque render revision containing no paths or file content. */
 function createRevisionToken(
   projection: KnowledgeRuntimeStudioBundleSnapshot,
   plans: readonly KnowledgeReviewPlan[],
@@ -751,14 +697,6 @@ interface PendingQueryWritebacks {
   hints: Set<() => void>;
 }
 
-/**
- * Production adapter for durable Studio reads, scoped Query, and narrow commands.
- *
- * Queue and Review come from one Runtime envelope. Target observations are
- * followed by an outer-revision reproof; concurrent mutation causes a bounded
- * full retry instead of publishing a mixed snapshot. Commands remain fail-closed
- * unless an authentic same-generation command adapter was installed explicitly.
- */
 export class KnowledgeStudioRuntimeReadAdapter
   implements
     KnowledgeStudioReadPort,
@@ -772,7 +710,6 @@ export class KnowledgeStudioRuntimeReadAdapter
   private readonly maxConsistencyAttempts: number;
   private readonly pendingQueryWritebacks = new Map<string, PendingQueryWritebacks>();
 
-  /** Captures one exact Runtime, Bundle, resolver, and lifecycle generation. */
   constructor(input: KnowledgeStudioRuntimeReadAdapterInput) {
     if (
       typeof input !== "object" ||
@@ -848,7 +785,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     }
   }
 
-  /** Loads one consistent live Activity/Review snapshot without mutation authority. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     const bundle = this.bundles.get(bundleId);
     if (!bundle) throw new KnowledgeStudioRuntimeReadError();
@@ -964,7 +900,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     throw new KnowledgeStudioRuntimeReadError();
   }
 
-  /** Subscribes to Runtime plus coalesced Vault/source-issue hints for one Bundle. */
   subscribe(bundleId: string, onHint: () => void): () => void {
     if (!this.bundles.has(bundleId) || typeof onHint !== "function") {
       throw new KnowledgeStudioRuntimeReadError();
@@ -984,6 +919,7 @@ export class KnowledgeStudioRuntimeReadAdapter
         this.input.query?.revokeCurrent(bundleId);
       } catch {
         // A stale generation is already fail-closed; the durable reload still runs.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       if (active) onHint();
     };
@@ -1011,6 +947,7 @@ export class KnowledgeStudioRuntimeReadAdapter
           unsubscribe();
         } catch {
           // The subscription never became authoritative.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
       if (isKnowledgeAbortError(error)) {
@@ -1027,12 +964,12 @@ export class KnowledgeStudioRuntimeReadAdapter
           unsubscribe();
         } catch {
           // Reload hints are already detached from this adapter generation.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
     };
   }
 
-  /** Delegates pause only when the durable Activity command adapter is installed. */
   async pauseBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -1042,7 +979,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.pauseBundle(bundleId, expectedQueueRevision, signal);
   }
 
-  /** Delegates resume only when the durable Activity command adapter is installed. */
   async resumeBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -1052,7 +988,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.resumeBundle(bundleId, expectedQueueRevision, signal);
   }
 
-  /** Delegates cancellation only when the durable Activity command adapter is installed. */
   async cancelJob(
     bundleId: string,
     jobId: string,
@@ -1063,7 +998,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.cancelJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /** Delegates retry only when the durable Activity command adapter is installed. */
   async retryJob(
     bundleId: string,
     jobId: string,
@@ -1074,13 +1008,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.retryJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /**
-   * Delegates confirmed reanalysis without exposing Runtime mutation authority to the view.
-   * @param bundleId - Selected Bundle
-   * @param jobId - Completed Activity row selected by the user
-   * @param expectedQueueRevision - Revision displayed before confirmation
-   * @param signal - Cancellation owned by this Studio action
-   */
   async reanalyzeJob(
     bundleId: string,
     jobId: string,
@@ -1093,13 +1020,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.reanalyzeJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /**
-   * Runs only the confirmed pending material through the generation-owned command port.
-   * @param bundleId - Selected Bundle
-   * @param jobId - Exact queued Activity row
-   * @param expectedQueueRevision - Revision inspected before confirmation
-   * @param signal - Cancellation owned by this Studio action
-   */
   async runSelectedJob(
     bundleId: string,
     jobId: string,
@@ -1112,7 +1032,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.runSelectedJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
-  /** Delegates Review submission only when narrow command orchestration is installed. */
   async submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -1122,7 +1041,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.submitReview(bundleId, command, signal);
   }
 
-  /** Delegates one dedicated forward Review or accepted-ready Apply action. */
   async submitForwardRevisionStudio(
     bundleId: string,
     command: KnowledgeForwardRevisionStudioCommand,
@@ -1143,7 +1061,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return operation;
   }
 
-  /** Opens one opaque current Review evidence reference through the production coordinator. */
   async openReviewEvidence(
     bundleId: string,
     request: Parameters<KnowledgeStudioReviewEvidencePort["openReviewEvidence"]>[1],
@@ -1153,7 +1070,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.reviewEvidence.openReviewEvidence(bundleId, request, signal);
   }
 
-  /** Rejects recovery continuation because live workflow snapshots contain no recovery rows. */
   async continueRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -1163,7 +1079,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Rejects recovery abandonment because live workflow snapshots contain no recovery rows. */
   async abandonRecovery(
     _bundleId: string,
     _recoveryId: string,
@@ -1173,19 +1088,16 @@ export class KnowledgeStudioRuntimeReadAdapter
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
-  /** Loads the source lifecycle projection through this exact production generation. */
   async loadSources(bundleId: string, signal: AbortSignal) {
     if (!this.input.sourceLifecycle) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.sourceLifecycle.loadSources(bundleId, signal);
   }
 
-  /** Requests a full source recheck through this exact production generation. */
   async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
     if (!this.input.sourceLifecycle) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.sourceLifecycle.checkAgain(bundleId, sourceId, signal);
   }
 
-  /** Atomically retires one exact source while retaining current Wiki bytes. */
   async retireSource(
     bundleId: string,
     request: Readonly<KnowledgeSourceRetirementRequest>,
@@ -1195,7 +1107,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.sourceLifecycle.retireSource(bundleId, request, signal);
   }
 
-  /** Runs one scoped retrieval-only query when the live generation installed it. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -1205,7 +1116,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.query.query(bundleId, request, signal);
   }
 
-  /** Opens one coordinator-issued source citation through the live generation. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -1216,14 +1126,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.query.openCitation(bundleId, queryId, citationRef, signal);
   }
 
-  /**
-   * Registers one current answer before publishing its non-authoritative reload hints.
-   *
-   * @param bundleId Bundle whose current answer is being captured.
-   * @param queryId Coordinator-issued identity of the grounded answer.
-   * @param request Reviewed title for the immutable source capture.
-   * @param signal Caller cancellation; explicit lifecycle revocation remains immediate.
-   */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -1259,7 +1161,6 @@ export class KnowledgeStudioRuntimeReadAdapter
     }
   }
 
-  /** Revokes the current scoped Query and opaque citation references. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     if (!this.input.query) throw new KnowledgeStudioAdapterUnavailableError();
     this.input.query.revokeCurrent(bundleId, queryId);

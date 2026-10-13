@@ -35,73 +35,57 @@ import {
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import type { KnowledgePluginBundleConfigLoadResult } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
-/** Minimal project snapshot consumed by one production preflight generation. */
 export interface KnowledgePluginProductionPreflightProjectRecord {
   project: ProjectKnowledgeBundleConfigInput & ProjectKnowledgePipelineProjectInput;
 }
 
-/** Static, secret-free resources shared by preflight and the future worker generation. */
 export interface KnowledgePluginProductionPreflightResources {
-  /** Exact parser capabilities whose profiles participate in this generation. */
   parsers: readonly KnowledgeByteParser[];
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
 }
 
-/** Closeable synchronous preflight instance owned by this plugin lifecycle. */
 export interface KnowledgePluginProductionPreflightPort {
-  /** Returns one already-sanitized synchronous preflight result. */
   preflight(): KnowledgeProductionPreflightResult;
-  /** Transfers lifecycle close authority for the exact admitted private route generation. */
+
   getModelRouteLeaseOwner(): KnowledgeProductionModelRouteLeaseOwner;
-  /** Permanently invalidates every capability retained by this preflight generation. */
+
   close(): void;
 }
 
-/** Injected plugin edges used to build one exact preflight generation. */
 export interface KnowledgePluginProductionPreflightLifecycleDependencies {
-  /** One-shot opaque half of the exact Runtime/preflight execution pairing. */
   executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim;
-  /** Captures project records once after ordinary Projects initialization. */
+
   getProjectRecords(): readonly KnowledgePluginProductionPreflightProjectRecord[];
-  /** Captures legacy hydrated settings when no configured-model preparation edge is supplied. */
+
   getSettings?(): KnowledgeProductionPreflightSettingsInput;
-  /** Stable renderer-native fetch capability captured for this plugin instance. */
+
   fetchPort?: KnowledgeDeepSeekFetchPort;
-  /** Creates the reviewed parser/compiler/profile resources for this generation. */
+
   createResources(): KnowledgePluginProductionPreflightResources;
-  /** Creates the strict aggregate Bundle source without accessing global state. */
+
   createBundleSource?(): Pick<ProjectKnowledgeBundleConfigSource, "load">;
-  /** Eagerly constructs one zero-network private-route preflight. */
+
   createPreflight?: (
     input: KnowledgeProductionPreflightComposerInput
   ) => KnowledgePluginProductionPreflightPort;
-  /**
-   * Resolves a V4 configured-model generation and its Keychain credential.
-   *
-   * This edge supersedes `getSettings`/`createPreflight` when present. The
-   * lifecycle retains only its returned secret-free profile source and private
-   * preflight capability.
-   */
+
   prepareConfiguredModelPreflight?: (
     input: Omit<PrepareKnowledgeConfiguredModelPreflightInput, "modelManagement">
   ) => Promise<PreparedKnowledgeConfiguredModelPreflight>;
 }
 
-/** Configured preflight admission retained only by the current lifecycle generation. */
 export interface KnowledgePluginProductionPreflightAdmission {
-  /** Opaque in-memory generation checked before production composition may continue. */
   readonly generation: number;
-  /** Strict Bundle owners captured from the exact Projects snapshot used by preflight. */
+
   readonly owners: readonly ConfiguredProjectKnowledgeBundle[];
-  /** Unforgeable secret-free capabilities retained for the exact workflow generation. */
+
   readonly workflowLease: KnowledgePluginProductionWorkflowLease;
-  /** One-shot opaque bridge consumed only while composing this exact generation. */
+
   readonly workflowCompositionClaim: KnowledgePluginProductionWorkflowCompositionClaim;
-  /** Close-incapable access to exact preflight-created model routes. */
+
   readonly modelRouteLease: KnowledgeProductionModelRouteLease;
 }
 
-/** Startup result plus an in-process admission used by the next recovery boundary. */
 export type KnowledgePluginProductionPreflightLoadResult =
   | Exclude<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
   | {
@@ -119,7 +103,6 @@ const WORKFLOW_LEASE_CONSTRUCTOR_TOKEN = Symbol(
 // eslint-disable-next-line @typescript-eslint/unbound-method -- Capture the frozen base method so a subclass cannot replace WeakMap authority.
 const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
 
-/** Module-private state held only by authentic workflow leases. */
 interface KnowledgePluginProductionWorkflowLeaseState {
   current: boolean;
   executionOwner?: KnowledgeExecutionOwner;
@@ -136,9 +119,7 @@ const preflightExecutionBindings = new WeakMap<
   KnowledgeProductionWorkflowExecutionPreflightBinding
 >();
 
-/** Module-authentic one-shot bridge for installing the exact production composition owner. */
 export class KnowledgePluginProductionWorkflowCompositionClaim {
-  /** Construction is accepted only through hidden WeakMap state installed by preflight. */
   constructor(token: symbol) {
     if (token !== WORKFLOW_LEASE_CONSTRUCTOR_TOKEN) throw new TypeError();
     Object.freeze(this);
@@ -153,7 +134,6 @@ interface WorkflowCompositionClaimState {
 
 const workflowCompositionClaimStates = new WeakMap<object, WorkflowCompositionClaimState>();
 
-/** Returns the hidden exact preflight binding captured during lifecycle construction. */
 function requirePreflightExecutionBinding(
   lifecycle: KnowledgePluginProductionPreflightLifecycle
 ): KnowledgeProductionWorkflowExecutionPreflightBinding {
@@ -164,19 +144,16 @@ function requirePreflightExecutionBinding(
 
 const workflowLeaseStates = new WeakMap<object, KnowledgePluginProductionWorkflowLeaseState>();
 
-/** Narrows the injected Projects result without changing its declared element type to `any`. */
 function isProjectRecordArray(
   value: unknown
 ): value is readonly KnowledgePluginProductionPreflightProjectRecord[] {
   return Array.isArray(value);
 }
 
-/** Creates the standard cancellation rejection used by startup generation boundaries. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Returns hidden mutable state only for an authentic workflow lease. */
 function requireWorkflowLeaseState(value: unknown): KnowledgePluginProductionWorkflowLeaseState {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("The production workflow lease is invalid");
@@ -188,16 +165,15 @@ function requireWorkflowLeaseState(value: unknown): KnowledgePluginProductionWor
   return state;
 }
 
-/** Calls one invalidation observer without allowing it to block revocation or cleanup. */
 function notifyWorkflowLeaseInvalidation(listener: () => void): void {
   try {
     listener();
   } catch {
     // Revocation observers cannot recover authority or prevent other observers.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Synchronously revokes one authentic lease before notifying a stable observer snapshot. */
 function closeWorkflowLease(lease: KnowledgePluginProductionWorkflowLease): void {
   const state = requireWorkflowLeaseState(lease);
   if (!state.current) return;
@@ -221,7 +197,6 @@ function closeWorkflowLease(lease: KnowledgePluginProductionWorkflowLease): void
   }
 }
 
-/** Revokes one authentic model-route owner without allowing cleanup failure to stop teardown. */
 function closeModelRouteOwnerSafely(
   owner: KnowledgeProductionModelRouteLeaseOwner | undefined
 ): void {
@@ -231,10 +206,10 @@ function closeModelRouteOwnerSafely(
     owner.close();
   } catch {
     // Candidate and workflow cleanup must continue after an invalid or failing owner.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Captures strict frozen owner projections used by preflight and its workflow lease. */
 function snapshotOwners(
   owners: readonly ConfiguredProjectKnowledgeBundle[]
 ): readonly ConfiguredProjectKnowledgeBundle[] {
@@ -247,7 +222,6 @@ function snapshotOwners(
   return Object.freeze(snapshot);
 }
 
-/** Reads one exact enumerable data-only record without invoking accessors. */
 function snapshotExactRecord(
   value: unknown,
   keys: readonly string[]
@@ -279,7 +253,6 @@ function snapshotExactRecord(
   }
 }
 
-/** Reads one dense string array without consulting iterators or element accessors. */
 function snapshotStringArray(value: unknown): readonly string[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -312,7 +285,6 @@ function snapshotStringArray(value: unknown): readonly string[] | undefined {
   }
 }
 
-/** Compares one detached owner with a retained owner across its complete strict config. */
 function isSameWorkflowOwner(value: unknown, retained: ConfiguredProjectKnowledgeBundle): boolean {
   const owner = snapshotExactRecord(value, ["projectId", "config"]);
   const config = owner
@@ -339,7 +311,6 @@ function isSameWorkflowOwner(value: unknown, retained: ConfiguredProjectKnowledg
   );
 }
 
-/** Finds one callable data method without invoking getters on a capability or its prototypes. */
 function hasDataMethod(value: unknown, key: "getProfile" | "parse"): boolean {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     return false;
@@ -361,7 +332,6 @@ function hasDataMethod(value: unknown, key: "getProfile" | "parse"): boolean {
   return false;
 }
 
-/** Captures a bounded dense parser capability array without consulting iterator hooks. */
 function snapshotParsers(value: unknown): readonly KnowledgeByteParser[] {
   if (!Array.isArray(value)) {
     throw new TypeError("Knowledge workflow parsers are unavailable");
@@ -395,7 +365,6 @@ function snapshotParsers(value: unknown): readonly KnowledgeByteParser[] {
   return Object.freeze(parsers);
 }
 
-/** Mints one module-authentic workflow lease without exposing its construction token. */
 function createWorkflowLease(
   owners: readonly ConfiguredProjectKnowledgeBundle[],
   parsers: readonly KnowledgeByteParser[],
@@ -417,7 +386,6 @@ function createWorkflowLease(
   return lease;
 }
 
-/** Freezes the narrow immutable admission passed to future production composition. */
 function createAdmission(
   generation: number,
   owners: readonly ConfiguredProjectKnowledgeBundle[],
@@ -434,22 +402,13 @@ function createAdmission(
   });
 }
 
-/** Maps an already-sanitized preflight diagnostic into the startup namespace. */
 function toStartupDiagnostic(
   result: Extract<KnowledgeProductionPreflightResult, { kind: "diagnostic" }>
 ): string {
   return `production_preflight_${result.code}`;
 }
 
-/**
- * Opaque, synchronously revocable capability for one exact production workflow generation.
- *
- * Owners, parsers, and the authentic profile source live only in module-private
- * WeakMap state. Closing the owning plugin lifecycle removes those references
- * before a stable snapshot of invalidation observers is called.
- */
 export class KnowledgePluginProductionWorkflowLease {
-  /** Rejects direct construction without the module-private lifecycle token. */
   constructor(
     token: symbol,
     owners: readonly ConfiguredProjectKnowledgeBundle[],
@@ -469,12 +428,10 @@ export class KnowledgePluginProductionWorkflowLease {
     Object.freeze(this);
   }
 
-  /** Authenticates a lifecycle-minted lease without granting mint or close authority. */
   static assert(value: unknown): asserts value is KnowledgePluginProductionWorkflowLease {
     requireWorkflowLeaseState(value);
   }
 
-  /** Reports whether this current lease owns the exact opaque execution lifecycle. */
   static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
     try {
       const state = requireWorkflowLeaseState(value);
@@ -495,7 +452,6 @@ export class KnowledgePluginProductionWorkflowLease {
     }
   }
 
-  /** Returns the leaf-authentic Runtime decision lease only after exact owner rejoin. */
   static getExecutionLease(
     value: KnowledgePluginProductionWorkflowLease,
     executionOwner: KnowledgeExecutionOwner
@@ -516,7 +472,6 @@ export class KnowledgePluginProductionWorkflowLease {
     return state.executionLease;
   }
 
-  /** Mints the one-shot composition bridge retained by this preflight admission. */
   static createCompositionClaim(
     value: KnowledgePluginProductionWorkflowLease
   ): KnowledgePluginProductionWorkflowCompositionClaim {
@@ -534,7 +489,6 @@ export class KnowledgePluginProductionWorkflowLease {
     return claim;
   }
 
-  /** Consumes one exact preflight-minted composition claim once. */
   static consumeCompositionClaim(
     value: KnowledgePluginProductionWorkflowLease,
     claimValue: unknown
@@ -556,19 +510,16 @@ export class KnowledgePluginProductionWorkflowLease {
     return state.executionOwner;
   }
 
-  /** Returns whether this exact workflow generation still owns its capabilities. */
   isCurrent(): boolean {
     return requireWorkflowLeaseState(this).current;
   }
 
-  /** Throws the standard cancellation category after synchronous workflow revocation. */
   assertCurrent(): void {
     if (!requireWorkflowLeaseState(this).current) {
       throw createAbortError();
     }
   }
 
-  /** Returns the exact frozen owners used by this generation's production preflight. */
   getOwners(): readonly ConfiguredProjectKnowledgeBundle[] {
     const state = requireWorkflowLeaseState(this);
     if (!state.current || !state.owners) {
@@ -577,7 +528,6 @@ export class KnowledgePluginProductionWorkflowLease {
     return state.owners;
   }
 
-  /** Returns the exact frozen parser capability registry captured for this generation. */
   getParsers(): readonly KnowledgeByteParser[] {
     const state = requireWorkflowLeaseState(this);
     if (!state.current || !state.parsers) {
@@ -586,13 +536,6 @@ export class KnowledgePluginProductionWorkflowLease {
     return state.parsers;
   }
 
-  /**
-   * Resolves one exact owner through the same authentic source used by preflight.
-   *
-   * @param owner - Retained or strict detached owner matching one exact generation owner
-   * @param signal - Caller-owned workflow cancellation signal
-   * @returns Frozen, secret-free pipeline profile
-   */
   resolve(
     owner: ConfiguredProjectKnowledgeBundle,
     signal: AbortSignal
@@ -617,15 +560,6 @@ export class KnowledgePluginProductionWorkflowLease {
     return profile;
   }
 
-  /**
-   * Observes one future synchronous revocation without receiving close authority.
-   *
-   * A listener registered after revocation is called synchronously. Unsubscribe is
-   * idempotent, and observer failures are isolated from lifecycle cleanup.
-   *
-   * @param listener - Value-free revocation callback
-   * @returns Idempotent unsubscribe function
-   */
   subscribeInvalidation(listener: () => void): () => void {
     if (typeof listener !== "function") {
       throw new TypeError("The workflow invalidation listener is invalid");
@@ -647,14 +581,6 @@ export class KnowledgePluginProductionWorkflowLease {
   }
 }
 
-/**
- * Owns production preflight capabilities across Settings, Projects, and plugin invalidation.
- *
- * Candidate construction is generation-checked before installation. This closes
- * the synchronous re-entrancy window where a Settings or Projects callback can
- * invalidate startup while a constructor is still running. The lifecycle has no
- * Queue, watcher, model invocation, source reader, Review, or Wiki mutation port.
- */
 export class KnowledgePluginProductionPreflightLifecycle {
   private readonly dependencies: Omit<
     KnowledgePluginProductionPreflightLifecycleDependencies,
@@ -669,7 +595,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     modelRouteOwner: KnowledgeProductionModelRouteLeaseOwner;
   };
 
-  /** Creates one plugin-owned, initially fail-closed preflight lifecycle. */
   constructor(dependencies: KnowledgePluginProductionPreflightLifecycleDependencies) {
     const { executionPreflightClaim, ...retained } = dependencies;
     const executionBinding =
@@ -678,12 +603,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     this.dependencies = retained;
   }
 
-  /**
-   * Strictly loads Bundle configuration and installs only a current preflight candidate.
-   *
-   * @param signal - Startup barrier generation cancellation
-   * @returns Sanitized Bundle state and a current in-process production admission
-   */
   async load(signal: AbortSignal): Promise<KnowledgePluginProductionPreflightLoadResult> {
     const generation = this.beginGeneration(signal);
     const projectRecords = this.captureProjectRecords();
@@ -844,6 +763,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
         candidate.close();
       } catch {
         // A failed lease install cannot make a discarded preflight observable.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       if (workflowLease) closeWorkflowLease(workflowLease);
       this.assertCurrent(generation, signal);
@@ -923,11 +843,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     };
   }
 
-  /**
-   * Requires an admission to remain owned by the current installed generation.
-   *
-   * @param admission - Candidate returned by the most recent successful load
-   */
   assertCurrentAdmission(admission: KnowledgePluginProductionPreflightAdmission): void {
     if (
       this.closed ||
@@ -940,7 +855,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     }
   }
 
-  /** Synchronously invalidates the current preflight after Settings or Projects change. */
   invalidate(): void {
     if (this.closed) {
       return;
@@ -949,7 +863,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     this.closeCurrent();
   }
 
-  /** Permanently closes this plugin lifecycle and every retained private preflight capability. */
   close(): void {
     if (this.closed) {
       return;
@@ -959,7 +872,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     this.closeCurrent();
   }
 
-  /** Starts a latest-wins generation after closing the previous candidate synchronously. */
   private beginGeneration(signal: AbortSignal): number {
     if (this.closed || signal.aborted) {
       throw createAbortError();
@@ -971,7 +883,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
     return generation;
   }
 
-  /** Captures a dense project snapshot without retaining project-file metadata. */
   private captureProjectRecords(): readonly KnowledgePluginProductionPreflightProjectRecord[] {
     const records = this.dependencies.getProjectRecords();
     if (!isProjectRecordArray(records)) {
@@ -991,14 +902,12 @@ export class KnowledgePluginProductionPreflightLifecycle {
     );
   }
 
-  /** Rejects continuation after cancellation, closure, or synchronous invalidation. */
   private assertCurrent(generation: number, signal: AbortSignal): void {
     if (this.closed || signal.aborted || generation !== this.generation) {
       throw createAbortError();
     }
   }
 
-  /** Closes and removes one candidate only if it is still the installed generation. */
   private closeCandidate(
     candidate: KnowledgePluginProductionPreflightPort,
     generation: number,
@@ -1013,11 +922,11 @@ export class KnowledgePluginProductionPreflightLifecycle {
       candidate.close();
     } catch {
       // Authority is already synchronously revoked; cleanup failure stays private.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     closeWorkflowLease(workflowLease);
   }
 
-  /** Closes the current candidate before clearing its lifecycle reference. */
   private closeCurrent(): void {
     const current = this.current;
     this.current = undefined;
@@ -1027,6 +936,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
       current.preflight.close();
     } catch {
       // Authority is already synchronously revoked; cleanup failure stays private.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     closeWorkflowLease(current.admission.workflowLease);
   }

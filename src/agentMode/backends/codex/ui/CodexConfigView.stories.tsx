@@ -1,7 +1,7 @@
 import { FULL_BLEED_MODAL_CLASS } from "@/components/modals/ReactModal";
 import {
   CodexConfigView,
-  CODEX_BUNDLE_VERSION,
+  CODEX_PINNED_VERSION,
   type CodexBinarySource,
   type CodexConfigActions,
   type CodexConfigViewProps,
@@ -23,7 +23,7 @@ const ACTIONS: CodexConfigActions = {
 
 const MANAGED: CodexManagedInfo = {
   platform: "darwin-arm64",
-  version: CODEX_BUNDLE_VERSION,
+  version: CODEX_PINNED_VERSION,
   destination: "~/.obsidian-copilot/codex",
   run: { kind: "idle" },
 };
@@ -32,15 +32,10 @@ const OUTDATED: InstallState = {
   kind: "incompatible",
   source: "managed",
   currentVersion: "1.9.0-r1",
-  minVersion: CODEX_BUNDLE_VERSION,
-  message: `Codex adapter v1.9.0-r1 requires an upgrade. Copilot requires Codex adapter v${CODEX_BUNDLE_VERSION} or newer.`,
+  minVersion: CODEX_PINNED_VERSION,
+  message: `Codex adapter v1.9.0-r1 requires an upgrade. Copilot requires Codex adapter v${CODEX_PINNED_VERSION} or newer.`,
 };
 
-/**
- * Every story renders through this stateful wrapper so the gallery can exercise
- * the source switch for real: `args.source` seeds the first render (keeping each
- * story's captured state), then clicking a segment swaps the visible branch.
- */
 const InteractiveConfigView: React.FC<Partial<CodexConfigViewProps>> = (props) => {
   const [source, setSource] = React.useState<CodexBinarySource>(props.source ?? "managed");
   return (
@@ -53,7 +48,7 @@ const InteractiveConfigView: React.FC<Partial<CodexConfigViewProps>> = (props) =
         terminalCommand:
           props.activeSource === "custom"
             ? "'/usr/local/bin/codex-acp' cli login"
-            : `'/Users/example/.obsidian-copilot/codex/${CODEX_BUNDLE_VERSION}/codex-acp' cli login`,
+            : `'/Users/example/.obsidian-copilot/codex/${CODEX_PINNED_VERSION}/codex-acp' cli login`,
       }}
     />
   );
@@ -88,7 +83,6 @@ const meta = {
 } satisfies Meta<CodexConfigViewProps>;
 export default meta;
 
-/** First run: nothing installed, so the managed path offers a single download. */
 export const ManagedNotInstalled: StoryObj<CodexConfigViewProps> = {
   render: InteractiveConfigView,
 };
@@ -98,11 +92,49 @@ export const ManagedInstalling: StoryObj<CodexConfigViewProps> = {
   args: {
     managed: {
       ...MANAGED,
+      platform: "win32-arm64",
       run: {
         kind: "running",
-        label: "Installing the Codex adapter…",
-        percent: 30,
+        label: "Downloading Codex adapter — 80.1 MB / 160.2 MB",
+        percent: 42,
       },
+    },
+  },
+};
+
+export const ManagedConnecting: StoryObj<CodexConfigViewProps> = {
+  render: InteractiveConfigView,
+  args: {
+    managed: {
+      ...MANAGED,
+      platform: "win32-arm64",
+      run: {
+        kind: "running",
+        label: "Connecting to Codex adapter download… 65s elapsed",
+        percent: 5,
+      },
+    },
+  },
+};
+
+export const ManagedExtracting: StoryObj<CodexConfigViewProps> = {
+  render: InteractiveConfigView,
+  args: {
+    managed: {
+      ...MANAGED,
+      platform: "win32-arm64",
+      run: { kind: "running", label: "Extracting Codex adapter…", percent: 80 },
+    },
+  },
+};
+
+export const ManagedActivating: StoryObj<CodexConfigViewProps> = {
+  render: InteractiveConfigView,
+  args: {
+    managed: {
+      ...MANAGED,
+      platform: "win32-arm64",
+      run: { kind: "running", label: "Activating Codex adapter…", percent: 98 },
     },
   },
 };
@@ -122,10 +154,6 @@ export const CustomPathApplied: StoryObj<CodexConfigViewProps> = {
   },
 };
 
-/**
- * Looking at the custom path before setting one, while the managed binary is the
- * one actually running — the case the "in use right now" note exists for.
- */
 export const CustomNotSetYet: StoryObj<CodexConfigViewProps> = {
   render: InteractiveConfigView,
   args: { source: "custom", state: { kind: "ready", source: "managed" }, activeSource: "managed" },
@@ -158,7 +186,7 @@ export const InstallingWithCustomSelected: StoryObj<CodexConfigViewProps> = {
     customPath: "/usr/local/bin/codex-acp",
     managed: {
       ...MANAGED,
-      run: { kind: "running", label: "Installing the Codex adapter…", percent: 30 },
+      run: { kind: "running", label: "Extracting Codex adapter…", percent: 80 },
     },
   },
 };

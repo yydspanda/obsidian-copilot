@@ -58,17 +58,10 @@ interface LinkedAbortSignal {
   release(): void;
 }
 
-/** Creates the platform-standard cancellation error used at Studio boundaries. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/**
- * Links caller and delegate-generation cancellation without retaining listeners.
- *
- * @param signals - Signals whose cancellation invalidates the delegated operation
- * @returns Linked signal and deterministic listener cleanup
- */
 function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   const controller = new AbortController();
   const listeners: { signal: AbortSignal; listener: () => void }[] = [];
@@ -94,12 +87,6 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
   };
 }
 
-/**
- * Stable Studio boundary whose replaceable implementation is never exposed to React.
- *
- * The wrapper starts and ends fail-closed. Delegate snapshots are never retained:
- * every read goes to the implementation active for that exact generation.
- */
 export class DelegatingKnowledgeStudioPort
   implements
     KnowledgeStudioReadPort,
@@ -114,24 +101,11 @@ export class DelegatingKnowledgeStudioPort
   private readonly hintBindings = new Map<string, BundleHintBinding>();
   private disposed = false;
 
-  /**
-   * Creates a stable port backed initially by the explicit unavailable adapter.
-   *
-   * @param unavailableNotice - Optional sanitized notice for unavailable snapshots
-   */
   constructor(unavailableNotice?: string) {
     this.unavailableDelegate = new UnavailableKnowledgeStudioPort(unavailableNotice);
     this.generation = this.createGeneration(this.unavailableDelegate);
   }
 
-  /**
-   * Atomically makes a new implementation current and invalidates all old work.
-   *
-   * Existing Bundle subscriptions are rebound to the replacement and receive a
-   * reload hint. A disposed wrapper cannot be reopened.
-   *
-   * @param delegate - Complete read/command implementation for the next generation
-   */
   replaceDelegate(delegate: QueryCapableKnowledgeStudioPort): void {
     if (this.disposed) {
       throw new KnowledgeStudioAdapterUnavailableError();
@@ -152,13 +126,6 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Permanently fail-closes this wrapper and invalidates in-flight delegate work.
-   *
-   * Current subscribers receive one final reload hint so they can replace a ready
-   * snapshot with the unavailable snapshot. Their underlying subscriptions are
-   * removed, and future subscriptions are inert.
-   */
   dispose(): void {
     if (this.disposed) {
       return;
@@ -182,20 +149,12 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /** Loads a snapshot from the delegate current for this operation generation. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       delegate.load(bundleId, delegatedSignal)
     );
   }
 
-  /**
-   * Subscribes to reload hints while keeping the replaceable delegate private.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param onHint - Callback that must trigger a fresh authoritative load
-   * @returns Idempotent local unsubscription callback
-   */
   subscribe(bundleId: string, onHint: () => void): () => void {
     if (this.disposed) {
       return () => undefined;
@@ -234,7 +193,6 @@ export class DelegatingKnowledgeStudioPort
     };
   }
 
-  /** Routes a Bundle pause through the current delegate generation. */
   async pauseBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -245,7 +203,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes a Bundle resume through the current delegate generation. */
   async resumeBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -256,7 +213,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one queue-job cancellation through the current delegate generation. */
   async cancelJob(
     bundleId: string,
     jobId: string,
@@ -268,7 +224,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one failed-job retry through the current delegate generation. */
   async retryJob(
     bundleId: string,
     jobId: string,
@@ -280,14 +235,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /**
-   * Routes confirmed reanalysis without losing a resolved atomic enqueue on generation change.
-   *
-   * @param bundleId - Bundle owning the selected completed job
-   * @param jobId - Exact completed job selected by the user
-   * @param expectedQueueRevision - Queue revision displayed at confirmation
-   * @param signal - Caller cancellation before the atomic operation commits
-   */
   async reanalyzeJob(
     bundleId: string,
     jobId: string,
@@ -303,13 +250,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /**
-   * Routes selected execution while retaining its durable result across generation refresh.
-   * @param bundleId - Bundle owning the selected pending job
-   * @param jobId - Exact pending job confirmed by the user
-   * @param expectedQueueRevision - Queue revision inspected before confirmation
-   * @param signal - Caller cancellation before execution begins
-   */
   async runSelectedJob(
     bundleId: string,
     jobId: string,
@@ -325,7 +265,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one Review mutation while preserving any resolved durable receipt. */
   async submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -336,7 +275,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one forward decision/Apply while preserving any durable commit-wins result. */
   async submitForwardRevisionStudio(
     bundleId: string,
     command: KnowledgeForwardRevisionStudioCommand,
@@ -349,7 +287,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one opaque Review evidence jump through the current delegate generation. */
   async openReviewEvidence(
     bundleId: string,
     request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
@@ -362,7 +299,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes an opaque recovery continuation through the current delegate generation. */
   async continueRecovery(
     bundleId: string,
     recoveryId: string,
@@ -376,7 +312,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes an opaque no-journal abandonment through the current delegate generation. */
   async abandonRecovery(
     bundleId: string,
     recoveryId: string,
@@ -390,7 +325,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Loads active source lifecycle state from the current delegate generation. */
   async loadSources(bundleId: string, signal: AbortSignal) {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       typeof delegate.loadSources === "function"
@@ -399,7 +333,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Requests a current-generation source recheck. */
   async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       typeof delegate.checkAgain === "function"
@@ -408,7 +341,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one exact source retirement through the current generation. */
   async retireSource(
     bundleId: string,
     request: Readonly<KnowledgeSourceRetirementRequest>,
@@ -421,7 +353,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one scoped applied-Wiki query through the current delegate generation. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -434,7 +365,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one opaque citation jump through the current delegate generation. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -448,7 +378,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes one current-answer capture through the exact delegate generation. */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -462,7 +391,6 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Synchronously revokes exact or Bundle-wide Query authority on the active delegate. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     if (this.disposed) return;
     const generation = this.generation;
@@ -473,22 +401,10 @@ export class DelegatingKnowledgeStudioPort
     if (generation !== this.generation) throw createAbortError();
   }
 
-  /** Permanently closes the stable Query boundary together with the Studio port. */
   close(): void {
     this.dispose();
   }
 
-  /**
-   * Runs one atomic mutation without allowing post-commit cancellation to erase its receipt.
-   *
-   * Cancellation is still linked into the delegate so it can stop before commit. Once
-   * the delegate resolves, that resolution is authoritative even if the caller or
-   * generation was revoked while the durable transition was completing.
-   *
-   * @param callerSignal - Cancellation owned by the Studio controller
-   * @param operation - Atomic delegate operation using the linked generation signal
-   * @returns The delegate's durable receipt when it resolves
-   */
   private async runCommitWinsWithCurrentDelegate<T>(
     callerSignal: AbortSignal,
     operation: (delegate: QueryCapableKnowledgeStudioPort, signal: AbortSignal) => Promise<T>
@@ -512,13 +428,6 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Executes against one captured generation and rejects any late result.
-   *
-   * @param callerSignal - Cancellation owned by the Studio controller
-   * @param operation - Delegate operation using the linked generation signal
-   * @returns Result only when the captured generation is still current
-   */
   private async runWithCurrentDelegate<T>(
     callerSignal: AbortSignal,
     operation: (delegate: QueryCapableKnowledgeStudioPort, signal: AbortSignal) => Promise<T>
@@ -560,23 +469,10 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Creates a separately cancellable delegate generation.
-   *
-   * @param delegate - Delegate owned by the new generation
-   * @returns Generation record
-   */
   private createGeneration(delegate: QueryCapableKnowledgeStudioPort): DelegateGeneration {
     return { delegate, abortController: new AbortController() };
   }
 
-  /**
-   * Binds one local Bundle fan-out to the captured delegate generation.
-   *
-   * @param bundleId - Bundle whose hints are observed
-   * @param binding - Local subscriber fan-out
-   * @param generation - Generation that owns the delegate subscription
-   */
   private bindDelegateHint(
     bundleId: string,
     binding: BundleHintBinding,
@@ -593,11 +489,6 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Removes one delegate subscription without allowing cleanup failure to leak.
-   *
-   * @param binding - Binding whose delegate subscription is removed
-   */
   private unbindDelegateHint(binding: BundleHintBinding): void {
     const unsubscribe = binding.unsubscribeDelegate;
     binding.unsubscribeDelegate = undefined;
@@ -609,14 +500,10 @@ export class DelegatingKnowledgeStudioPort
       unsubscribe();
     } catch {
       // Delegate cleanup is best-effort; its generation is already invalid.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 
-  /**
-   * Emits a non-authoritative reload hint to every current Bundle subscriber.
-   *
-   * @param bundleId - Bundle whose durable state may have changed
-   */
   private emitHint(bundleId: string): void {
     const binding = this.hintBindings.get(bundleId);
     if (!binding) {
@@ -628,16 +515,12 @@ export class DelegatingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Isolates listeners so one view cannot suppress another view's reload hint.
-   *
-   * @param listener - One local hint listener
-   */
   private invokeHintListener(listener: () => void): void {
     try {
       listener();
     } catch {
       // Hints are best-effort; authoritative state is loaded separately.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 }

@@ -13,12 +13,10 @@ import {
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type { JsonValue } from "@/knowledge/model/types";
 
-/** Content-free observation reconstructed from one exact recovery terminal proof. */
 export type KnowledgeForwardRevisionRecoveryTerminalTransitionObservation =
   | Readonly<{ kind: "file"; contentHash: string }>
   | Readonly<{ kind: "missing" | "directory" | "oversized_file" }>;
 
-/** Exact active-journal transition material admitted by the Runtime exclusive-mutation guard. */
 export interface KnowledgeForwardRevisionRecoveryTerminalTransition {
   readonly previousJournal: Readonly<KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2>;
   readonly previousJournalDigest: string;
@@ -27,9 +25,7 @@ export interface KnowledgeForwardRevisionRecoveryTerminalTransition {
   readonly observedAt: number;
 }
 
-/** Fixed value-free rejection for a terminal that does not rejoin its active journal. */
 export class KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError extends TypeError {
-  /** Creates one sanitized validation failure. */
   constructor() {
     super("Forward revision recovery terminal does not rejoin its active journal");
     this.name = "KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError";
@@ -37,28 +33,14 @@ export class KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError e
   }
 }
 
-/** Throws one fixed validation failure without retaining rejected values. */
 function invalid(): never {
   throw new KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError();
 }
 
-/** Compares two already-strict protocol values independently of property insertion order. */
 function exactProtocolValuesEqual(left: unknown, right: unknown): boolean {
   return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
 }
 
-/**
- * Rejoins one terminal proof to the exact recovery-required journal it atomically clears.
- *
- * The terminal observation may be newer than the persisted conflict observation, but every
- * accepted identity, claim, transaction, hash, journal revision, and recovery-journal digest
- * must be reconstructed exactly from the active journal. The returned transition contains no
- * Vault bytes beyond the already-durable journal snapshot.
- *
- * @param activeJournalValue - Exact active recovery-required Apply journal
- * @param terminalValue - Candidate durable no-write terminal proof
- * @returns Frozen transition material suitable for exact Runtime-state reconstruction
- */
 export function snapshotKnowledgeForwardRevisionRecoveryTerminalTransition(
   activeJournalValue: unknown,
   terminalValue: unknown

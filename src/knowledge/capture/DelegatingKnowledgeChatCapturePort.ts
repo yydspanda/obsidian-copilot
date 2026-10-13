@@ -13,35 +13,24 @@ interface CaptureGeneration {
   abortController: AbortController;
 }
 
-/** Explicit fail-closed implementation used before and between production generations. */
 class UnavailableKnowledgeChatCapturePort implements KnowledgeChatCapturePort {
-  /** Rejects capture while no released production generation owns the operation. */
   async addVaultSource(): Promise<KnowledgeChatCaptureReceipt> {
     throw new KnowledgeChatCaptureError("unavailable");
   }
 
-  /** Reports that no draft destination is available between generations. */
   prepareKnowledgeDraft(): null {
     return null;
   }
 
-  /** Rejects draft creation while no released production generation owns the operation. */
   async createKnowledgeDraft(): Promise<KnowledgeChatDraftReceipt> {
     throw new KnowledgeChatCaptureError("unavailable");
   }
 }
 
-/** Creates the standard cancellation category for replaced capture generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/**
- * Stable Chat capture boundary whose production delegate is generation-revocable.
- *
- * React receives this wrapper once. Replacement aborts old work and rejects late
- * results, while Runtime, Manifest, Queue, and model capabilities remain private.
- */
 export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCapturePort {
   private readonly unavailable = new UnavailableKnowledgeChatCapturePort();
   private readonly draftSessions = new WeakMap<
@@ -51,26 +40,22 @@ export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCaptureP
   private generation: CaptureGeneration = this.createGeneration(this.unavailable);
   private disposed = false;
 
-  /** Replaces the current delegate and synchronously revokes all old work. */
   replaceDelegate(delegate: KnowledgeChatCapturePort): void {
     if (this.disposed) throw new KnowledgeChatCaptureError("unavailable");
     this.generation.abortController.abort();
     this.generation = this.createGeneration(delegate);
   }
 
-  /** Publishes the explicit unavailable delegate without disposing the stable wrapper. */
   setUnavailable(): void {
     if (this.disposed) return;
     this.replaceDelegate(this.unavailable);
   }
 
-  /** Revokes one delegate only when it still owns the current generation. */
   revokeDelegate(delegate: KnowledgeChatCapturePort): void {
     if (this.disposed || this.generation.delegate !== delegate) return;
     this.setUnavailable();
   }
 
-  /** Permanently revokes the wrapper and every in-flight operation. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -78,7 +63,6 @@ export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCaptureP
     this.generation = this.createGeneration(this.unavailable);
   }
 
-  /** Routes an explicit Add operation through the exact current generation. */
   async addVaultSource(
     request: Readonly<KnowledgeChatCaptureRequest>,
     signal: AbortSignal
@@ -120,7 +104,6 @@ export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCaptureP
     }
   }
 
-  /** Captures and binds one display-safe destination to the exact current delegate. */
   prepareKnowledgeDraft(): Readonly<KnowledgeChatDraftSession> | null {
     const generation = this.generation;
     if (this.disposed || generation.abortController.signal.aborted) return null;
@@ -148,13 +131,6 @@ export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCaptureP
     }
   }
 
-  /**
-   * Routes one durable draft mutation without allowing a late abort to mask success.
-   *
-   * The production delegate receives the linked signal and must stop before its
-   * durable boundary. Once it returns a receipt, generation replacement cannot
-   * rewrite that committed outcome as a UI failure.
-   */
   async createKnowledgeDraft(
     session: Readonly<KnowledgeChatDraftSession>,
     request: Readonly<KnowledgeChatDraftRequest>,
@@ -197,7 +173,6 @@ export class DelegatingKnowledgeChatCapturePort implements KnowledgeChatCaptureP
     }
   }
 
-  /** Creates one separately cancellable delegate generation. */
   private createGeneration(delegate: KnowledgeChatCapturePort): CaptureGeneration {
     return { delegate, abortController: new AbortController() };
   }

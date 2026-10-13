@@ -74,7 +74,33 @@ describe("useResolvedChatBackendModel", () => {
       getKeychainInstance.mockRestore();
     });
 
-    it("falls back from an ordinary provider's retained stale model and reads only the selected fallback credential (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
+    it("resolves an explicitly selected legacy model without fallback", () => {
+      const openai = provider("openai", { apiKeyKeychainId: null, requiresApiKey: false });
+      const available = configuredModel("available", openai.providerId, "gpt-4o", "GPT-4o");
+      setChatInventory([openai], [available], [available.configuredModelId]);
+
+      const { result } = renderHook(() => useResolvedChatBackendModel(app, "gpt-4o|openai"));
+
+      expect(result.current).toMatchObject({ name: "gpt-4o", configuredModelId: "available" });
+      expect(getSecretById).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, "removed"])(
+      "returns no model for strict selection %s without reading credentials (https://github.com/Brevilabs/obsidian-copilot-private/issues/616)",
+      (selection) => {
+        const openai = provider("openai");
+        const available = configuredModel("available", openai.providerId, "gpt-4o");
+        setChatInventory([openai], [available], [available.configuredModelId]);
+
+        const { result } = renderHook(() => useResolvedChatBackendModel(app, selection));
+
+        expect(result.current).toBeNull();
+        expect(getKeychainInstance).not.toHaveBeenCalled();
+        expect(getSecretById).not.toHaveBeenCalled();
+      }
+    );
+
+    it("reads only the explicitly selected model's credential (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
       const anthropic = provider("anthropic", {
         providerType: "anthropic",
         origin: { kind: "byok", catalogProviderId: "anthropic" },
@@ -88,7 +114,7 @@ describe("useResolvedChatBackendModel", () => {
       );
 
       const { result } = renderHook(() =>
-        useResolvedChatBackendModel(app, retired.configuredModelId)
+        useResolvedChatBackendModel(app, fallback.configuredModelId)
       );
 
       expect(result.current).toMatchObject({

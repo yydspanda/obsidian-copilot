@@ -5,25 +5,21 @@ import type { KnowledgeDiagnostic, KnowledgeParseResult } from "@/knowledge/mode
 
 const MAX_MODEL_SCHEMA_DIAGNOSTICS = 256;
 
-/** A statement in the finished draft and the source excerpts that support it. */
 export interface CompilerGeneratedClaim {
   text: string;
   evidenceIds: string[];
 }
 
-/** Explicit generation result for one program-owned writable target. */
 export type CompilerGeneratedFile =
   | { targetId: string; outcome: "write"; afterContent: string; claims: CompilerGeneratedClaim[] }
   | { targetId: string; outcome: "unchanged" };
 
-/** Strict structured output expected from the content generation stage. */
 export interface CompilerGenerationModelOutput {
   version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
   targetSetDigest: string;
   files: CompilerGeneratedFile[];
 }
 
-/** Checks for non-whitespace text without transforming model output. */
 function hasNonWhitespaceText(value: string): boolean {
   return value.trim().length > 0;
 }
@@ -59,7 +55,6 @@ const generatedFileSchema: z.ZodType<CompilerGeneratedFile> = z.discriminatedUni
     .strict(),
 ]);
 
-/** Strict runtime schema for untrusted source-writing output. */
 export const compilerGenerationModelOutputSchema: z.ZodType<CompilerGenerationModelOutput> = z
   .object({
     version: z.literal(KNOWLEDGE_COMPILER_PROTOCOL_VERSION),
@@ -68,12 +63,6 @@ export const compilerGenerationModelOutputSchema: z.ZodType<CompilerGenerationMo
   })
   .strict();
 
-/**
- * Converts a Zod issue path to stable dotted/indexed field notation.
- *
- * @param path - Zod property and array-index path
- * @returns Stable field path for future review UI
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
@@ -84,15 +73,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/**
- * Strictly parses unknown source-writing output without exposing Zod to callers.
- *
- * Paths, operations, hashes, source references, validation flags, and status
- * are intentionally absent from this schema and therefore rejected as extras.
- *
- * @param value - Unknown model output
- * @returns Detached typed output or safe structural diagnostics
- */
 export function parseCompilerGenerationModelOutput(
   value: unknown
 ): KnowledgeParseResult<CompilerGenerationModelOutput> {

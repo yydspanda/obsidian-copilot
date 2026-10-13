@@ -121,7 +121,6 @@ const reanalysisProps = createProps({
   actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
 });
 
-/** Click Reanalyze to inspect the inline cost confirmation; the callback stays inert. */
 export const Reanalyze: StoryObj<Props> = {
   args: {
     ...reanalysisProps,
@@ -143,7 +142,6 @@ const selectedProps = createProps({
   actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
 });
 
-/** Open the inline confirmation; this local fixture never calls a model. */
 export const SelectedRun: StoryObj<Props> = {
   args: {
     ...selectedProps,
@@ -152,12 +150,10 @@ export const SelectedRun: StoryObj<Props> = {
   },
 };
 
-/** Confirm to inspect the in-progress row without allowing another action. */
 export const SelectedRunPending: StoryObj<Props> = {
   args: { ...SelectedRun.args, onRunSelectedJob: () => new Promise<void>(() => {}) },
 };
 
-/** Confirm to inspect a safe rejection; the fixture never reaches a provider. */
 export const SelectedRunFailure: StoryObj<Props> = {
   args: {
     ...SelectedRun.args,

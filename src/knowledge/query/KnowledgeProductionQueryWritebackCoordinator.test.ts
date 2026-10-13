@@ -14,7 +14,6 @@ import {
 
 const EXCERPT = "The source supports the captured answer.";
 
-/** Creates one authentic deterministic query capture. */
 function createCapture(bundleId = "personal"): KnowledgeQueryWritebackCapture {
   const citation: ClaimCitation = {
     citationId: "citation-1",
@@ -51,7 +50,6 @@ function createCapture(bundleId = "personal"): KnowledgeQueryWritebackCapture {
   });
 }
 
-/** Creates one coordinator fixture with observable file and Manifest effects. */
 function createFixture(options?: {
   roots?: string[];
   owners?: string[];

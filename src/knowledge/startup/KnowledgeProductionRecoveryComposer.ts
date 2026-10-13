@@ -59,38 +59,32 @@ import {
 const MAX_CONFIGURED_BUNDLES = 10_000;
 const MAX_FORWARD_REVISION_RECOVERY_ATTEMPTS = 3;
 
-/** Exact production dependencies captured by one recovery-only lifecycle. */
 export interface KnowledgeProductionRecoveryComposerInput {
-  /** Already initialized Vault-private Runtime store owned by this plugin generation. */
   runtime: KnowledgeRuntimeStore;
-  /** Exact Obsidian Vault whose generated files may require journal roll-forward. */
+
   vault: Vault;
-  /** Complete strict Bundle set captured from one Projects generation. */
+
   bundles: readonly KnowledgeBundleConfig[];
-  /** Genuine same-Runtime/Vault runner for an already-durable forward Apply journal. */
+
   forwardRevisionApplyRecovery?: KnowledgeProductionForwardRevisionApplyTransactionRunner;
 }
 
-/** Closed diagnostic vocabulary that never includes raw Runtime or Vault values. */
 export type KnowledgeProductionRecoveryDiagnosticCode =
   | "input_invalid"
   | "active_transaction_owner_unconfigured"
   | "runtime_state_invalid"
   | "recovery_failed";
 
-/** Sanitized result of running one Bundle through the production startup Gate. */
 export interface KnowledgeProductionRecoveryBundleResult {
   bundleId: string;
   disposition: KnowledgeStartupGateDisposition;
   attentionKinds: readonly KnowledgeProductionRecoveryAttentionKind[];
 }
 
-/** Closed recovery evidence accepted by the plugin startup barrier. */
 export type KnowledgeProductionRecoveryAttentionKind =
   | KnowledgeStartupAttention["kind"]
   | "forward_revision_apply_recovery_required";
 
-/** Narrow stopped-Bundle projection retained only for the recovery Studio delegate. */
 export interface KnowledgeProductionRecoveryStudioObservation {
   bundleId: string;
   runtimeRevision: number;
@@ -103,13 +97,11 @@ export interface KnowledgeProductionRecoveryStudioObservation {
   >[];
 }
 
-/** Sanitized outcome of a fresh Gate plus conditional release pass. */
 export type KnowledgeProductionFreshReleaseResult =
   | Readonly<{ kind: "released"; bundleIds: readonly string[] }>
   | Readonly<{ kind: "blocked"; bundleId: string }>
   | Readonly<{ kind: "observation_changed"; bundleId: string }>;
 
-/** Immutable lifecycle state published by the recovery-only composer. */
 export type KnowledgeProductionRecoveryState =
   | Readonly<{
       generation: number;
@@ -137,37 +129,28 @@ export type KnowledgeProductionRecoveryState =
       status: "closed";
     }>;
 
-/** Listener notified only after a current generation publishes a state. */
 export type KnowledgeProductionRecoveryStateListener = () => void;
 
-/** Internal capability boundary deliberately absent from all recovery paths. */
 class KnowledgeProductionRecoveryCapabilityUnavailableError extends Error {
-  /** Creates a static failure without retaining execution input. */
   constructor() {
     super("The production Knowledge recovery generation cannot execute new work");
     this.name = "KnowledgeProductionRecoveryCapabilityUnavailableError";
   }
 }
 
-/** Queue executor that makes accidental worker execution fail before doing work. */
 class FailClosedRecoveryIngestExecutor implements IngestExecutor {
-  /** Rejects every attempt because recovery may never claim new Queue work. */
   async execute(_context: IngestExecutionContext): Promise<never> {
     throw new KnowledgeProductionRecoveryCapabilityUnavailableError();
   }
 }
 
-/** Artifact boundary unavailable to recovery-only transaction composition. */
 class FailClosedRecoveryArtifactResolver implements SourceArtifactResolver {
-  /** Rejects every lookup because startup may only resume an existing journal. */
   async resolve(_locator: SourceLocator): Promise<never> {
     throw new KnowledgeProductionRecoveryCapabilityUnavailableError();
   }
 }
 
-/** Projection boundary unavailable to recovery-only transaction composition. */
 class FailClosedRecoveryProjectionValidator implements KnowledgeProjectionValidator {
-  /** Rejects every validation because startup may not prepare a new transaction. */
   async validate(
     _input: KnowledgeProjectionValidationInput
   ): Promise<KnowledgeProjectionValidationResult> {
@@ -196,14 +179,12 @@ interface KnowledgeProductionRecoveryInternalState {
   listeners: Set<KnowledgeProductionRecoveryStateListener>;
 }
 
-/** Internal Gate generation outcome and its optional recovery-only UI projection. */
 interface KnowledgeProductionRecoveryGenerationResult {
   state: KnowledgeProductionRecoveryState;
   studioObservation?: Readonly<KnowledgeProductionRecoveryStudioObservation>;
 }
 
 class KnowledgeProductionRecoveryInputError extends TypeError {
-  /** Creates one static input failure without retaining its source value. */
   constructor() {
     super("The production Knowledge recovery input is invalid");
     this.name = "KnowledgeProductionRecoveryInputError";
@@ -211,7 +192,6 @@ class KnowledgeProductionRecoveryInputError extends TypeError {
 }
 
 class KnowledgeProductionRecoveryActiveOwnerError extends Error {
-  /** Creates one sanitized missing-owner failure without retaining the owner identity. */
   constructor() {
     super("The active Knowledge transaction owner is not configured");
     this.name = "KnowledgeProductionRecoveryActiveOwnerError";
@@ -219,7 +199,6 @@ class KnowledgeProductionRecoveryActiveOwnerError extends Error {
 }
 
 class KnowledgeProductionRecoveryRuntimeStateError extends Error {
-  /** Creates one sanitized Runtime-state failure without retaining its cause. */
   constructor() {
     super("The production Knowledge Runtime state is invalid");
     this.name = "KnowledgeProductionRecoveryRuntimeStateError";
@@ -227,7 +206,6 @@ class KnowledgeProductionRecoveryRuntimeStateError extends Error {
 }
 
 class KnowledgeProductionRecoveryGenerationError extends Error {
-  /** Creates one static stale-generation failure without retaining recovery state. */
   constructor() {
     super("The production Knowledge recovery generation is no longer current");
     this.name = "KnowledgeProductionRecoveryGenerationError";
@@ -242,7 +220,6 @@ const INVALID_FALLBACK_STATE: KnowledgeProductionRecoveryState = Object.freeze({
   code: "input_invalid",
 });
 
-/** Reads one enumerable own data property without evaluating accessors. */
 function readDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new KnowledgeProductionRecoveryInputError();
@@ -254,7 +231,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Reads one optional enumerable own data property without evaluating accessors. */
 function readOptionalDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new KnowledgeProductionRecoveryInputError();
@@ -267,7 +243,6 @@ function readOptionalDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Captures a bounded dense array without consulting iterator hooks. */
 function snapshotDenseArray(value: unknown): readonly unknown[] {
   if (!Array.isArray(value)) {
     throw new KnowledgeProductionRecoveryInputError();
@@ -294,7 +269,6 @@ function snapshotDenseArray(value: unknown): readonly unknown[] {
   return Object.freeze(snapshot);
 }
 
-/** Copies one Bundle from data properties before strict schema and semantic validation. */
 function snapshotBundle(value: unknown): KnowledgeBundleConfig {
   const sourceRoots = snapshotDenseArray(readDataProperty(value, "sourceRoots"));
   const candidate = {
@@ -324,7 +298,6 @@ function snapshotBundle(value: unknown): KnowledgeBundleConfig {
   return Object.freeze(parsed.value);
 }
 
-/** Captures and deterministically orders one complete strict Bundle generation. */
 function snapshotBundles(value: unknown): readonly KnowledgeBundleConfig[] {
   const captured = snapshotDenseArray(value).map(snapshotBundle);
   captured.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
@@ -336,7 +309,6 @@ function snapshotBundles(value: unknown): readonly KnowledgeBundleConfig[] {
   return Object.freeze(captured);
 }
 
-/** Composes all recovery ports over the exact Runtime, Vault, and Bundle snapshot. */
 function composeRecovery(
   input: KnowledgeProductionRecoveryComposerInput
 ): KnowledgeProductionRecoveryComposition {
@@ -403,7 +375,6 @@ function composeRecovery(
   });
 }
 
-/** Freezes one sanitized Bundle summary without retaining a Gate result. */
 function summarizeGateResult(
   expectedBundleId: string,
   result: KnowledgeStartupGateResult
@@ -421,7 +392,6 @@ function summarizeGateResult(
   });
 }
 
-/** Creates one immutable state and freezes every nested public collection. */
 function freezeState(state: KnowledgeProductionRecoveryState): KnowledgeProductionRecoveryState {
   if ("bundleIds" in state) {
     Object.freeze(state.bundleIds);
@@ -432,7 +402,6 @@ function freezeState(state: KnowledgeProductionRecoveryState): KnowledgeProducti
   return Object.freeze(state);
 }
 
-/** Returns Bundles in Vault-global transaction-owner-first recovery order. */
 async function orderBundlesForRecovery(
   composition: KnowledgeProductionRecoveryComposition
 ): Promise<readonly KnowledgeBundleConfig[]> {
@@ -452,7 +421,6 @@ async function orderBundlesForRecovery(
   return Object.freeze([owner, ...composition.bundles.filter((bundle) => bundle.id !== owner.id)]);
 }
 
-/** Maps a caught recovery failure to one static diagnostic code. */
 function classifyRecoveryFailure(error: unknown): KnowledgeProductionRecoveryDiagnosticCode {
   if (error instanceof KnowledgeProductionRecoveryActiveOwnerError) {
     return "active_transaction_owner_unconfigured";
@@ -463,7 +431,6 @@ function classifyRecoveryFailure(error: unknown): KnowledgeProductionRecoveryDia
   return "recovery_failed";
 }
 
-/** Projects one trusted Gate result into the content-free recovery Studio contract. */
 function createStudioObservation(
   result: KnowledgeStartupGateResult
 ): Readonly<KnowledgeProductionRecoveryStudioObservation> {
@@ -485,7 +452,6 @@ function createStudioObservation(
   });
 }
 
-/** Projects the one active forward journal into a content-free recovery-only Studio row. */
 function createForwardRevisionStudioObservation(
   snapshotValue: Readonly<KnowledgeForwardRevisionStudioSnapshot>,
   expectedState: "applying" | "recovery_required"
@@ -568,13 +534,6 @@ function createForwardRevisionStudioObservation(
   });
 }
 
-/**
- * Converges an already-durable forward Apply before any legacy Bundle Gate runs.
- *
- * A transient unchanged-before result receives a bounded immediate retry. A
- * sticky conflict or exhausted retry remains globally blocked, while an exact
- * commit proceeds to the ordinary owner-first recovery sequence.
- */
 async function runForwardRevisionApplyRecovery(
   composition: KnowledgeProductionRecoveryComposition,
   generation: number,
@@ -620,7 +579,6 @@ async function runForwardRevisionApplyRecovery(
   throw new KnowledgeProductionRecoveryRuntimeStateError();
 }
 
-/** Runs only the startup Gate and stops at the first non-clear Bundle. */
 async function runRecoveryGeneration(
   composition: KnowledgeProductionRecoveryComposition,
   generation: number,
@@ -662,7 +620,6 @@ async function runRecoveryGeneration(
   };
 }
 
-/** Publishes one state, then notifies a stable listener snapshot. */
 function publishState(
   internal: KnowledgeProductionRecoveryInternalState,
   state: KnowledgeProductionRecoveryState
@@ -673,19 +630,12 @@ function publishState(
       listener();
     } catch {
       // Observers cannot interrupt recovery or prevent later observers from running.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 }
 
-/**
- * Owns one production recovery-only composition and its publication lifecycle.
- *
- * This boundary may pause/reconcile durable Queue and Review state and may roll
- * forward a pre-existing journal. It cannot claim Queue work, release startup,
- * make a no-journal decision, prepare a new transaction, or invoke a model.
- */
 export class KnowledgeProductionRecoveryComposer {
-  /** Captures all production capabilities and strict Bundle values synchronously. */
   constructor(input: KnowledgeProductionRecoveryComposerInput) {
     let composition: KnowledgeProductionRecoveryComposition | undefined;
     let compositionFailure: KnowledgeProductionRecoveryDiagnosticCode | undefined;
@@ -713,7 +663,6 @@ export class KnowledgeProductionRecoveryComposer {
     Object.freeze(this);
   }
 
-  /** Proves a recovery composer was constructed by this module without exposing its ports. */
   static assert(value: unknown): asserts value is KnowledgeProductionRecoveryComposer {
     if (
       typeof value !== "object" ||
@@ -725,12 +674,10 @@ export class KnowledgeProductionRecoveryComposer {
     }
   }
 
-  /** Returns the latest immutable sanitized lifecycle observation. */
   getState(): KnowledgeProductionRecoveryState {
     return composerStates.get(this)?.published ?? INVALID_FALLBACK_STATE;
   }
 
-  /** Returns the latest exact stopped-Bundle projection without exposing Gate mutation ports. */
   getStudioObservation(
     bundleId: string
   ): Readonly<KnowledgeProductionRecoveryStudioObservation> | undefined {
@@ -742,7 +689,6 @@ export class KnowledgeProductionRecoveryComposer {
     return observation;
   }
 
-  /** Subscribes to current-generation state publications. */
   subscribe(listener: KnowledgeProductionRecoveryStateListener): () => void {
     const internal = composerStates.get(this);
     if (!internal || internal.closed) return () => undefined;
@@ -750,13 +696,6 @@ export class KnowledgeProductionRecoveryComposer {
     return () => internal.listeners.delete(listener);
   }
 
-  /**
-   * Runs the owner-first recovery Gate sequence for a new lifecycle generation.
-   *
-   * A newer call supersedes publication from older work. Durable recovery itself
-   * is serialized and allowed to reach a safe point because it cannot be aborted
-   * halfway through a transaction roll-forward.
-   */
   async start(): Promise<void> {
     const internal = composerStates.get(this);
     if (!internal || internal.closed) return;
@@ -814,7 +753,6 @@ export class KnowledgeProductionRecoveryComposer {
     await work;
   }
 
-  /** Runs a fresh Gate and conditionally releases every configured Bundle Queue. */
   async releaseFresh(assertCurrent: () => void): Promise<KnowledgeProductionFreshReleaseResult> {
     const internal = composerStates.get(this);
     if (!internal || internal.closed || !internal.composition) {
@@ -844,7 +782,6 @@ export class KnowledgeProductionRecoveryComposer {
     return { kind: "released", bundleIds: Object.freeze(composition.bundles.map(({ id }) => id)) };
   }
 
-  /** Permanently closes capabilities and prevents every stale completion from publishing. */
   close(): void {
     const internal = composerStates.get(this);
     if (!internal || internal.closed) return;

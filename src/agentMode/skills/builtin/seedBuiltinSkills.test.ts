@@ -8,7 +8,6 @@ import type { BuiltinSkill } from "@/builtinSkills/builtinSkills";
 
 jest.mock("@/logger", () => ({ logError: jest.fn(), logInfo: jest.fn() }));
 
-/** In-memory FS over vault-relative POSIX paths. */
 function memFs(initialFiles: Record<string, string> = {}): BuiltinSeedFs & {
   files: Map<string, string>;
   dirs: Set<string>;
@@ -74,32 +73,6 @@ const RENAMED_SCRIPT = "copilot/skills/openartifacts-publish/openartifacts-publi
 
 describe("seedBuiltinSkills", () => {
   describe("seedBuiltinSkills()", () => {
-    it.each(["web-search.sh", "SKILL.md"])(
-      "retries an upgrade interrupted at %s without stamping success and removes user additions https://github.com/logancyang/obsidian-copilot/issues/3022",
-      async (failedFile) => {
-        const fs = memFs({ [MD]: skill(1).skillMd, [SCRIPT]: "old script" });
-        const personal = `${FOLDER}/copilot-web-search/references/personal.md`;
-        fs.files.set(personal, "personal reference");
-        const write = fs.write;
-        fs.write = async (path, content) => {
-          if (path === `${FOLDER}/copilot-web-search/${failedFile}`) throw new Error("disk full");
-          await write(path, content);
-        };
-        expect(
-          await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [skill(2)] })
-        ).toEqual({ seeded: [] });
-        expect(await inspectBuiltinSkill(FOLDER, "copilot-web-search", fs, 2)).toBe("absent");
-        expect(fs.files.has(personal)).toBe(false);
-        fs.write = write;
-        expect(
-          await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [skill(2)] })
-        ).toEqual({ seeded: ["copilot-web-search"] });
-        expect(fs.files.get(MD)).toBe(skill(2).skillMd);
-        expect(fs.files.get(SCRIPT)).toBe("// script v2");
-        expect(fs.files.has(personal)).toBe(false);
-      }
-    );
-
     it("writes SKILL.md and scripts when the skill is missing", async () => {
       const fs = memFs();
       const { seeded } = await seedBuiltinSkills({
@@ -123,7 +96,6 @@ describe("seedBuiltinSkills", () => {
       });
 
       expect(seeded).toEqual([]);
-      // Untouched — the script the user may have inspected stays as-is.
       expect(fs.files.get(SCRIPT)).toBe("// user-touched");
     });
 
@@ -165,6 +137,32 @@ describe("seedBuiltinSkills", () => {
       expect(fs.files.get(MD)).toContain("copilot-enabled-agents: codex");
     });
 
+    it.each(["web-search.sh", "SKILL.md"])(
+      "retries an upgrade interrupted at %s without stamping success and removes user additions https://github.com/logancyang/obsidian-copilot/issues/3022",
+      async (failedFile) => {
+        const fs = memFs({ [MD]: skill(1).skillMd, [SCRIPT]: "old script" });
+        const personal = `${FOLDER}/copilot-web-search/references/personal.md`;
+        fs.files.set(personal, "personal reference");
+        const write = fs.write;
+        fs.write = async (path, content) => {
+          if (path === `${FOLDER}/copilot-web-search/${failedFile}`) throw new Error("disk full");
+          await write(path, content);
+        };
+        expect(
+          await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [skill(2)] })
+        ).toEqual({ seeded: [] });
+        expect(await inspectBuiltinSkill(FOLDER, "copilot-web-search", fs, 2)).toBe("absent");
+        expect(fs.files.has(personal)).toBe(false);
+        fs.write = write;
+        expect(
+          await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [skill(2)] })
+        ).toEqual({ seeded: ["copilot-web-search"] });
+        expect(fs.files.get(MD)).toBe(skill(2).skillMd);
+        expect(fs.files.get(SCRIPT)).toBe("// script v2");
+        expect(fs.files.has(personal)).toBe(false);
+      }
+    );
+
     it("retries an upgrade after folder cleanup fails without stamping success https://github.com/logancyang/obsidian-copilot/issues/3022", async () => {
       const fs = memFs({ [MD]: skill(1).skillMd, [SCRIPT]: "old script" });
       const removeDir = fs.removeDir;
@@ -184,7 +182,6 @@ describe("seedBuiltinSkills", () => {
     });
 
     it("re-seeds when the SKILL.md was deleted", async () => {
-      // Script lingered but SKILL.md is gone — treat as missing and re-seed.
       const fs = memFs({ [SCRIPT]: "// stale" });
       const { seeded } = await seedBuiltinSkills({
         skillsFolderRelPath: FOLDER,
@@ -205,7 +202,6 @@ describe("seedBuiltinSkills", () => {
     });
 
     it("does not overwrite a user-authored skill whose name collides with a builtin", async () => {
-      // A user created copilot-web-search before it became a builtin — no version marker.
       const userContent =
         "---\nname: copilot-web-search\ndescription: my custom search\n---\ncustom body";
       const fs = memFs({ [MD]: userContent });
@@ -215,8 +211,7 @@ describe("seedBuiltinSkills", () => {
     });
 
     it("re-seeds when SKILL.md is current but a support file is missing (partial write recovery)", async () => {
-      // Simulate a crash after SKILL.md was written but before the script.
-      const fs = memFs({ [MD]: skill(1).skillMd }); // no SCRIPT
+      const fs = memFs({ [MD]: skill(1).skillMd });
       const { seeded } = await seedBuiltinSkills({
         skillsFolderRelPath: FOLDER,
         fs,
@@ -228,9 +223,6 @@ describe("seedBuiltinSkills", () => {
     });
 
     it("preserves user-modified copilot-enabled-agents when upgrading a builtin", async () => {
-      // User disabled codex and opencode via the toggle UI — SKILL.md was rewritten
-      // on disk to list only 'claude'. On the next version bump the seeder must not
-      // silently restore the full bundled agent list.
       const disabledMd = skill(1).skillMd.replace(
         "copilot-enabled-agents: claude, codex, opencode",
         "copilot-enabled-agents: claude"
@@ -241,7 +233,7 @@ describe("seedBuiltinSkills", () => {
       const written = fs.files.get(MD) ?? "";
       expect(written).toContain("copilot-enabled-agents: claude\n");
       expect(written).not.toContain("copilot-enabled-agents: claude, codex, opencode");
-      expect(written).toContain("body v2"); // bundled body was updated
+      expect(written).toContain("body v2");
     });
 
     it("creates parent directories for nested support files", async () => {
@@ -388,7 +380,6 @@ describe("seedBuiltinSkills", () => {
 
     it("reports 'failed' when the SKILL.md can't be read", async () => {
       const fs = memFs();
-      // Path claims to exist but read throws — a torn/permission-denied file.
       fs.exists = async () => true;
       fs.read = async () => {
         throw new Error("EACCES");
@@ -404,7 +395,6 @@ describe("seedBuiltinSkills", () => {
     it("reports 'seeded' when the on-disk marker meets or exceeds the expected version", async () => {
       const fs = memFs({ [MD]: skill(2).skillMd });
       expect(await inspectBuiltinSkill(FOLDER, "copilot-web-search", fs, 2)).toBe("seeded");
-      // A newer on-disk copy (e.g. a future plugin wrote it) is still ours.
       const fsNewer = memFs({ [MD]: skill(3).skillMd });
       expect(await inspectBuiltinSkill(FOLDER, "copilot-web-search", fsNewer, 2)).toBe("seeded");
     });

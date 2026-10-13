@@ -6,12 +6,10 @@ jest.mock("@/knowledge/startup/KnowledgeProductionRecoveryComposer", () => {
       this.observation = this.nextObservation;
     });
 
-    /** Accepts only instances minted by this test replacement. */
     static assert(value: unknown): void {
       if (!(value instanceof KnowledgeProductionRecoveryComposer)) throw new TypeError("invalid");
     }
 
-    /** Returns the current injected stopped-Bundle observation. */
     getStudioObservation(bundleId: string): unknown {
       const observation = this.observation as { bundleId?: string } | undefined;
       return observation?.bundleId === bundleId ? observation : undefined;
@@ -39,7 +37,6 @@ interface MutableComposerHarness {
 const FORWARD_REVIEW_REF = `forward-studio-review-${"1".repeat(64)}`;
 const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"2".repeat(64)}`;
 
-/** Creates one frozen-enough content-free recovery observation for adapter tests. */
 function createObservation(runtimeRevision = 7) {
   return {
     bundleId: "personal",
@@ -92,7 +89,6 @@ function createObservation(runtimeRevision = 7) {
   };
 }
 
-/** Creates one content-free forward journal observation owned by startup recovery. */
 function createForwardObservation(state: "applying" | "recovery_required", runtimeRevision = 8) {
   const base = {
     reviewRef: FORWARD_REVIEW_REF,
@@ -128,7 +124,6 @@ function createForwardObservation(state: "applying" | "recovery_required", runti
   };
 }
 
-/** Creates one adapter plus observable fake composer and action callbacks. */
 function createHarness() {
   const composer = new KnowledgeProductionRecoveryComposer({} as never);
   const mutableComposer = composer as unknown as MutableComposerHarness;

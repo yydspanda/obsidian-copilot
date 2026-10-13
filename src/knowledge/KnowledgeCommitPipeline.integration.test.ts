@@ -83,19 +83,16 @@ const CURRENT_INPUT_REVISION = 2;
 const REWRITTEN_CONTENT =
   "---\ntype: concept\n---\n\n# Reviewed knowledge\n\nThe reviewer retained this claim.\n";
 
-/** In-memory atomic plaintext file shared by every real runtime facade in this test. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
 
-  /** Creates the runtime file only when it does not yet exist. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) {
       this.content = initialContent;
     }
   }
 
-  /** Reads the exact durable plaintext bytes. */
   async read(): Promise<string> {
     if (this.content === undefined) {
       throw new Error("Memory runtime file is not initialized");
@@ -103,7 +100,6 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
     return this.content;
   }
 
-  /** Serializes and durably commits one synchronous plaintext transformation. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     const previous = this.tail;
     let release: () => void = () => undefined;
@@ -123,18 +119,15 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   }
 }
 
-/** Exact in-memory Wiki file store used by the real transaction validator and runtime. */
 class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   readonly mutationCapabilities = ALL_KNOWLEDGE_FILE_MUTATIONS;
   readonly files = new Map<string, string>();
 
-  /** Observes one exact Wiki path. */
   async observe(path: string): Promise<KnowledgeFileObservation> {
     const content = this.files.get(path);
     return content === undefined ? { kind: "missing" } : { kind: "file", content };
   }
 
-  /** Atomically compares and replaces one exact Wiki path state. */
   async compareAndSwap(
     path: string,
     before: TransactionFileState,
@@ -155,7 +148,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
     return { kind: "applied" };
   }
 
-  /** Compares an observed Wiki path with one content-addressed journal state. */
   private matches(observation: KnowledgeFileObservation, state: TransactionFileState): boolean {
     if (state.kind === "missing") {
       return observation.kind === "missing";
@@ -168,9 +160,7 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   }
 }
 
-/** Writes both program-owned pages from the supplied source in one call. */
 class DeterministicCompilerModel implements CompilerModelPort {
-  /** Generates deterministic content for every compiler-approved writable target. */
   async generate(request: CompilerGenerationRequest, _signal: AbortSignal): Promise<unknown> {
     return {
       version: 1,
@@ -185,9 +175,7 @@ class DeterministicCompilerModel implements CompilerModelPort {
   }
 }
 
-/** Read-only target resolver that proves every proposed page is absent. */
 class MissingCompilerTargetResolver implements CompilerTargetResolver {
-  /** Returns one exact Windows-key absence proof per compiler target. */
   async resolve(targets: readonly CompilerTargetRequest[], _signal: AbortSignal): Promise<unknown> {
     return targets.map((target) => ({
       targetId: target.targetId,
@@ -197,9 +185,7 @@ class MissingCompilerTargetResolver implements CompilerTargetResolver {
   }
 }
 
-/** Deterministic compiler candidate validator that affirms the generated projection. */
 class AffirmativeCompilerCandidateValidator implements CompilerCandidateValidator {
-  /** Returns affirmative OKF, citation, and link validation flags. */
   async validate(_input: CompilerCandidateValidationInput, _signal: AbortSignal): Promise<unknown> {
     return {
       validation: { okfValid: true, citationsValid: true, linksValid: true },
@@ -208,12 +194,9 @@ class AffirmativeCompilerCandidateValidator implements CompilerCandidateValidato
   }
 }
 
-/** Exact parser artifact resolver used to re-prove the accepted citation at apply time. */
 class ExactArtifactResolver implements SourceArtifactResolver {
-  /** Creates a resolver for one parser-owned text artifact. */
   constructor(private readonly artifact: TextArtifactObservation) {}
 
-  /** Returns the artifact only for its exact source, artifact, and content identity. */
   async resolve(locator: SourceLocator): Promise<TextArtifactObservation | null> {
     return locator.sourceId === this.artifact.sourceId &&
       locator.artifactId === this.artifact.artifactId &&
@@ -223,7 +206,6 @@ class ExactArtifactResolver implements SourceArtifactResolver {
   }
 }
 
-/** Creates the Windows-first knowledge Bundle exercised by the complete pipeline. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -235,7 +217,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the initially registered source Manifest stored before compilation. */
 function createInitialManifest(bundleId: string): SourceManifest {
   return {
     version: 1,
@@ -271,7 +252,6 @@ function createInitialManifest(bundleId: string): SourceManifest {
   };
 }
 
-/** Creates the exact compiler input bound to the current complete Manifest read-set. */
 function createCompileInput(
   bundle: KnowledgeBundleConfig,
   manifest: SourceManifest
@@ -326,7 +306,6 @@ function createCompileInput(
   };
 }
 
-/** Requires a successful compiler proposal and narrows its result type. */
 function requireProposal(result: KnowledgeCompileResult): KnowledgeCompileProposal {
   if (result.kind !== "proposed") {
     throw new Error(`Expected compiler proposal, received '${result.kind}'`);
@@ -334,7 +313,6 @@ function requireProposal(result: KnowledgeCompileResult): KnowledgeCompilePropos
   return result;
 }
 
-/** Creates a filtered and content-rewritten accepted ChangeSet in proposal order. */
 function createReviewedChangeSet(proposal: KnowledgeChangeSet): KnowledgeChangeSet {
   const retained = proposal.changes[0];
   if (!retained || retained.operation !== "create") {
@@ -352,7 +330,6 @@ function createReviewedChangeSet(proposal: KnowledgeChangeSet): KnowledgeChangeS
   };
 }
 
-/** Creates the real apply-time validator over the in-memory Wiki file store. */
 function createApplyValidator(fileStore: KnowledgeFileStore): ChangeSetValidator {
   const artifact: TextArtifactObservation = {
     kind: "text",
@@ -362,14 +339,12 @@ function createApplyValidator(fileStore: KnowledgeFileStore): ChangeSetValidator
     text: SOURCE_TEXT,
   };
   return new ChangeSetValidator(fileStore, new ExactArtifactResolver(artifact), {
-    /** Recomputes the projected OKF and link flags for the integration boundary. */
     async validate(_input: KnowledgeProjectionValidationInput) {
       return { okfValid: true, linksValid: true, diagnostics: [] };
     },
   });
 }
 
-/** Requires a committed active transaction journal. */
 function requireCommittedJournal(
   journal: ChangeSetTransactionJournal | null
 ): ChangeSetTransactionJournal & { phase: "committed" } {
@@ -379,7 +354,6 @@ function requireCommittedJournal(
   return journal;
 }
 
-/** Strictly parses one Source Manifest returned through an unknown storage boundary. */
 function requireManifest(value: unknown): SourceManifest {
   const parsed = parseSourceManifest(value);
   if (!parsed.ok) {
@@ -388,14 +362,12 @@ function requireManifest(value: unknown): SourceManifest {
   return parsed.value;
 }
 
-/** Parses the exact in-memory runtime plaintext into its strict outer envelope. */
 async function readRuntimeSnapshot(
   file: MemoryAtomicRuntimeFile
 ): Promise<KnowledgeRuntimeStoreSnapshot> {
   return parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await file.read()) as unknown);
 }
 
-/** Loads a strict historical snapshot, including the committed authority for both missing pages. */
 async function seedHistoricalRuntime(
   file: MemoryAtomicRuntimeFile,
   manifest: SourceManifest
@@ -534,7 +506,6 @@ describe("durable knowledge commit pipeline", () => {
 
     let queueTime = 1_050;
     const queueExecutor: IngestExecutor = {
-      /** Hands the already-durable pending Review record to the Queue claim. */
       async execute(context) {
         return {
           kind: "awaiting_review",

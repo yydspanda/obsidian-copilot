@@ -8,10 +8,8 @@ import {
   verifyKnowledgeByteParserRequest,
 } from "@/knowledge/parser/KnowledgeByteParser";
 
-/** Current exact UTF-8 text parser behavior contract. */
 export const UTF8_TEXT_KNOWLEDGE_PARSER_VERSION = "utf8-text-v1";
 
-/** Explicit resource and routing configuration for the built-in byte parser. */
 export interface Utf8TextKnowledgeByteParserOptions {
   id: string;
   pathSuffixes: readonly string[];
@@ -19,7 +17,6 @@ export interface Utf8TextKnowledgeByteParserOptions {
   maxCharacters: number;
 }
 
-/** Stable, value-free content failures emitted by the built-in parser. */
 export type Utf8TextKnowledgeParserErrorCode =
   | "source_too_large"
   | "invalid_utf8"
@@ -27,16 +24,13 @@ export type Utf8TextKnowledgeParserErrorCode =
   | "decoded_text_too_large"
   | "decoded_text_empty";
 
-/** Reports rejected text material without retaining bytes, text, or paths. */
 export class Utf8TextKnowledgeParserError extends Error {
-  /** Creates one sanitized parser-content failure. */
   constructor(public readonly code: Utf8TextKnowledgeParserErrorCode) {
     super("The knowledge source is not valid bounded UTF-8 text");
     this.name = "Utf8TextKnowledgeParserError";
   }
 }
 
-/** Checks a positive safe parser resource bound. */
 function requirePositiveLimit(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError(`${field} must be a positive safe integer`);
@@ -44,7 +38,6 @@ function requirePositiveLimit(value: number, field: string): number {
   return value;
 }
 
-/** Checks one stable parser identifier without normalizing it. */
 function requireIdentifier(value: string): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError("Parser id must be canonical non-empty text");
@@ -52,7 +45,6 @@ function requireIdentifier(value: string): string {
   return value;
 }
 
-/** Validates and Windows-normalizes one generic parser-owned suffix. */
 function normalizeSuffix(value: string): string {
   if (
     typeof value !== "string" ||
@@ -67,7 +59,6 @@ function normalizeSuffix(value: string): string {
   return toWindowsPathKey(value);
 }
 
-/** Compares two byte arrays without invoking instance methods or iterators. */
 function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
@@ -76,19 +67,11 @@ function haveEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
   return true;
 }
 
-/**
- * Deterministic text parser that consumes only transferred exact bytes.
- *
- * UTF-8 decoding is fatal, a BOM is retained as U+FEFF, and line endings are
- * preserved. Re-encoding must reproduce the source bytes exactly. The parser
- * has no object through which it could read a Vault path or cache.
- */
 export class Utf8TextKnowledgeByteParser implements KnowledgeByteParser {
   private readonly profile: KnowledgeSourceParserProfile;
   private readonly maxBytes: number;
   private readonly maxCharacters: number;
 
-  /** Creates one versioned parser capability and its matching fingerprint profile. */
   constructor(options: Utf8TextKnowledgeByteParserOptions) {
     const id = requireIdentifier(options.id);
     const pathSuffixes = options.pathSuffixes.map(normalizeSuffix).sort();
@@ -115,12 +98,10 @@ export class Utf8TextKnowledgeByteParser implements KnowledgeByteParser {
     Object.freeze(this);
   }
 
-  /** Returns the immutable behavior profile used by the watch-plan builder. */
   getProfile(): KnowledgeSourceParserProfile {
     return this.profile;
   }
 
-  /** Decodes the exact request bytes into one locally hashed text artifact. */
   async parse(
     requestValue: Readonly<KnowledgeByteParserRequest>,
     signal: AbortSignal

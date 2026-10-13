@@ -2,11 +2,9 @@ import * as z from "zod";
 
 import type { KnowledgeParseResult } from "@/knowledge/model/types";
 
-/** Reserved Source Manifest extension containing monotonic Runtime apply metadata. */
 export const KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY =
   "obsidianCopilotKnowledgeRuntimeCommit" as const;
 
-/** Runtime-owned monotonic source metadata stored through the Manifest extension bag. */
 export interface KnowledgeRuntimeSourceCommitExtension {
   version: 1;
   inputRevision: number;
@@ -27,16 +25,6 @@ const runtimeSourceCommitExtensionSchema: z.ZodType<KnowledgeRuntimeSourceCommit
   })
   .strict();
 
-/**
- * Strictly parses detached Runtime apply metadata without importing the Runtime store.
- *
- * Keeping this parser at the Manifest leaf lets freshness compare Apply and
- * no-change revisions without creating a dependency on Queue, Review, or file
- * mutation capabilities.
- *
- * @param value - Untrusted Manifest extension value
- * @returns Frozen metadata or one sanitized parse failure
- */
 export function parseKnowledgeRuntimeSourceCommitExtension(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeRuntimeSourceCommitExtension>> {

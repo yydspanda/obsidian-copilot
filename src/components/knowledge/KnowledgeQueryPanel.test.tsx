@@ -7,7 +7,6 @@ import type {
   KnowledgeGroundedRetrievalResult,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 
-/** Creates one grounded result containing Markdown and PDF citation controls. */
 function createResult(): KnowledgeGroundedRetrievalResult {
   return {
     mode: "grounded_retrieval",
@@ -49,7 +48,6 @@ function createResult(): KnowledgeGroundedRetrievalResult {
   };
 }
 
-/** Creates one validated H.2 answer with fact, inference, and missing evidence. */
 function createAnswerResult(): KnowledgeGroundedAnswerResult {
   const retrieval = createResult();
   return {

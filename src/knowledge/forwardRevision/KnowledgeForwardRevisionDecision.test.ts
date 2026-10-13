@@ -38,7 +38,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates one strict independently published proposal payload. */
 function createProposal(selectedContent = HISTORICAL_CONTENT, pagePath = "Wiki/Topic.md") {
   const selectedContentHash = createFileContentHash(selectedContent);
   const intent = createKnowledgeForwardRevisionIntent({
@@ -109,7 +108,6 @@ function createProposal(selectedContent = HISTORICAL_CONTENT, pagePath = "Wiki/T
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates one coherent applied source-freshness acceptance tuple. */
 function createAppliedAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   return {
     runtimeId: "runtime-1",
@@ -142,7 +140,6 @@ function createAppliedAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   };
 }
 
-/** Creates the alternative exact no-changes source-freshness tuple. */
 function createNoChangesAuthority(): KnowledgeForwardRevisionAcceptanceAuthority {
   const applied = createAppliedAuthority();
   return {
@@ -170,7 +167,6 @@ function createNoChangesAuthority(): KnowledgeForwardRevisionAcceptanceAuthority
   };
 }
 
-/** Creates genuine strict command and receipt material for one acceptance body. */
 function createValidationMaterial(
   proposal: ReturnType<typeof createProposal>,
   proposalDigest: string,
@@ -229,7 +225,6 @@ function createValidationMaterial(
   });
 }
 
-/** Adapts concise test inputs to the now receipt-bound production creator. */
 function createKnowledgeForwardRevisionAcceptedDecisionRecord(value: {
   readonly proposal: ReturnType<typeof createProposal>;
   readonly proposalDigest: string;
@@ -256,14 +251,12 @@ function createKnowledgeForwardRevisionAcceptedDecisionRecord(value: {
   return createStrictAcceptedDecisionRecord({ ...value, ...material });
 }
 
-/** Recursively removes readonly modifiers for persisted-state adversarial checks. */
 type Mutable<T> = T extends readonly (infer Item)[]
   ? Mutable<Item>[]
   : T extends object
     ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
     : T;
 
-/** Creates a mutable JSON clone for adversarial persisted-state checks. */
 function clone<T>(value: T): Mutable<T> {
   return JSON.parse(JSON.stringify(value)) as Mutable<T>;
 }

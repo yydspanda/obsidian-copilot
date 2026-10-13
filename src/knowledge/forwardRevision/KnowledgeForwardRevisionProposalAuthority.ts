@@ -10,20 +10,16 @@ import {
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 
-/** Current strict query version for read-only forward-proposal authority. */
 export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_QUERY_VERSION = 1 as const;
 
-/** Current strict read-only forward-proposal authority version. */
 export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_VERSION = 1 as const;
 
-/** Defensive bounds for one authority lookup. */
 export const KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxPagePathCharacters: 1_024,
   maxVerifiedApplyCount: 10_000,
 });
 
-/** Exact observed selection supplied to a read-only Runtime authority lookup. */
 export interface KnowledgeForwardRevisionProposalAuthorityQueryV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_QUERY_VERSION;
   readonly kind: "forward_revision_proposal_authority_query";
@@ -35,20 +31,11 @@ export interface KnowledgeForwardRevisionProposalAuthorityQueryV1 {
   readonly vaultObservedBeforeHash: string;
 }
 
-/** Creator input for one canonical read-only Runtime authority query. */
 export type CreateKnowledgeForwardRevisionProposalAuthorityQueryInput = Omit<
   KnowledgeForwardRevisionProposalAuthorityQueryV1,
   "version" | "kind"
 >;
 
-/**
- * Runtime-projected proof material that still grants no mutation authority.
- *
- * The fields, including `runtimeRevision`, are trustworthy only when a genuine
- * Runtime query implementation independently rejoins every query fact. This
- * structural snapshot and its later consumer never turn an echoed caller value
- * into authority; the publication CAS must re-prove the same facts again.
- */
 export interface KnowledgeForwardRevisionProposalAuthorityV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_VERSION;
   readonly kind: "forward_revision_proposal_authority";
@@ -85,16 +72,13 @@ const AUTHORITY_KEYS = [
 const authenticValidationErrors =
   new WeakSet<KnowledgeForwardRevisionProposalAuthorityValidationError>();
 
-/** Sanitized fixed failure for malformed read-only authority material. */
 export class KnowledgeForwardRevisionProposalAuthorityValidationError extends TypeError {
-  /** Creates one value-free failure; only module-thrown instances are authentic. */
   constructor() {
     super("Forward revision proposal authority is invalid");
     this.name = "KnowledgeForwardRevisionProposalAuthorityValidationError";
   }
 }
 
-/** Throws one authentic frozen authority validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionProposalAuthorityValidationError();
   authenticValidationErrors.add(error);
@@ -102,7 +86,6 @@ function invalid(): never {
   throw error;
 }
 
-/** Reports whether a failure was minted by this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionProposalAuthorityValidationError {
@@ -113,7 +96,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Reads one exact plain data record without invoking caller accessors. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -147,7 +129,6 @@ function snapshotRecord(
   }
 }
 
-/** Reports whether text contains only paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -163,7 +144,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether text contains an unsupported identifier control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -172,7 +152,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether a value is one bounded protocol identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -184,12 +163,10 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether a value is one lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Captures one exact canonical Vault-relative page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -207,7 +184,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Strictly snapshots one authority-query creator input. */
 function snapshotQueryInput(
   value: unknown
 ): CreateKnowledgeForwardRevisionProposalAuthorityQueryInput {
@@ -238,7 +214,6 @@ function snapshotQueryInput(
   });
 }
 
-/** Creates one canonical detached lookup query from fresh R3b observations. */
 export function createKnowledgeForwardRevisionProposalAuthorityQuery(
   value: CreateKnowledgeForwardRevisionProposalAuthorityQueryInput
 ): Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1> {
@@ -250,7 +225,6 @@ export function createKnowledgeForwardRevisionProposalAuthorityQuery(
   });
 }
 
-/** Strictly snapshots one unknown read-only Runtime authority query. */
 export function snapshotKnowledgeForwardRevisionProposalAuthorityQuery(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1> {
@@ -277,7 +251,6 @@ export function snapshotKnowledgeForwardRevisionProposalAuthorityQuery(
   }
 }
 
-/** Reports exact semantic equality for two already strict queries. */
 function queriesEqual(
   left: Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1>,
   right: Readonly<KnowledgeForwardRevisionProposalAuthorityQueryV1>
@@ -285,18 +258,6 @@ function queriesEqual(
   return canonicalizeJson(left) === canonicalizeJson(right);
 }
 
-/**
- * Strictly snapshots Runtime-projected read authority and rejoins its selected body.
- *
- * A throw is fail-closed and conveys no rejected values. The dummy request is
- * never persisted; it only reuses the durable proposal validator to prove the
- * historical Review descriptor and selected bytes agree with the strict intent.
- *
- * @param value - Unknown Runtime authority response
- * @param expectedQueryValue - Exact query sent to the Runtime
- * @param selectedContent - Fresh R3b historical body
- * @returns Detached deeply frozen non-authoritative proof material
- */
 export function snapshotKnowledgeForwardRevisionProposalAuthority(
   value: unknown,
   expectedQueryValue: unknown,

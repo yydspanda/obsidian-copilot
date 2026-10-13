@@ -20,17 +20,14 @@ import type {
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of the decision-capable forward Review snapshot leaf. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_VERSION = 2 as const;
 
-/** Defensive bounds below the enclosing Runtime persistence limits. */
 export const KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxRecords: 10_000,
   maxTotalRetainedBodyCharacters: 16_000_000,
 });
 
-/** Pending v2 entry that preserves the exact original b1 publication proof. */
 export interface KnowledgeForwardRevisionPendingReviewEntryV2 {
   readonly version: 2;
   readonly kind: "forward_revision_review_entry";
@@ -42,7 +39,6 @@ export interface KnowledgeForwardRevisionPendingReviewEntryV2 {
   readonly proposalStoreRevision: number;
 }
 
-/** Accepted v2 entry retaining one exact terminal decision and both event revisions. */
 export interface KnowledgeForwardRevisionAcceptedReviewEntryV2 {
   readonly version: 2;
   readonly kind: "forward_revision_review_entry";
@@ -56,7 +52,6 @@ export interface KnowledgeForwardRevisionAcceptedReviewEntryV2 {
   readonly decisionStoreRevision: number;
 }
 
-/** Rejected v2 entry retaining one exact terminal decision and both event revisions. */
 export interface KnowledgeForwardRevisionRejectedReviewEntryV2 {
   readonly version: 2;
   readonly kind: "forward_revision_review_entry";
@@ -70,17 +65,14 @@ export interface KnowledgeForwardRevisionRejectedReviewEntryV2 {
   readonly decisionStoreRevision: number;
 }
 
-/** One terminal accepted or rejected forward Review entry. */
 export type KnowledgeForwardRevisionTerminalReviewEntryV2 =
   | KnowledgeForwardRevisionAcceptedReviewEntryV2
   | KnowledgeForwardRevisionRejectedReviewEntryV2;
 
-/** One current pending or terminal record for a published forward proposal. */
 export type KnowledgeForwardRevisionReviewEntryV2 =
   | KnowledgeForwardRevisionPendingReviewEntryV2
   | KnowledgeForwardRevisionTerminalReviewEntryV2;
 
-/** Strict projection of the immutable b1 publication proof inside any v2 entry. */
 export interface KnowledgeForwardRevisionReviewEntryProposalProjectionV2 {
   readonly proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>;
   readonly proposalDigest: string;
@@ -88,25 +80,22 @@ export interface KnowledgeForwardRevisionReviewEntryProposalProjectionV2 {
   readonly proposalStoreRevision: number;
 }
 
-/** Complete strict decision-capable forward Review state for one Bundle. */
 export interface KnowledgeForwardRevisionReviewSnapshotV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_VERSION;
   readonly bundleId: string;
-  /** Number of publication and terminal-decision events committed to this namespace. */
+
   readonly revision: number;
-  /** Highest Runtime-allocated request revision, including rejected requests. */
+
   readonly lastRequestRevision: number;
   readonly records: readonly Readonly<KnowledgeForwardRevisionReviewEntryV2>[];
 }
 
-/** Runtime-only input for one pending v2 publication entry. */
 export interface CreateKnowledgeForwardRevisionPendingReviewEntryV2Input {
   readonly proposal: unknown;
   readonly publishedRuntimeRevision: number;
   readonly proposalStoreRevision: number;
 }
 
-/** Runtime-only input for one terminal v2 decision entry. */
 export interface CreateKnowledgeForwardRevisionTerminalReviewEntryV2Input {
   readonly decision: unknown;
   readonly publishedRuntimeRevision: number;
@@ -158,9 +147,7 @@ const SNAPSHOT_KEYS = [
   "records",
 ] as const;
 
-/** Fixed value-free failure for malformed v2 forward Review persistence. */
 export class KnowledgeForwardRevisionReviewSnapshotV2ValidationError extends TypeError {
-  /** Creates one sanitized strict-contract failure. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Review v2 snapshot does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionReviewSnapshotV2ValidationError";
@@ -172,7 +159,6 @@ const VALIDATION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionReviewSnapshotV2V
 const authenticValidationErrors =
   new WeakSet<KnowledgeForwardRevisionReviewSnapshotV2ValidationError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -206,7 +192,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense array without invoking element accessors. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -233,7 +218,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -246,7 +230,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Reports whether text consists only of paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -262,7 +245,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether identifier text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -271,7 +253,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether one value is a bounded canonical identifier. */
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -283,29 +264,24 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
-/** Reports whether one value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether one value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether one value is a positive safe integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Throws one authentic frozen sanitized failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionReviewSnapshotV2ValidationError(VALIDATION_ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught failure was minted inside this module. */
 function isAuthenticValidationError(
   value: unknown
 ): value is KnowledgeForwardRevisionReviewSnapshotV2ValidationError {
@@ -316,7 +292,6 @@ function isAuthenticValidationError(
   );
 }
 
-/** Counts every body field physically retained by one raw entry exactly once. */
 function countRetainedBodyCharacters(value: unknown): number {
   const state = readDataProperty(value, "state");
   if (state === "pending") {
@@ -340,7 +315,6 @@ function countRetainedBodyCharacters(value: unknown): number {
   invalid();
 }
 
-/** Bounds aggregate retained bodies before invoking nested strict snapshotters. */
 function requireBoundedRetainedBodies(records: readonly unknown[]): void {
   let characters = 0;
   for (const record of records) {
@@ -355,7 +329,6 @@ function requireBoundedRetainedBodies(records: readonly unknown[]): void {
   }
 }
 
-/** Strictly snapshots entries while enforcing the authoritative aggregate incrementally. */
 function snapshotBoundedReviewEntries(
   values: readonly unknown[]
 ): readonly Readonly<KnowledgeForwardRevisionReviewEntryV2>[] {
@@ -376,7 +349,6 @@ function snapshotBoundedReviewEntries(
   return Object.freeze(records);
 }
 
-/** Re-proves one nested proposal and its immutable original b1 publication envelope. */
 function snapshotPublicationProof(
   proposalValue: unknown,
   proposalDigestValue: unknown,
@@ -410,7 +382,6 @@ function snapshotPublicationProof(
   }
 }
 
-/** Strictly snapshots one pending v2 Review entry. */
 export function snapshotKnowledgeForwardRevisionPendingReviewEntryV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionPendingReviewEntryV2> {
@@ -447,7 +418,6 @@ export function snapshotKnowledgeForwardRevisionPendingReviewEntryV2(
   }
 }
 
-/** Creates one pending v2 Review entry from Runtime-owned publication revisions. */
 export function createKnowledgeForwardRevisionPendingReviewEntryV2(
   value: CreateKnowledgeForwardRevisionPendingReviewEntryV2Input
 ): Readonly<KnowledgeForwardRevisionPendingReviewEntryV2> {
@@ -471,7 +441,6 @@ export function createKnowledgeForwardRevisionPendingReviewEntryV2(
   }
 }
 
-/** Strictly snapshots one terminal accepted or rejected v2 Review entry. */
 export function snapshotKnowledgeForwardRevisionTerminalReviewEntryV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionTerminalReviewEntryV2> {
@@ -533,7 +502,6 @@ export function snapshotKnowledgeForwardRevisionTerminalReviewEntryV2(
   }
 }
 
-/** Creates one terminal v2 Review entry from a strict decision and event revisions. */
 export function createKnowledgeForwardRevisionTerminalReviewEntryV2(
   value: CreateKnowledgeForwardRevisionTerminalReviewEntryV2Input
 ): Readonly<KnowledgeForwardRevisionTerminalReviewEntryV2> {
@@ -559,7 +527,6 @@ export function createKnowledgeForwardRevisionTerminalReviewEntryV2(
   }
 }
 
-/** Strictly dispatches one pending, accepted, or rejected v2 Review entry. */
 export function snapshotKnowledgeForwardRevisionReviewEntryV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewEntryV2> {
@@ -568,14 +535,12 @@ export function snapshotKnowledgeForwardRevisionReviewEntryV2(
     : snapshotKnowledgeForwardRevisionTerminalReviewEntryV2(value);
 }
 
-/** Returns the immutable proposal embedded in any strict v2 Review entry. */
 function getEntryProposal(
   entry: Readonly<KnowledgeForwardRevisionReviewEntryV2>
 ): Readonly<KnowledgeForwardRevisionPendingProposalRecordV1> {
   return entry.state === "pending" ? entry.proposal : entry.decision.proposal;
 }
 
-/** Projects one strict entry back to its exact immutable b1 publication proof. */
 export function projectKnowledgeForwardRevisionReviewEntryProposalV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewEntryProposalProjectionV2> {
@@ -589,21 +554,18 @@ export function projectKnowledgeForwardRevisionReviewEntryProposalV2(
   });
 }
 
-/** Returns the publication Store revision shared by every v2 entry state. */
 function getPublicationStoreRevision(
   entry: Readonly<KnowledgeForwardRevisionReviewEntryV2>
 ): number {
   return entry.proposalStoreRevision;
 }
 
-/** Returns the publication Runtime revision shared by every v2 entry state. */
 function getPublicationRuntimeRevision(
   entry: Readonly<KnowledgeForwardRevisionReviewEntryV2>
 ): number {
   return entry.publishedRuntimeRevision;
 }
 
-/** Creates an empty strict v2 forward Review snapshot without persistence. */
 export function createEmptyKnowledgeForwardRevisionReviewSnapshotV2(
   bundleId: string
 ): Readonly<KnowledgeForwardRevisionReviewSnapshotV2> {
@@ -616,7 +578,6 @@ export function createEmptyKnowledgeForwardRevisionReviewSnapshotV2(
   });
 }
 
-/** Strictly snapshots and semantically validates one v2 forward Review snapshot. */
 export function snapshotKnowledgeForwardRevisionReviewSnapshotV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewSnapshotV2> {
@@ -720,7 +681,6 @@ export function snapshotKnowledgeForwardRevisionReviewSnapshotV2(
   }
 }
 
-/** Migrates one strict b1 v1 snapshot into exact pending-only v2 semantics. */
 export function migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionReviewSnapshotV2> {
@@ -748,7 +708,6 @@ export function migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2(
   }
 }
 
-/** Parses one unknown v2 snapshot into a detached value or one safe diagnostic. */
 export function parseKnowledgeForwardRevisionReviewSnapshotV2(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionReviewSnapshotV2>> {
@@ -769,7 +728,6 @@ export function parseKnowledgeForwardRevisionReviewSnapshotV2(
   }
 }
 
-/** Validates one unknown v2 snapshot without retaining rejected data. */
 export function validateKnowledgeForwardRevisionReviewSnapshotV2(
   value: unknown
 ): KnowledgeValidationResult {
@@ -779,7 +737,6 @@ export function validateKnowledgeForwardRevisionReviewSnapshotV2(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Computes the canonical namespaced digest of one strict v2 snapshot. */
 export function createKnowledgeForwardRevisionReviewSnapshotV2Digest(value: unknown): string {
   const snapshot = snapshotKnowledgeForwardRevisionReviewSnapshotV2(value);
   return sha256(
@@ -789,7 +746,6 @@ export function createKnowledgeForwardRevisionReviewSnapshotV2Digest(value: unkn
   );
 }
 
-/** Detaches one fixed diagnostic returned by the v2 parser. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

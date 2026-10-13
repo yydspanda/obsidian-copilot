@@ -52,20 +52,16 @@ const DIRECTORY = Symbol("directory");
 type MemoryFileValue = string | typeof DIRECTORY;
 type StorageFailure = { revision: number; timing: "before" | "after" };
 
-/** Explicit test-only authority that permits already-valid synthetic inputs. */
 const ALLOWING_AUTHORITY: ChangeSetTransactionAuthorityPort = {
-  /** Accepts the synthetic apply identity without external persistence. */
   async verify() {
     return Object.freeze({ minimumTimestamp: 0 });
   },
 };
 
-/** Creates a detached JSON clone for in-memory durability boundaries. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** In-memory implementation of the global active-journal CAS contract. */
 class MemoryTransactionStorage implements TransactionStorage {
   active: ChangeSetTransactionJournal | null = null;
   writeHistory: ChangeSetTransactionJournal[] = [];
@@ -74,12 +70,10 @@ class MemoryTransactionStorage implements TransactionStorage {
   readOverride?: unknown;
   hasReadOverride = false;
 
-  /** Reads a detached active journal or an explicitly injected malformed value. */
   async readActive(): Promise<unknown> {
     return this.hasReadOverride ? cloneJson(this.readOverride) : cloneJson(this.active);
   }
 
-  /** Atomically compares and replaces the active journal for tests. */
   async writeActive(
     journal: ChangeSetTransactionJournal,
     expectedToken: TransactionStorageToken | null
@@ -110,7 +104,6 @@ class MemoryTransactionStorage implements TransactionStorage {
     }
   }
 
-  /** Atomically compares and clears the active journal for tests. */
   async clearActive(expectedToken: TransactionStorageToken): Promise<void> {
     const actualToken = this.active
       ? { transactionId: this.active.transactionId, revision: this.active.revision }
@@ -127,7 +120,6 @@ class MemoryTransactionStorage implements TransactionStorage {
   }
 }
 
-/** In-memory exact text file store with deterministic failure injection. */
 class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   readonly mutationCapabilities = ALL_KNOWLEDGE_FILE_MUTATIONS;
   readonly files = new Map<string, MemoryFileValue>();
@@ -139,7 +131,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   readonly corruptWrites = new Set<string>();
   readonly compareAndSwapInterference = new Map<string, MemoryFileValue | undefined>();
 
-  /** Observes one exact in-memory path. */
   async observe(path: string): Promise<KnowledgeFileObservation> {
     this.observeCount += 1;
     if (this.observeFailuresRemaining > 0) {
@@ -149,7 +140,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
     return this.readObservation(path);
   }
 
-  /** Atomically compares and replaces one exact path state for tests. */
   async compareAndSwap(
     path: string,
     before: TransactionFileState,
@@ -192,7 +182,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
     return { kind: "applied" };
   }
 
-  /** Reads one path without triggering observation failure injection. */
   private readObservation(path: string): KnowledgeFileObservation {
     const value = this.files.get(path);
     if (value === undefined) {
@@ -201,7 +190,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
     return value === DIRECTORY ? { kind: "directory" } : { kind: "file", content: value };
   }
 
-  /** Compares one in-memory observation with an exact transaction file state. */
   private matchesState(
     observation: KnowledgeFileObservation,
     state: TransactionFileState
@@ -217,7 +205,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   }
 }
 
-/** Creates the Bundle authorized to write only inside Wiki. */
 function createBundle(id = "personal"): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -229,7 +216,6 @@ function createBundle(id = "personal"): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one complete immutable ingest identity for transaction ownership. */
 function createJobClaim(overrides: Partial<TransactionJobClaim> = {}): TransactionJobClaim {
   return {
     jobId: "job-1",
@@ -243,7 +229,6 @@ function createJobClaim(overrides: Partial<TransactionJobClaim> = {}): Transacti
   };
 }
 
-/** Creates a materially valid citation for transaction preflight. */
 function createCitation(): ClaimCitation {
   const excerpt = "Grounded evidence";
   return {
@@ -261,7 +246,6 @@ function createCitation(): ClaimCitation {
   };
 }
 
-/** Creates a valid accepted file creation. */
 function createFileChange(path: string, content: string): KnowledgeFileChange {
   return {
     id: `change-${path}`,
@@ -275,7 +259,6 @@ function createFileChange(path: string, content: string): KnowledgeFileChange {
   };
 }
 
-/** Creates a two-target accepted ChangeSet whose input order differs from apply order. */
 function createChangeSet(id = "changeset-1"): KnowledgeChangeSet {
   return {
     id,
@@ -290,7 +273,6 @@ function createChangeSet(id = "changeset-1"): KnowledgeChangeSet {
   };
 }
 
-/** Creates the final Manifest projection supplied by one accepted review record. */
 function createManifestCommitIntent(
   changeSet: KnowledgeChangeSet,
   jobClaim: TransactionJobClaim
@@ -331,7 +313,6 @@ function createManifestCommitIntent(
   };
 }
 
-/** Creates a validator whose artifact, OKF, and link checks succeed. */
 function createValidator(fileStore: KnowledgeFileStore): ChangeSetValidator {
   const artifact: TextArtifactObservation = {
     kind: "text",
@@ -352,7 +333,6 @@ function createValidator(fileStore: KnowledgeFileStore): ChangeSetValidator {
   });
 }
 
-/** Creates a transaction runtime with deterministic clock and unique test ids. */
 function createTransaction(
   storage: MemoryTransactionStorage,
   fileStore: MemoryKnowledgeFileStore,
@@ -370,7 +350,6 @@ function createTransaction(
   });
 }
 
-/** Creates the owning queue-attempt input for one ChangeSet. */
 function createApplyInput(changeSet = createChangeSet()) {
   const jobClaim = createJobClaim();
   const manifestCommitIntent = createManifestCommitIntent(changeSet, jobClaim);
@@ -383,7 +362,6 @@ function createApplyInput(changeSet = createChangeSet()) {
   };
 }
 
-/** Requires and narrows the in-memory active journal to its committed phase. */
 function requireCommitted(storage: MemoryTransactionStorage) {
   const active = storage.active;
   if (!active || active.phase !== "committed") {
@@ -392,7 +370,6 @@ function requireCommitted(storage: MemoryTransactionStorage) {
   return active;
 }
 
-/** Counts file mutations for one target path. */
 function countMutations(fileStore: MemoryKnowledgeFileStore, path: string): number {
   return fileStore.mutations.filter((mutation) => mutation.path === path).length;
 }
@@ -403,7 +380,6 @@ describe("ChangeSetTransaction", () => {
     const files = new MemoryKnowledgeFileStore();
     const authorityFailure = new Error("durable authority rejected");
     const authority: ChangeSetTransactionAuthorityPort = {
-      /** Rejects the preflight before the validator may inspect target paths. */
       async verify() {
         throw authorityFailure;
       },
@@ -430,7 +406,6 @@ describe("ChangeSetTransaction", () => {
       fileStore: files,
       validator: createValidator(files),
       authority: {
-        /** Returns one predecessor-derived logical timestamp beyond the rolled-back clock. */
         async verify() {
           return Object.freeze({ minimumTimestamp: 2_000 });
         },

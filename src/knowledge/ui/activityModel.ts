@@ -5,10 +5,8 @@ import type {
 import type { KnowledgeFailure, KnowledgeIngestJob } from "@/knowledge/model/types";
 import type { KnowledgeRuntimeJobCompletion } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
-/** Default number of terminal jobs retained in the derived Activity surface. */
 export const DEFAULT_ACTIVITY_TERMINAL_LIMIT = 50;
 
-/** Stable UI-facing state derived exclusively from a trusted queue snapshot. */
 export type KnowledgeActivityStatus =
   | "queued"
   | "parsing"
@@ -25,7 +23,6 @@ export type KnowledgeActivityStatus =
   | "cancelled"
   | "completed";
 
-/** Bundle-wide execution state shown above individual Activity jobs. */
 export type KnowledgeActivityBundleState =
   | "running"
   | "paused"
@@ -34,7 +31,6 @@ export type KnowledgeActivityBundleState =
   | "recovery_required"
   | "finalizing";
 
-/** Bundle-wide controls; pause and resume are deliberately not job actions. */
 export interface KnowledgeActivityBundleControls {
   state: KnowledgeActivityBundleState;
   canPause: boolean;
@@ -45,7 +41,6 @@ export interface KnowledgeActivityBundleControls {
   resumeAt?: number;
 }
 
-/** Job-scoped actions that can be forwarded to the queue orchestration boundary. */
 export interface KnowledgeActivityJobActions {
   canCancel: boolean;
   canRetry: boolean;
@@ -54,10 +49,8 @@ export interface KnowledgeActivityJobActions {
   canRunSelected?: boolean;
 }
 
-/** Detached, immutable failure text already sanitized by the queue boundary. */
 export type KnowledgeActivityFailure = Readonly<KnowledgeFailure>;
 
-/** One immutable Activity row derived from a durable ingest job. */
 export interface KnowledgeActivityItem {
   id: string;
   sourceId: string;
@@ -77,7 +70,6 @@ export interface KnowledgeActivityItem {
   completion?: KnowledgeRuntimeJobCompletion;
 }
 
-/** Aggregate counts include hidden terminal history as well as visible jobs. */
 export interface KnowledgeActivityCounts {
   total: number;
   active: number;
@@ -86,7 +78,6 @@ export interface KnowledgeActivityCounts {
   byStatus: Readonly<Record<KnowledgeActivityStatus, number>>;
 }
 
-/** Complete read-only projection consumed by a future Activity UI. */
 export interface KnowledgeActivityModel {
   bundleId: string;
   revision: number;
@@ -95,7 +86,6 @@ export interface KnowledgeActivityModel {
   counts: Readonly<KnowledgeActivityCounts>;
 }
 
-/** Configuration for bounded terminal history projection. */
 export interface KnowledgeActivityModelOptions {
   maxTerminalItems?: number;
   completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
@@ -125,17 +115,6 @@ const ACTIVITY_SORT_PRIORITY: Readonly<Record<KnowledgeActivityStatus, number>> 
   completed: 13,
 };
 
-/**
- * Reports whether a job is the completed owner of an unacknowledged commit.
- *
- * A semantically validated queue guarantees that `commit_pending_ack` has an
- * apply marker. Matching by job id keeps unrelated completed history from
- * appearing successful or finalizing because another job owns that marker.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Candidate queue job
- * @returns Whether the job must remain in the non-success finalizing state
- */
 function isFinalizingJob(snapshot: IngestQueueSnapshot, job: KnowledgeIngestJob): boolean {
   if (job.status !== "completed") {
     return false;
@@ -148,13 +127,6 @@ function isFinalizingJob(snapshot: IngestQueueSnapshot, job: KnowledgeIngestJob)
   return ownsCommitMarker || ownsCommitPendingGate;
 }
 
-/**
- * Reports whether a failed apply is the Bundle's explicit recovery blocker.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Candidate queue job
- * @returns Whether the job represents a blocked recoverable transaction
- */
 function isRecoveryRequiredJob(snapshot: IngestQueueSnapshot, job: KnowledgeIngestJob): boolean {
   if (snapshot.control.status !== "paused" || snapshot.control.reason !== "recovery_required") {
     return false;
@@ -164,13 +136,6 @@ function isRecoveryRequiredJob(snapshot: IngestQueueSnapshot, job: KnowledgeInge
   );
 }
 
-/**
- * Converts one durable queue state into its stable Activity label.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Durable job to project
- * @returns UI-facing status that never promotes an unacknowledged commit to success
- */
 function deriveActivityStatus(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob
@@ -199,16 +164,6 @@ function deriveActivityStatus(
   }
 }
 
-/**
- * Reports whether another non-terminal job already owns the same source.
- *
- * The durable queue rejects retry beside such a job, so exposing Retry in that
- * situation would create a predictably failing control.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Failed job being considered for retry
- * @returns Whether retry is blocked by another active source job
- */
 function hasActiveSourcePeer(snapshot: IngestQueueSnapshot, job: KnowledgeIngestJob): boolean {
   return snapshot.jobs.some(
     (candidate) =>
@@ -218,20 +173,6 @@ function hasActiveSourcePeer(snapshot: IngestQueueSnapshot, job: KnowledgeIngest
   );
 }
 
-/**
- * Reports whether retrying a terminal job would reactivate stale source input.
- *
- * Queue validation permits an older active job only when the latest observation
- * describes the same content and pipeline. A newer divergent observation is
- * represented by a rerun while its predecessor is active; once that predecessor
- * is terminal, retrying it would clear its rerun flag and create an invalid active
- * job. A semantically valid snapshot with a retained rerun necessarily also has
- * an active same-source peer, which is rejected separately.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Terminal job being considered for retry
- * @returns Whether a newer divergent source observation makes the retry stale
- */
 function hasNewerDivergentSourceObservation(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob
@@ -247,17 +188,6 @@ function hasNewerDivergentSourceObservation(
   );
 }
 
-/**
- * Determines whether the exact queue retry transition can produce a valid candidate.
- *
- * This pure predicate mirrors the retry command's job-state and source-ownership
- * gates, then applies the source high-watermark invariant enforced when the
- * resulting pending job is persisted.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Durable job to inspect
- * @returns Whether Retry may be exposed without guaranteeing a rejected write
- */
 export function isIngestQueueJobRetryEligible(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob
@@ -271,12 +201,6 @@ export function isIngestQueueJobRetryEligible(
   );
 }
 
-/**
- * Determines whether review acceptance can enter the queue's apply claim.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @returns Whether Bundle state permits a job-level review action
- */
 function canBeginReview(snapshot: IngestQueueSnapshot): boolean {
   return (
     // Review is an exact user action; it must not require waking unrelated queued materials.
@@ -289,13 +213,6 @@ function canBeginReview(snapshot: IngestQueueSnapshot): boolean {
   );
 }
 
-/**
- * Reports whether the queue anchored an exact durable pending Review Store record.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Awaiting-review job being projected
- * @returns Whether Review may safely advance to a terminal decision
- */
 function hasDurablePendingReview(snapshot: IngestQueueSnapshot, job: KnowledgeIngestJob): boolean {
   return snapshot.pendingReviews.some(
     (review) =>
@@ -306,14 +223,6 @@ function hasDurablePendingReview(snapshot: IngestQueueSnapshot, job: KnowledgeIn
   );
 }
 
-/**
- * Derives job-level queue actions without inventing per-job pause or resume.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Durable job to inspect
- * @param canReanalyze - Exact job admission proved by the Runtime snapshot
- * @returns Immutable action availability for the Activity row
- */
 function deriveJobActions(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob,
@@ -347,15 +256,6 @@ function deriveJobActions(
   });
 }
 
-/**
- * Creates a detached immutable Activity row from one queue job.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @param job - Durable job to copy
- * @param completion - Optional outcome proved by the same Runtime snapshot
- * @param canReanalyze - Whether Runtime admits this exact job for explicit reanalysis
- * @returns Read-only UI projection without references to mutable job objects
- */
 function createActivityItem(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob,
@@ -399,13 +299,6 @@ function createActivityItem(
   return Object.freeze(item);
 }
 
-/**
- * Sorts newer Activity rows first with a deterministic id tie-breaker.
- *
- * @param left - First Activity row
- * @param right - Second Activity row
- * @returns Standard comparator result
- */
 function compareRecentActivity(
   left: Readonly<KnowledgeActivityItem>,
   right: Readonly<KnowledgeActivityItem>
@@ -417,13 +310,6 @@ function compareRecentActivity(
   );
 }
 
-/**
- * Sorts Activity rows by attention priority and then recency.
- *
- * @param left - First Activity row
- * @param right - Second Activity row
- * @returns Standard comparator result
- */
 function compareActivityItems(
   left: Readonly<KnowledgeActivityItem>,
   right: Readonly<KnowledgeActivityItem>
@@ -434,11 +320,6 @@ function compareActivityItems(
   );
 }
 
-/**
- * Creates zeroed counters for every Activity status.
- *
- * @returns Mutable counters used only while building the immutable model
- */
 function createStatusCounts(): Record<KnowledgeActivityStatus, number> {
   return {
     queued: 0,
@@ -458,12 +339,6 @@ function createStatusCounts(): Record<KnowledgeActivityStatus, number> {
   };
 }
 
-/**
- * Projects the durable Bundle execution gate into safe UI controls.
- *
- * @param snapshot - Trusted durable queue snapshot
- * @returns Immutable Bundle-level pause and resume capabilities
- */
 function deriveBundleControls(
   snapshot: IngestQueueSnapshot
 ): Readonly<KnowledgeActivityBundleControls> {
@@ -504,12 +379,6 @@ function deriveBundleControls(
   });
 }
 
-/**
- * Validates the caller-owned terminal projection limit.
- *
- * @param value - Requested maximum terminal row count
- * @returns Safe non-negative integer limit
- */
 function readTerminalLimit(value: number | undefined): number {
   const limit = value ?? DEFAULT_ACTIVITY_TERMINAL_LIMIT;
   if (!Number.isSafeInteger(limit) || limit < 0) {
@@ -518,18 +387,6 @@ function readTerminalLimit(value: number | undefined): number {
   return limit;
 }
 
-/**
- * Derives a bounded immutable Activity model from one trusted queue snapshot.
- *
- * Active, review, finalizing, and recovery rows are always retained and shown
- * before terminal history. Generic failed, cancelled, and completed history is
- * capped by recency so an indefinitely growing durable queue cannot create an
- * indefinitely growing render surface.
- *
- * @param snapshot - Strictly parsed and semantically validated queue snapshot
- * @param options - Optional terminal history projection limit
- * @returns Detached read-only Activity items, counts, and Bundle controls
- */
 export function deriveKnowledgeActivityModel(
   snapshot: IngestQueueSnapshot,
   options: KnowledgeActivityModelOptions = {}

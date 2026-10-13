@@ -1,6 +1,5 @@
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 
-/** Installation capabilities retained by one revocable folder-import generation. */
 export interface KnowledgeFolderImportGenerationLeaseInput {
   delegate: KnowledgeFolderImportPort;
   subscribeInvalidation(listener: () => void): () => void;
@@ -9,32 +8,24 @@ export interface KnowledgeFolderImportGenerationLeaseInput {
   assertCurrent(): void;
 }
 
-/** Creates the standard cancellation category for a stale import installation. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Invokes cleanup after authority is withdrawn without leaking cleanup failures. */
 function closeSafely(close: () => void): void {
   try {
     close();
   } catch {
     // The owning generation has already been revoked.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Installs one production folder-import delegate for exactly one upstream generation.
- *
- * Invalidation is subscribed before publication, and revocation is conditional on
- * the exact delegate so an obsolete lease cannot withdraw a newer generation.
- */
 export class KnowledgeFolderImportGenerationLease {
   private active = true;
   private closed = false;
   private unsubscribeInvalidation: () => void = () => undefined;
 
-  /** Subscribes invalidation and atomically publishes one exact delegate. */
   constructor(private readonly input: KnowledgeFolderImportGenerationLeaseInput) {
     try {
       const unsubscribe = input.subscribeInvalidation(() => this.withdraw());
@@ -52,7 +43,6 @@ export class KnowledgeFolderImportGenerationLease {
     }
   }
 
-  /** Proves both this lease and its upstream production generation. */
   assertCurrent(): void {
     if (!this.active || this.closed) throw createAbortError();
     try {
@@ -64,7 +54,6 @@ export class KnowledgeFolderImportGenerationLease {
     if (!this.active || this.closed) throw createAbortError();
   }
 
-  /** Idempotently closes the invalidation hook and exact delegate installation. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -73,7 +62,6 @@ export class KnowledgeFolderImportGenerationLease {
     this.withdraw();
   }
 
-  /** Withdraws only the delegate installed by this exact lease. */
   private withdraw(): void {
     if (!this.active) return;
     this.active = false;

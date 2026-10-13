@@ -11,7 +11,6 @@ import type { SourceManifestEntry } from "@/knowledge/model/types";
 const CAPTURE_DIGEST = "a".repeat(64);
 const CAPTURE_CONTENT_HASH = "b".repeat(64);
 
-/** Creates one exact Manifest entry for origin-authority tests. */
 function createEntry(patch: Partial<SourceManifestEntry> = {}): SourceManifestEntry {
   return {
     sourceId: "source-1",

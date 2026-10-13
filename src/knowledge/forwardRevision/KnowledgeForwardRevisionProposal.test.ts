@@ -26,7 +26,6 @@ const HASH_C = "c".repeat(64);
 const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 
-/** Creates one strict R3c-a intent for durable proposal tests. */
 function createIntent(selectedContentHash = HASH_SELECTED) {
   return createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
@@ -65,7 +64,6 @@ function createIntent(selectedContentHash = HASH_SELECTED) {
   });
 }
 
-/** Creates complete Runtime-projected request facts. */
 function createRequestInput(): CreateKnowledgeForwardRevisionRequestInput {
   const intent = createIntent();
   return {
@@ -100,7 +98,6 @@ function createRequestInput(): CreateKnowledgeForwardRevisionRequestInput {
   };
 }
 
-/** Rebuilds every correlated selected-content proof for one exact candidate. */
 function createRequestInputForContent(
   selectedContent: string
 ): CreateKnowledgeForwardRevisionRequestInput {
@@ -129,7 +126,6 @@ function createRequestInputForContent(
   };
 }
 
-/** Produces a JSON-detached mutable clone for hostile mutations. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

@@ -25,10 +25,8 @@ import type {
 } from "@/knowledge/model/types";
 import { validateKnowledgeChangeSet } from "@/knowledge/model/validation";
 
-/** Current durable review snapshot version. */
 export const CHANGESET_REVIEW_SNAPSHOT_VERSION = 2 as const;
 
-/** Exact queue input and attempt that produced one review proposal. */
 export interface ChangeSetReviewJobClaim {
   jobId: string;
   sourceId: string;
@@ -38,7 +36,6 @@ export interface ChangeSetReviewJobClaim {
   attempt: number;
 }
 
-/** Fields retained for every durable review outcome. */
 interface ChangeSetReviewRecordBase {
   changeSetId: string;
   proposal: KnowledgeChangeSet;
@@ -49,13 +46,11 @@ interface ChangeSetReviewRecordBase {
   recordedAt: number;
 }
 
-/** Exact proposed ChangeSet that still awaits a durable user decision. */
 export interface PendingChangeSetReviewRecord extends ChangeSetReviewRecordBase {
   outcome: "pending";
   recordRevision: 0;
 }
 
-/** Exact accepted payload retained for apply recovery. */
 export interface AcceptedChangeSetReviewRecord extends ChangeSetReviewRecordBase {
   outcome: "accepted";
   recordRevision: 1;
@@ -66,20 +61,17 @@ export interface AcceptedChangeSetReviewRecord extends ChangeSetReviewRecordBase
   acceptedAt: number;
 }
 
-/** Durable rejection without fabricating an empty accepted ChangeSet. */
 export interface RejectedChangeSetReviewRecord extends ChangeSetReviewRecordBase {
   outcome: "rejected";
   recordRevision: 1;
   rejectedAt: number;
 }
 
-/** One immutable proposal and its pending or terminal review outcome. */
 export type ChangeSetReviewRecord =
   | PendingChangeSetReviewRecord
   | AcceptedChangeSetReviewRecord
   | RejectedChangeSetReviewRecord;
 
-/** Complete strict review state persisted independently for one Bundle. */
 export interface ChangeSetReviewSnapshot {
   version: typeof CHANGESET_REVIEW_SNAPSHOT_VERSION;
   bundleId: string;
@@ -87,15 +79,7 @@ export interface ChangeSetReviewSnapshot {
   records: ChangeSetReviewRecord[];
 }
 
-/** Signals an atomic review snapshot compare-and-replace conflict. */
 export class ReviewStorageRevisionConflictError extends Error {
-  /**
-   * Creates an optimistic storage conflict.
-   *
-   * @param bundleId - Bundle whose review snapshot changed
-   * @param expectedRevision - Revision observed by the caller, or null for creation
-   * @param actualRevision - Optional revision observed atomically by the adapter
-   */
   constructor(
     public readonly bundleId: string,
     public readonly expectedRevision: number | null,
@@ -111,7 +95,6 @@ export class ReviewStorageRevisionConflictError extends Error {
   }
 }
 
-/** Reports a sanitized Queue pause that prevents persisting a new acceptance decision. */
 export class ReviewStorageAcceptanceBlockedError extends Error {
   constructor() {
     super("The Bundle is paused; the proposal remains pending and Apply has not started.");
@@ -119,26 +102,9 @@ export class ReviewStorageAcceptanceBlockedError extends Error {
   }
 }
 
-/** Atomic persistence port for complete per-Bundle review snapshots. */
 export interface ReviewStorage {
-  /**
-   * Reads unknown persisted JSON for one Bundle.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Unknown JSON, or null when no review state exists
-   */
   read(bundleId: string): Promise<unknown>;
 
-  /**
-   * Atomically compares and replaces one complete review snapshot.
-   *
-   * Comparison and durable full-snapshot replacement MUST be one adapter
-   * operation. `expectedRevision` is null only after observing no snapshot.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param snapshot - Complete validated next snapshot
-   * @param expectedRevision - Observed revision, or null for first creation
-   */
   write(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -216,12 +182,6 @@ const changeSetReviewSnapshotSchema: z.ZodType<ChangeSetReviewSnapshot> = z
   })
   .strict();
 
-/**
- * Converts a Zod path to stable dotted/indexed field notation.
- *
- * @param path - Structural issue path
- * @returns Stable field name safe for persistence and rendering
- */
 function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
@@ -232,12 +192,6 @@ function formatIssuePath(path: PropertyKey[]): string {
   }, "");
 }
 
-/**
- * Maps structural issues without retaining rejected values.
- *
- * @param error - Zod structural parse failure
- * @returns Safe deterministic diagnostics
- */
 function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   return error.issues.map((issue) => ({
     code: "review_snapshot_schema_invalid",
@@ -247,14 +201,6 @@ function mapSchemaIssues(error: z.ZodError): KnowledgeDiagnostic[] {
   }));
 }
 
-/**
- * Appends one safe deterministic validation error.
- *
- * @param diagnostics - Mutable diagnostic collection
- * @param code - Stable machine-readable code
- * @param field - Record field associated with the defect
- * @param message - Safe human-readable explanation
- */
 function addError(
   diagnostics: KnowledgeDiagnostic[],
   code: string,
@@ -264,13 +210,6 @@ function addError(
   diagnostics.push({ code, severity: "error", field, message });
 }
 
-/**
- * Appends nested diagnostics beneath one record field.
- *
- * @param diagnostics - Destination diagnostic collection
- * @param prefix - Parent field path
- * @param nested - Nested deterministic diagnostics
- */
 function appendNested(
   diagnostics: KnowledgeDiagnostic[],
   prefix: string,
@@ -284,23 +223,10 @@ function appendNested(
   }
 }
 
-/**
- * Compares JSON-compatible values independently of object insertion order.
- *
- * @param left - First strict persisted value
- * @param right - Second strict persisted value
- * @returns Whether both have identical canonical JSON
- */
 function sameJson(left: unknown, right: unknown): boolean {
   return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
 }
 
-/**
- * Checks whether one validation summary authorizes review acceptance.
- *
- * @param changeSet - Proposed or accepted ChangeSet
- * @returns Whether all deterministic validation flags are affirmative
- */
 function hasAffirmativeValidation(changeSet: KnowledgeChangeSet): boolean {
   return (
     changeSet.validation.okfValid &&
@@ -309,13 +235,6 @@ function hasAffirmativeValidation(changeSet: KnowledgeChangeSet): boolean {
   );
 }
 
-/**
- * Appends shared plan/ChangeSet diagnostics beneath their actual Review fields.
- *
- * @param diagnostics - Mutable destination collection
- * @param field - Review record field prefix
- * @param nested - Shared Manifest coverage diagnostics
- */
 function appendManifestPlanCoverageDiagnostics(
   diagnostics: KnowledgeDiagnostic[],
   field: string,
@@ -334,14 +253,6 @@ function appendManifestPlanCoverageDiagnostics(
   }
 }
 
-/**
- * Validates the immutable Manifest plan against its proposed ChangeSet and queue claim.
- *
- * @param record - Durable review record retaining the compiler-owned plan
- * @param snapshot - Bundle-level review snapshot
- * @param field - Record field prefix
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateManifestPlanBinding(
   record: ChangeSetReviewRecord,
   snapshot: ChangeSetReviewSnapshot,
@@ -388,13 +299,6 @@ function validateManifestPlanBinding(
   }
 }
 
-/**
- * Validates the accepted Manifest intent against the exact reviewed payload.
- *
- * @param record - Durable accepted review record
- * @param field - Record field prefix
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateAcceptedManifestIntent(
   record: AcceptedChangeSetReviewRecord,
   field: string,
@@ -436,18 +340,6 @@ function validateAcceptedManifestIntent(
   }
 }
 
-/**
- * Validates one accepted payload against its immutable proposal provenance.
- *
- * Rewritten create/update contents are allowed, but target identity, path,
- * operation, reason, source provenance, and original update precondition remain
- * proposal-owned. Deletes remain disabled until apply-time manifest authority is
- * journaled and revalidated.
- *
- * @param record - Accepted durable review record
- * @param field - Record field prefix
- * @param diagnostics - Mutable diagnostic collection
- */
 function validateAcceptedRecord(
   record: AcceptedChangeSetReviewRecord,
   field: string,
@@ -581,12 +473,6 @@ function validateAcceptedRecord(
   }
 }
 
-/**
- * Semantically validates one strict review snapshot.
- *
- * @param snapshot - Structurally parsed snapshot
- * @returns Stable semantic validation result
- */
 export function validateChangeSetReviewSnapshot(
   snapshot: ChangeSetReviewSnapshot
 ): KnowledgeValidationResult {
@@ -690,12 +576,6 @@ export function validateChangeSetReviewSnapshot(
   return { valid: !diagnostics.some((diagnostic) => diagnostic.severity === "error"), diagnostics };
 }
 
-/**
- * Strictly parses one unknown review snapshot.
- *
- * @param value - Runtime value expected to contain a complete v2 snapshot
- * @returns Parsed snapshot or safe structural diagnostics
- */
 export function parseChangeSetReviewSnapshot(
   value: unknown
 ): KnowledgeParseResult<ChangeSetReviewSnapshot> {

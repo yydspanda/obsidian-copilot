@@ -8,17 +8,15 @@ import type {
 import type { NoChangesManifestCommitMarker } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
-/** Inputs observed by the manifest layer without performing Vault I/O. */
 export interface SourceFreshnessInput {
   lastSuccessful?: SourceCompileSnapshot;
-  /** Runtime-verified latest no-file success, when it is newer than any apply. */
+
   lastNoChanges?: NoChangesManifestCommitMarker;
   sourceContentHash: string;
   pipelineFingerprint: string;
   outputs: readonly OutputObservation[];
 }
 
-/** Runtime-proven source outcome projected without persistence-specific proof fields. */
 export interface ProvenSourceFreshnessInput {
   outcome: "applied" | "no_changes";
   successfulSourceContentHash: string;
@@ -29,18 +27,10 @@ export interface ProvenSourceFreshnessInput {
   outputs: readonly OutputObservation[];
 }
 
-/** Adds one stable reason at most once while retaining contract order. */
 function addReason(reasons: SourceStaleReason[], reason: SourceStaleReason): void {
   if (!reasons.includes(reason)) reasons.push(reason);
 }
 
-/**
- * Compares every authorized output path and hash against exact Vault observations.
- *
- * Duplicate or unrelated observations are unverifiable rather than silently
- * accepted. A legacy generated-page reference without a content hash also
- * remains fail-closed.
- */
 function appendOutputReasons(
   reasons: SourceStaleReason[],
   expectedPages: readonly GeneratedPageReference[],
@@ -80,12 +70,6 @@ function appendOutputReasons(
   }
 }
 
-/**
- * Decides freshness from one Runtime-proven latest source outcome.
- *
- * This projection deliberately excludes Queue, ledger, and marker proof fields;
- * callers must obtain it from a boundary that already verified those fields.
- */
 export function decideProvenSourceFreshness(
   input: ProvenSourceFreshnessInput
 ): SourceFreshnessDecision {
@@ -100,17 +84,6 @@ export function decideProvenSourceFreshness(
   return reasons.length === 0 ? { kind: "up_to_date" } : { kind: "needs_ingest", reasons };
 }
 
-/**
- * Determines whether a source can skip ingestion using durable compile state.
- *
- * A source is current only when its exact bytes and full pipeline fingerprint
- * match and every generated output has the authorized path and SHA-256. Reasons
- * are emitted in stable order so persistence, tests, and UI never depend on
- * incidental iteration.
- *
- * @param input - Last successful snapshot and current source/output observations
- * @returns Up-to-date or ordered reasons the source must be ingested
- */
 export function decideSourceFreshness(input: SourceFreshnessInput): SourceFreshnessDecision {
   if (input.lastNoChanges) {
     return decideProvenSourceFreshness({

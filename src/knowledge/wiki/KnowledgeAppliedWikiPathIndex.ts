@@ -1,18 +1,15 @@
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 
-/** Maximum advisory rows accepted by one exact path-index generation. */
 export const KNOWLEDGE_APPLIED_WIKI_PATH_INDEX_MAX_ROWS = 10_000;
 const MAX_BUNDLE_ID_LENGTH = 256;
 const EMPTY_ROWS: readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[] = Object.freeze([]);
 
-/** Display-independent applied-page row published by one released production generation. */
 export interface KnowledgeAppliedWikiPathIndexRow {
   readonly bundleId: string;
   readonly pagePath: string;
 }
 
-/** Opaque exact-installation lease used only to conditionally revoke an index generation. */
 export interface KnowledgeAppliedWikiPathIndexLease {
   readonly __knowledgeAppliedWikiPathIndexLease: unique symbol;
 }
@@ -37,16 +34,13 @@ interface PathIndexState {
 const leaseBindings = new WeakMap<object, Readonly<PathIndexLeaseBinding>>();
 const pathIndexStates = new WeakMap<object, PathIndexState>();
 
-/** Sanitized malformed-installation failure retaining no Bundle or Vault path. */
 export class KnowledgeAppliedWikiPathIndexError extends Error {
-  /** Creates one value-free index error. */
   constructor() {
     super("The applied knowledge Wiki path index is invalid");
     this.name = "KnowledgeAppliedWikiPathIndexError";
   }
 }
 
-/** Reads one exact row without invoking property accessors. */
 function snapshotRow(value: unknown): Readonly<KnowledgeAppliedWikiPathIndexRow> | undefined {
   try {
     if (
@@ -85,7 +79,6 @@ function snapshotRow(value: unknown): Readonly<KnowledgeAppliedWikiPathIndexRow>
   }
 }
 
-/** Snapshots one dense bounded row array without invoking indexed getters. */
 function snapshotRows(value: unknown): readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[] {
   try {
     if (!Array.isArray(value)) {
@@ -130,12 +123,10 @@ function snapshotRows(value: unknown): readonly Readonly<KnowledgeAppliedWikiPat
   }
 }
 
-/** Compares identifiers without locale-sensitive ordering. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Creates one immutable exact-path lookup generation after collision checks. */
 function createGeneration(
   value: readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]
 ): PathIndexGeneration {
@@ -165,7 +156,6 @@ function createGeneration(
   return Object.freeze({ rowsByExactPath });
 }
 
-/** Returns hidden state only for an authentic index instance. */
 function requirePathIndexState(value: unknown): PathIndexState {
   try {
     if (
@@ -183,20 +173,12 @@ function requirePathIndexState(value: unknown): PathIndexState {
   }
 }
 
-/**
- * Synchronous advisory index for deciding whether to expose a current-page command.
- *
- * A positive lookup is never mutation/read authority. The inspector must perform
- * the complete Runtime/Vault/Runtime reproof after the user invokes the command.
- */
 export class KnowledgeAppliedWikiPathIndex {
-  /** Creates a frozen empty advisory index. */
   constructor() {
     pathIndexStates.set(this, { generation: createGeneration(EMPTY_ROWS), disposed: false });
     Object.freeze(this);
   }
 
-  /** Atomically replaces all rows and returns an opaque exact-generation lease. */
   install(
     rows: readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]
   ): KnowledgeAppliedWikiPathIndexLease {
@@ -209,12 +191,6 @@ export class KnowledgeAppliedWikiPathIndex {
     return lease;
   }
 
-  /**
-   * Returns frozen rows only for an exact canonical spelling.
-   *
-   * Multiple rows expose an ambiguous multi-Bundle observation instead of choosing
-   * an authority. Callers need only test `length`; inspection still accepts path only.
-   */
   lookupExact(pagePath: string): readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[] {
     const state = requirePathIndexState(this);
     if (
@@ -229,7 +205,6 @@ export class KnowledgeAppliedWikiPathIndex {
     return state.generation.rowsByExactPath.get(pagePath) ?? EMPTY_ROWS;
   }
 
-  /** Conditionally empties the index only for its exact current installation. */
   revoke(lease: KnowledgeAppliedWikiPathIndexLease): void {
     const state = requirePathIndexState(this);
     if (state.disposed || typeof lease !== "object" || lease === null) return;
@@ -238,7 +213,6 @@ export class KnowledgeAppliedWikiPathIndex {
     state.generation = createGeneration(EMPTY_ROWS);
   }
 
-  /** Permanently empties and closes this advisory index. */
   dispose(): void {
     const state = requirePathIndexState(this);
     if (state.disposed) return;

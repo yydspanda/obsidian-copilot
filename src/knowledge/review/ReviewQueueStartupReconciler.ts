@@ -15,31 +15,24 @@ import type {
 
 const DEFAULT_MAX_REVIEW_PASSES = 3;
 
-/** Read-only Review Store operations required during startup reconciliation. */
 export interface ReviewQueueStartupReviewPort {
-  /** Loads one detached durable review snapshot. */
   load(bundleId: string): Promise<ChangeSetReviewSnapshot>;
 }
 
-/** Queue operations permitted during startup review reconciliation. */
 export interface ReviewQueueStartupQueuePort {
-  /** Loads one detached durable queue snapshot. */
   load(bundleId: string): Promise<IngestQueueSnapshot>;
 
-  /** Restores the exact awaiting-review anchor for one durable pending record. */
   reconcilePendingReview(
     bundleId: string,
     reviewDecision: IngestPendingReviewDecisionReceipt
   ): Promise<KnowledgeIngestJob>;
 
-  /** Applies one already-durable rejected review decision without touching Wiki files. */
   rejectReview(
     bundleId: string,
     reviewDecision: IngestRejectedReviewDecisionReceipt
   ): Promise<KnowledgeIngestJob>;
 }
 
-/** Identity-only accepted review that still requires an exact durable reload before action. */
 export interface AcceptedReviewStartupIdentity {
   bundleId: string;
   changeSetId: string;
@@ -52,7 +45,6 @@ export interface AcceptedReviewStartupIdentity {
   jobClaim: ChangeSetReviewJobClaim;
 }
 
-/** One deterministic startup classification or queue reconciliation result. */
 export type ReviewQueueStartupAction =
   | {
       kind: "pending_reconciled";
@@ -69,24 +61,20 @@ export type ReviewQueueStartupAction =
       identity: AcceptedReviewStartupIdentity;
     };
 
-/** Complete result of one Bundle's fail-closed review startup pass. */
 export interface ReviewQueueStartupReconciliationResult {
   bundleId: string;
-  /** Stable Review Store revision that a higher-level startup gate must revalidate. */
+
   reviewRevision: number;
   actions: ReviewQueueStartupAction[];
 }
 
-/** Constructor dependencies for review-only startup reconciliation. */
 export interface ReviewQueueStartupReconcilerDependencies {
   reviews: ReviewQueueStartupReviewPort;
   queue: ReviewQueueStartupQueuePort;
   maxReviewPasses?: number;
 }
 
-/** Reports Review Store churn that prevented one stable startup classification. */
 export class ReviewQueueStartupUnstableError extends Error {
-  /** Creates a bounded-retry exhaustion error for one Bundle. */
   constructor(
     public readonly bundleId: string,
     public readonly attempts: number
@@ -98,12 +86,10 @@ export class ReviewQueueStartupUnstableError extends Error {
   }
 }
 
-/** Converts one durable review job claim into a detached queue receipt claim. */
 function cloneJobClaim(jobClaim: ChangeSetReviewJobClaim): ChangeSetReviewJobClaim {
   return { ...jobClaim };
 }
 
-/** Creates the queue receipt represented by one durable pending review record. */
 function toPendingReceipt(
   bundleId: string,
   record: Pick<
@@ -122,7 +108,6 @@ function toPendingReceipt(
   };
 }
 
-/** Creates the queue receipt represented by one durable rejected review record. */
 function toRejectedReceipt(
   bundleId: string,
   record: RejectedChangeSetReviewRecord
@@ -138,7 +123,6 @@ function toRejectedReceipt(
   };
 }
 
-/** Creates a non-mutating classification identity from one accepted record. */
 function toAcceptedIdentity(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
@@ -156,7 +140,6 @@ function toAcceptedIdentity(
   };
 }
 
-/** Compares a queue job with the exact durable Review Store claim. */
 function jobMatchesReviewClaim(
   job: KnowledgeIngestJob | undefined,
   claim: ChangeSetReviewJobClaim
@@ -172,7 +155,6 @@ function jobMatchesReviewClaim(
   );
 }
 
-/** Detects the exact pending-review queue state represented by one durable record. */
 function hasExactPendingState(
   snapshot: IngestQueueSnapshot,
   record: Pick<
@@ -199,13 +181,6 @@ function hasExactPendingState(
   );
 }
 
-/**
- * Detects an exact queue rejection already converged by this or another runtime.
- *
- * The queue's rejection timestamp may be later than the Review Store decision,
- * so identity uses the immutable decision timestamp and the queue-owned applied
- * timestamp only to prove the terminal job and tombstone agree with each other.
- */
 function hasExactRejectedState(
   snapshot: IngestQueueSnapshot,
   record: RejectedChangeSetReviewRecord
@@ -228,7 +203,6 @@ function hasExactRejectedState(
   );
 }
 
-/** Sorts review records independently of storage insertion order. */
 function compareReviewRecords(left: ChangeSetReviewRecord, right: ChangeSetReviewRecord): number {
   const timestampOrder = left.recordedAt - right.recordedAt;
   if (timestampOrder !== 0) {
@@ -237,22 +211,11 @@ function compareReviewRecords(left: ChangeSetReviewRecord, right: ChangeSetRevie
   return left.changeSetId < right.changeSetId ? -1 : left.changeSetId > right.changeSetId ? 1 : 0;
 }
 
-/**
- * Reconciles Review Store hand-off gaps without running a model or writing Wiki files.
- *
- * Pending records restore their exact queue anchor. Rejected records first
- * restore that anchor when needed and then replay the exact durable rejection.
- * Accepted records are read-only recovery candidates: startup never begins an
- * apply automatically because no-journal recovery still requires an explicit
- * user continue or abandon decision. A higher-level runtime coordinator must
- * still classify historical completed, active, and no-journal apply states.
- */
 export class ReviewQueueStartupReconciler {
   private readonly reviews: ReviewQueueStartupReviewPort;
   private readonly queue: ReviewQueueStartupQueuePort;
   private readonly maxReviewPasses: number;
 
-  /** Creates a review-only startup coordinator over durable ports. */
   constructor(dependencies: ReviewQueueStartupReconcilerDependencies) {
     this.reviews = dependencies.reviews;
     this.queue = dependencies.queue;
@@ -262,15 +225,6 @@ export class ReviewQueueStartupReconciler {
     }
   }
 
-  /**
-   * Reconciles every durable review record for one Bundle in stable order.
-   *
-   * @param bundleId - Bundle whose Review Store and queue must converge
-   * The returned Review revision is an optimistic token, not a readiness lock;
-   * the higher-level startup gate must revalidate it before enabling claims.
-   *
-   * @returns Deterministic actions and identity-only accepted classifications
-   */
   async reconcile(bundleId: string): Promise<ReviewQueueStartupReconciliationResult> {
     for (let pass = 0; pass < this.maxReviewPasses; pass += 1) {
       const snapshot = await this.loadReviewSnapshot(bundleId);
@@ -292,7 +246,6 @@ export class ReviewQueueStartupReconciler {
     throw new ReviewQueueStartupUnstableError(bundleId, this.maxReviewPasses);
   }
 
-  /** Reconciles one observed Review Store revision in deterministic record order. */
   private async reconcileSnapshot(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot
@@ -327,7 +280,6 @@ export class ReviewQueueStartupReconciler {
     return actions;
   }
 
-  /** Loads one Bundle-matching Review Store snapshot for revision comparison. */
   private async loadReviewSnapshot(bundleId: string): Promise<ChangeSetReviewSnapshot> {
     const snapshot = await this.reviews.load(bundleId);
     if (snapshot.bundleId !== bundleId) {
@@ -336,13 +288,6 @@ export class ReviewQueueStartupReconciler {
     return snapshot;
   }
 
-  /**
-   * Restores a rejected record's pending predecessor unless exact final state exists.
-   *
-   * A second runtime may win between the initial read and reconciliation. When
-   * that happens, only an exact final-state recheck converts the rejected
-   * transition error into convergence; every conflicting state still fails.
-   */
   private async reconcileRejectedRecord(
     bundleId: string,
     record: RejectedChangeSetReviewRecord
@@ -361,13 +306,6 @@ export class ReviewQueueStartupReconciler {
     }
   }
 
-  /**
-   * Replays one pending hand-off and proves ambiguous adapter failures by re-reading state.
-   *
-   * @param bundleId - Bundle whose queue owns the pending anchor
-   * @param record - Pending base fields retained by pending and terminal records
-   * @param allowRejectedFinal - Whether an exact concurrent rejection also proves convergence
-   */
   private async reconcilePendingRecord(
     bundleId: string,
     record: PendingChangeSetReviewRecord | RejectedChangeSetReviewRecord,

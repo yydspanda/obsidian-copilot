@@ -7,7 +7,6 @@ import { KnowledgeFolderImportGenerationLease } from "@/knowledge/capture/Knowle
 
 const EMPTY_FILES: readonly File[] = Object.freeze([]);
 
-/** Creates a delegate returning one identifiable aggregate receipt. */
 function createDelegate(bundleId: string): KnowledgeFolderImportPort {
   return {
     importFolder: async (): Promise<KnowledgeFolderImportReceipt> => ({

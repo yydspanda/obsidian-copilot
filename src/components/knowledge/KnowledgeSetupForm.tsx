@@ -54,7 +54,6 @@ const ERROR_COPY: Readonly<Record<KnowledgeSetupErrorCode, string>> = {
     "Setup could not be completed. New folders or rules may remain; check them before retrying. Existing files were not replaced.",
 };
 
-/** User-confirmed local setup; no provider request or automatic material registration. */
 export function KnowledgeSetupForm({
   port,
   onConfigured,

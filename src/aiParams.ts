@@ -1,13 +1,10 @@
 import { ChainType } from "@/chainType";
-import { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 import { ModelCapability, ReasoningEffort, Verbosity } from "@/constants";
 import type { MaterializedSourceType } from "@/context/contextCacheStore";
 import { settingsAtom, settingsStore } from "@/settings/model";
 import { SelectedTextContext } from "@/types/message";
 import { atom, useAtom } from "jotai";
-import { TFile } from "obsidian";
 
 const userModelKeyAtom = atom<string | null>(null);
 const modelKeyAtom = atom(
@@ -39,15 +36,9 @@ export interface FailedItem {
   type: "md" | "web" | "youtube" | "nonMd";
   error?: string;
   timestamp?: number;
-  /**
-   * The source's refresh failed but a previous snapshot is still in use, so
-   * it's stale-but-usable rather than missing. Lets the status icon stay
-   * "ready" (green) while the popover flags the staleness.
-   */
   usedStaleSnapshot?: boolean;
 }
 
-/** Done-of-total progress for one materialization step (prefetch / parse). */
 export interface ContextLoadStepCount {
   done: number;
   total: number;
@@ -55,62 +46,27 @@ export interface ContextLoadStepCount {
 
 export interface AgentProjectContextLoadState {
   phase: "idle" | "resolve" | "prefetch" | "parse" | "done";
-  blocking: boolean; // true while send should be gated for this project
-  /**
-   * In-vault binary files queued for text materialization, known once the
-   * materializer resolves inclusions. Drives the card's "Resolve files (N)" row.
-   * Omitted until resolve completes (and stays omitted for a context with none).
-   */
+  blocking: boolean;
   resolved?: number;
-  /** Remote (web/YouTube) prefetch progress; omitted when there are no remotes. */
   prefetch?: ContextLoadStepCount;
-  /** Binary-file parse progress; omitted when there are no files to parse. */
   parsed?: ContextLoadStepCount;
-  /**
-   * Per-source fetch/parse failures from the last run. A run with failures still
-   * completes as `phase: "done"` (the session degrades gracefully); these drive
-   * the status icon's warning state and the popover's failed-source list. Always
-   * republished on `done` (empty array when everything succeeded) so a prior
-   * run's failures never linger.
-   */
   failedSources?: FailedItem[];
-  /**
-   * Sources the full materialization run is fetching/parsing RIGHT NOW.
-   * Published incrementally as each source
-   * starts and settles, so the popover renders a true queue: URLs (fetched in
-   * parallel) appear together while files (parsed sequentially) appear one at a
-   * time, and each flips to its real outcome the instant it settles — never
-   * waiting for the whole run. Only the single-flight owner publishes it; cleared
-   * on `done`. `failedSources` is likewise published incrementally during a run.
-   */
   processingSources?: AgentInFlightSource[];
-  /**
-   * Sources whose per-source retry is currently in flight (the popover row
-   * "Retry"). Drives an optimistic "processing" state on that row so a click has
-   * immediate feedback even when the retry ends up failing again. Never gates
-   * send (`blocking` stays false); cleared when each retry settles.
-   */
   retryingSources?: AgentRetryingSource[];
 }
 
-/** A source whose per-source retry is currently in flight (popover row "Retry"). */
 export interface AgentRetryingSource {
   kind: MaterializedSourceType;
   source: string;
 }
 
-/** A source the full materialization run is currently fetching/parsing. */
 export interface AgentInFlightSource {
   kind: MaterializedSourceType;
   source: string;
 }
 
-/** Frozen empty list — referential stability for the "no retries in flight" case. */
 export const EMPTY_RETRYING_SOURCES: readonly AgentRetryingSource[] = Object.freeze([]);
-/** Frozen empty list — referential stability for the "nothing materializing" case. */
 export const EMPTY_PROCESSING_SOURCES: readonly AgentInFlightSource[] = Object.freeze([]);
-/** Per-project context-load state, keyed by projectId. Driven by AgentSessionManager's
- *  materialize step; read by AgentContextStatusIcon / AgentChatInput to show progress + gate send. */
 export const agentProjectContextLoadAtom = atom<Record<string, AgentProjectContextLoadState>>({});
 
 const selectedTextContextsAtom = atom<SelectedTextContext[]>([]);
@@ -119,16 +75,10 @@ export interface ProjectConfig {
   id: string;
   name: string;
   description?: string;
-  /** Untrusted knowledge Bundle frontmatter, validated only by the knowledge config source. */
+
   knowledgeBundle?: unknown;
   systemPrompt: string;
-  // Not read at runtime: Agent Mode picks its model from agentMode.activeBackend
-  // plus that backend's default. Retained so the `project.md` frontmatter written
-  // by earlier versions round-trips instead of being dropped on rewrite.
   projectModelKey: string;
-  // Not read at runtime either, for the same reason as `projectModelKey`: the
-  // dialog stopped surfacing these and no request consults them. Kept so the
-  // frontmatter written by earlier versions round-trips.
   modelConfigs: {
     temperature?: number;
     maxTokens?: number;
@@ -154,7 +104,6 @@ export interface ModelConfig {
   openAIOrgId?: string;
   anthropicApiKey?: string;
   cohereApiKey?: string;
-  // Google and TogetherAI API key share this property
   apiKey?: string;
   openAIProxyBaseUrl?: string;
   groqApiKey?: string;
@@ -162,21 +111,12 @@ export interface ModelConfig {
   enableCors?: boolean;
 }
 
-export interface SetChainOptions {
-  prompt?: ChatPromptTemplate;
-  chatModel?: BaseChatModel;
-  noteFile?: TFile;
-  abortController?: AbortController;
-}
-
 export interface CustomModel {
-  /** Present for chat-backend bridged models; distinguishes same wire id across providers. */
   configuredModelId?: string;
   name: string;
   provider: string;
   baseUrl?: string;
   apiKey?: string;
-  /** Runtime auth contract for bridged models; undefined preserves legacy behavior. */
   requiresApiKey?: boolean;
   enabled: boolean;
   isEmbeddingModel?: boolean;
@@ -187,28 +127,22 @@ export interface CustomModel {
   streamUsage?: boolean;
   maxTokens?: number;
 
-  // Ollama specific fields
   numCtx?: number;
 
-  // LM Studio specific fields
   useResponsesApi?: boolean;
 
-  // OpenRouter specific fields
   enablePromptCaching?: boolean;
 
   plusExclusive?: boolean;
   believerExclusive?: boolean;
   capabilities?: ModelCapability[];
   displayName?: string;
-  /** Retired provider identity retained only so old selections fail visibly without fallback. */
+
   retired?: boolean;
 
-  // Embedding models only (Jina at the moment)
   dimensions?: number;
-  // OpenAI specific fields
   openAIOrgId?: string;
 
-  // OpenAI GPT-5 and O-series specific fields
   reasoningEffort?: ReasoningEffort;
   verbosity?: Verbosity;
 }
@@ -233,10 +167,6 @@ export function useModelKey() {
 
 export function getChainType(): ChainType {
   return settingsStore.get(chainTypeAtom);
-}
-
-export function setChainType(chainType: ChainType) {
-  settingsStore.set(chainTypeAtom, chainType);
 }
 
 export function subscribeToChainTypeChange(callback: () => void): () => void {

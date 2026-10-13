@@ -4,12 +4,6 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import type { KnowledgeRecoveryItem, KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
 
-/**
- * Creates one immutable recovery item with fail-closed defaults.
- *
- * @param overrides - Fields that distinguish the recovery condition
- * @returns Complete recovery row fixture
- */
 function createItem(overrides: Partial<KnowledgeRecoveryItem>): Readonly<KnowledgeRecoveryItem> {
   return {
     id: "recovery-1",
@@ -19,12 +13,6 @@ function createItem(overrides: Partial<KnowledgeRecoveryItem>): Readonly<Knowled
   };
 }
 
-/**
- * Creates one complete recovery model fixture.
- *
- * @param items - Recovery rows rendered by the panel
- * @returns Immutable recovery model
- */
 function createModel(
   items: readonly Readonly<KnowledgeRecoveryItem>[]
 ): Readonly<KnowledgeRecoveryModel> {
@@ -35,13 +23,6 @@ function createModel(
   };
 }
 
-/**
- * Renders the panel with fresh callback spies.
- *
- * @param model - Recovery model under test
- * @param pendingRecoveryId - Optional in-flight recovery identity
- * @returns Callback spies owned by this render
- */
 function renderPanel(model: Readonly<KnowledgeRecoveryModel>, pendingRecoveryId?: string) {
   const onContinue = jest.fn<void, [string]>();
   const onAbandon = jest.fn<void, [string]>();
@@ -58,7 +39,6 @@ function renderPanel(model: Readonly<KnowledgeRecoveryModel>, pendingRecoveryId?
   return { onContinue, onAbandon, onRefresh };
 }
 
-/** Returns one named button with its concrete disabled-state type. */
 function getButton(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name });
 }

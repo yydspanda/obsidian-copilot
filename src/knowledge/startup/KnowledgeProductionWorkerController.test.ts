@@ -11,7 +11,6 @@ interface Deferred<T> {
   resolve(value: T): void;
 }
 
-/** Creates one externally settled Promise for detached-controller assertions. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -20,7 +19,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one authentic worker session around a scripted Queue-shaped test double. */
 function createWorker(
   runNext: jest.Mock<Promise<RunNextResult>, [string]>
 ): KnowledgeProductionWorkerSession {
@@ -32,33 +30,28 @@ function createWorker(
   });
 }
 
-/** Deterministic timer realm whose callbacks run only when explicitly invoked. */
 class TestScheduler implements KnowledgeProductionWorkerScheduler {
   nowValue = 100;
   nextHandle = 0;
   readonly scheduled = new Map<number, { callback: () => void; delayMs: number }>();
   readonly cancelled: number[] = [];
 
-  /** Returns the mutable deterministic test timestamp. */
   now(): number {
     return this.nowValue;
   }
 
-  /** Retains one callback without running it. */
   schedule(callback: () => void, delayMs: number): number {
     const handle = ++this.nextHandle;
     this.scheduled.set(handle, { callback, delayMs });
     return handle;
   }
 
-  /** Records and removes one retained callback. */
   cancel(handle: unknown): void {
     if (typeof handle !== "number") return;
     this.cancelled.push(handle);
     this.scheduled.delete(handle);
   }
 
-  /** Runs and removes one retained callback as its renderer realm would. */
   run(handle: number): void {
     const scheduled = this.scheduled.get(handle);
     if (!scheduled) throw new Error("Expected one scheduled worker callback");
@@ -67,18 +60,15 @@ class TestScheduler implements KnowledgeProductionWorkerScheduler {
   }
 }
 
-/** Adversarial timer realm that invokes callbacks before returning retained handles. */
 class SynchronousScheduler implements KnowledgeProductionWorkerScheduler {
   nextHandle = 0;
   readonly retained = new Set<number>();
   readonly cancelled: number[] = [];
 
-  /** Returns one stable timestamp. */
   now(): number {
     return 100;
   }
 
-  /** Publishes a handle, fires synchronously, and only then returns the handle. */
   schedule(callback: () => void, _delayMs: number): number {
     const handle = ++this.nextHandle;
     this.retained.add(handle);
@@ -86,7 +76,6 @@ class SynchronousScheduler implements KnowledgeProductionWorkerScheduler {
     return handle;
   }
 
-  /** Records cancellation of a handle retained across the synchronous callback. */
   cancel(handle: unknown): void {
     if (typeof handle !== "number") return;
     this.cancelled.push(handle);

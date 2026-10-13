@@ -1,9 +1,10 @@
-import { installCodexArchive, CODEX_BUNDLE_VERSION } from "./codexArchive";
+import * as codexVersion from "./codexVersion";
+import { installCodexArchive, CODEX_PINNED_VERSION } from "./codexArchive";
 jest.mock("./codexArchive", () => ({
+  ...jest.requireActual<object>("./codexArchive"),
   installCodexArchive: jest.fn(),
-  CODEX_BUNDLE_VERSION: "1.10.0",
 }));
-import { getSettings, setSettings } from "@/settings/model";
+import { getSettings, setSettings, updateAgentModeBackendFields } from "@/settings/model";
 import { requireNodeModule } from "@/utils/desktopRuntime";
 import { detectBinary } from "@/utils/detectBinary";
 import type * as childProcess from "node:child_process";
@@ -11,7 +12,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CodexBinaryManager } from "./CodexBinaryManager";
-import { CODEX_ACP_PINNED_VERSION } from "./cliSetup";
 
 jest.mock("@/utils/detectBinary", () => ({
   ...jest.requireActual("@/utils/detectBinary"),
@@ -43,7 +43,7 @@ function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-function writeAdapter(prefix: string, version = CODEX_ACP_PINNED_VERSION): string {
+function writeAdapter(prefix: string, version = CODEX_PINNED_VERSION): string {
   const root = path.join(prefix, "node_modules", "@agentclientprotocol", "codex-acp");
   const entry = path.join(root, "dist", "index.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
@@ -71,7 +71,7 @@ describe("CodexBinaryManager", () => {
       mockedExecFile.mockReset().mockImplementation((_command, _args, _options, callback) => {
         (callback as (error: Error | null, stdout: string, stderr: string) => void)(
           null,
-          `${CODEX_ACP_PINNED_VERSION} Codex CLI`,
+          `${CODEX_PINNED_VERSION} Codex CLI`,
           ""
         );
         return {} as childProcess.ChildProcess;
@@ -84,7 +84,7 @@ describe("CodexBinaryManager", () => {
           fs.writeFileSync(
             path.join(stage, "provenance.json"),
             JSON.stringify({
-              acpVersion: CODEX_ACP_PINNED_VERSION,
+              acpVersion: CODEX_PINNED_VERSION,
               target: `darwin-${process.arch}`,
             })
           );
@@ -95,12 +95,37 @@ describe("CodexBinaryManager", () => {
     });
 
     afterEach(() => {
+      jest.useRealTimers();
       setSettings({ agentMode: originalAgentMode });
       setPlatform(originalPlatform);
       fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
     describe("install()", () => {
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/535 rejects a managed pin below minimum without downloading or replacing the selected installation", async () => {
+        const manager = new CodexBinaryManager();
+        const previous = path.join(tempDir, "previous-codex");
+        fs.writeFileSync(previous, "working runtime");
+        updateAgentModeBackendFields("codex", {
+          binaryPath: previous,
+          binaryVersion: CODEX_PINNED_VERSION,
+          binarySource: "managed",
+        });
+        const selected = { ...getSettings().agentMode.backends?.codex };
+        const minimum = jest.replaceProperty<{ CODEX_MIN_VERSION: string }, "CODEX_MIN_VERSION">(
+          codexVersion,
+          "CODEX_MIN_VERSION",
+          "999.0.0"
+        );
+        try {
+          await expect(manager.install()).rejects.toThrow("requires");
+          expect(installCodexArchive).not.toHaveBeenCalled();
+          expect(getSettings().agentMode.backends?.codex).toEqual(selected);
+          expect(fs.readFileSync(previous, "utf8")).toBe("working runtime");
+        } finally {
+          minimum.restore();
+        }
+      });
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 selects the verified native bundle without invoking npm", async () => {
         const manager = new CodexBinaryManager();
         const listener = jest.fn();
@@ -108,18 +133,77 @@ describe("CodexBinaryManager", () => {
         await manager.install();
         expect(getSettings().agentMode.backends?.codex).toMatchObject({
           binarySource: "managed",
-          binaryVersion: CODEX_BUNDLE_VERSION,
-          binaryPath: path.join(manager.getDataDir(), CODEX_BUNDLE_VERSION, "codex-acp"),
+          binaryVersion: CODEX_PINNED_VERSION,
+          binaryPath: path.join(manager.getDataDir(), CODEX_PINNED_VERSION, "codex-acp"),
         });
+        expect(fs.readdirSync(manager.getDataDir())).toEqual([CODEX_PINNED_VERSION]);
         expect(mockedDetectBinary).not.toHaveBeenCalled();
         expect(listener).toHaveBeenCalled();
         expect(manager.getActionState()).toEqual({ kind: "idle" });
         unsubscribe();
       });
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/578 shows transferred bytes and each installation phase during a managed install", async () => {
+        jest.mocked(installCodexArchive).mockImplementation(async (stage, _signal, progress) => {
+          progress?.download(0, 2048);
+          progress?.download(1024, 2048);
+          progress?.download(2048, 2048);
+          progress?.extracting();
+          fs.writeFileSync(path.join(stage, "codex-acp"), "native");
+        });
+        const manager = new CodexBinaryManager();
+        const progress: Array<{ label: string; percent: number }> = [];
+        manager.subscribeRuntimeState(() => {
+          const state = manager.getActionState();
+          if (state.kind === "running" && state.percent !== undefined)
+            progress.push({ label: state.label, percent: state.percent });
+        });
+
+        await manager.install();
+
+        expect(progress).toEqual([
+          { label: "Starting…", percent: 0 },
+          { label: "Connecting to Codex adapter download…", percent: 5 },
+          { label: "Downloading Codex adapter — 0 B / 2.0 KB", percent: 10 },
+          { label: "Downloading Codex adapter — 1.0 KB / 2.0 KB", percent: 42 },
+          { label: "Downloading Codex adapter — 2.0 KB / 2.0 KB", percent: 75 },
+          { label: "Extracting Codex adapter…", percent: 80 },
+          { label: "Verifying Codex adapter…", percent: 90 },
+          { label: "Verifying bundled Codex runtime…", percent: 90 },
+          { label: "Activating Codex adapter…", percent: 98 },
+          { label: "Codex adapter ready.", percent: 100 },
+        ]);
+      });
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/578 shows elapsed wait time before Codex download bytes arrive", async () => {
+        jest.useFakeTimers();
+        let beginDownload!: () => void;
+        let releaseDownload!: () => void;
+        const entered = new Promise<void>((resolve) => (beginDownload = resolve));
+        const held = new Promise<void>((resolve) => (releaseDownload = resolve));
+        jest.mocked(installCodexArchive).mockImplementation(async (stage, _signal, progress) => {
+          beginDownload();
+          await held;
+          progress?.download(1024, 2048);
+          fs.writeFileSync(path.join(stage, "codex-acp"), "native");
+        });
+        const manager = new CodexBinaryManager();
+        const install = manager.install();
+        await entered;
+
+        await jest.advanceTimersByTimeAsync(65_000);
+        expect(manager.getActionState()).toMatchObject({
+          kind: "running",
+          label: "Connecting to Codex adapter download… 65s elapsed",
+          percent: 5,
+        });
+
+        releaseDownload();
+        await install;
+        expect(manager.getActionState()).toEqual({ kind: "idle" });
+      });
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 rejects a wrong adapter version or missing bundled runtime before selecting files", async () => {
         const manager = new CodexBinaryManager();
         const before = getSettings().agentMode.backends?.codex;
-        for (const output of ["0.0.1", CODEX_ACP_PINNED_VERSION]) {
+        for (const output of ["0.0.1", CODEX_PINNED_VERSION]) {
           mockedExecFile.mockImplementation((_command, _args, _options, callback) => {
             (callback as (error: Error | null, stdout: string, stderr: string) => void)(
               null,
@@ -177,40 +261,7 @@ describe("CodexBinaryManager", () => {
         expect(() => new CodexBinaryManager().getDataDir()).toThrow("home directory");
       });
     });
-    describe("getActionState()", () => {
-      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 exposes installation progress and retryable failures", () => {
-        const manager = new CodexBinaryManager();
-        const state = jest.spyOn(manager, "getRuntimeState");
-        state.mockReturnValue({
-          kind: "installing",
-          progress: { label: "Downloading", percent: 30 },
-        });
-        expect(manager.getActionState()).toEqual({
-          kind: "running",
-          label: "Downloading",
-          percent: 30,
-        });
-        state.mockReturnValue({ kind: "error", message: "download failed", operation: "install" });
-        expect(manager.getActionState()).toEqual({ kind: "error", message: "download failed" });
-        state.mockRestore();
-      });
-      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 disables competing actions during path validation and hides unrelated failures", () => {
-        const manager = new CodexBinaryManager();
-        const state = jest.spyOn(manager, "getRuntimeState");
-        for (const kind of ["busy", "detecting"] as const) {
-          state.mockReturnValue({ kind });
-          expect(manager.getActionState()).toEqual({ kind: "running", label: "Configuring…" });
-        }
-        state.mockReturnValue({ kind: "error", message: "bad path", operation: "configure" });
-        expect(manager.getActionState()).toEqual({ kind: "idle" });
-        expect(manager.getActionState()).toBe(manager.getActionState());
-        state.mockRestore();
-      });
-    });
-
     describe("setCustomBinaryPath()", () => {
-      // Real filesystem fixtures need the host path rules, unlike mocked bundle installs.
-      // https://github.com/logancyang/obsidian-copilot/issues/2967
       beforeEach(() => setPlatform(originalPlatform));
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 normalizes a supported package symlink before selecting the custom adapter", async () => {
         const entry = writeAdapter(path.join(tempDir, "custom"));
@@ -220,7 +271,7 @@ describe("CodexBinaryManager", () => {
         await manager.setCustomBinaryPath(linked);
         expect(getSettings().agentMode.backends?.codex).toMatchObject({
           binaryPath: fs.realpathSync(entry),
-          binaryVersion: CODEX_ACP_PINNED_VERSION,
+          binaryVersion: CODEX_PINNED_VERSION,
           binarySource: "custom",
         });
       });
@@ -253,7 +304,7 @@ describe("CodexBinaryManager", () => {
             ...current.agentMode,
             backends: {
               ...current.agentMode.backends,
-              codex: { binaryPath: entry, binaryVersion: CODEX_ACP_PINNED_VERSION },
+              codex: { binaryPath: entry, binaryVersion: CODEX_PINNED_VERSION },
             },
           },
         }));
@@ -272,12 +323,12 @@ describe("CodexBinaryManager", () => {
         mockedExecFile.mockImplementation((command, args, _options, callback) => {
           const cb = callback as (error: Error | null, stdout: string, stderr: string) => void;
           manager.cancelCurrentOperation();
-          cb(null, `${CODEX_ACP_PINNED_VERSION} Codex CLI`, "");
+          cb(null, `${CODEX_PINNED_VERSION} Codex CLI`, "");
           return {} as childProcess.ChildProcess;
         });
         await expect(manager.install()).rejects.toThrow("Aborted");
         expect(getSettings().agentMode.backends?.codex).toEqual(before);
-        expect(fs.existsSync(path.join(manager.getDataDir(), CODEX_BUNDLE_VERSION))).toBe(false);
+        expect(fs.existsSync(path.join(manager.getDataDir(), CODEX_PINNED_VERSION))).toBe(false);
         expect(manager.getRuntimeState()).toEqual({ kind: "idle" });
       });
     });

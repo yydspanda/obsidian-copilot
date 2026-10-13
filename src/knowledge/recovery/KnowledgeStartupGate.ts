@@ -24,25 +24,18 @@ import type {
 
 const DEFAULT_MAX_STARTUP_PASSES = 3;
 
-/** Queue operation allowed before any new ingest claim can start. */
 export interface KnowledgeStartupQueuePort {
-  /** Recovers interrupted Queue execution and leaves durable backlog paused. */
   recoverOnStartup(bundleId: string): Promise<IngestQueueSnapshot>;
 }
 
-/** Existing committed or unfinished transaction reconciliation boundary. */
 export interface KnowledgeStartupApplyCommitPort {
-  /** Rolls forward exact journal evidence and completes downstream bookkeeping. */
   reconcile(bundle: KnowledgeBundleConfig): Promise<ApplyCommitReconciliationResult>;
 }
 
-/** Review-to-Queue hand-off reconciliation boundary. */
 export interface KnowledgeStartupReviewPort {
-  /** Converges pending and rejected records without starting accepted applies. */
   reconcile(bundleId: string): Promise<ReviewQueueStartupReconciliationResult>;
 }
 
-/** Constructor dependencies for the adapter-driven startup recovery gate. */
 export interface KnowledgeStartupGateDependencies {
   queue: KnowledgeStartupQueuePort;
   applyCommit: KnowledgeStartupApplyCommitPort;
@@ -51,16 +44,13 @@ export interface KnowledgeStartupGateDependencies {
   maxStartupPasses?: number;
 }
 
-/** Non-authoritative outcome of one stable startup recovery observation. */
 export type KnowledgeStartupGateDisposition = "observed_clear" | "attention_required" | "blocked";
 
-/** Review hand-offs that startup durably converged without exposing accepted authority. */
 export type KnowledgeStartupReviewReconciliation = Extract<
   ReviewQueueStartupAction,
   { kind: "pending_reconciled" | "rejection_reconciled" }
 >;
 
-/** Sanitized condition preventing the startup observation from being clear. */
 export type KnowledgeStartupAttention =
   | {
       kind: "transaction_recovery_required";
@@ -105,7 +95,6 @@ export type KnowledgeStartupAttention =
   | { kind: "queue_recovery_required" }
   | { kind: "queue_commit_pending_ack" };
 
-/** Stable result rendered by a future Studio adapter while actions still re-prove authority. */
 export interface KnowledgeStartupGateResult {
   bundleId: string;
   disposition: KnowledgeStartupGateDisposition;
@@ -119,18 +108,14 @@ export interface KnowledgeStartupGateResult {
   attention: readonly KnowledgeStartupAttention[];
 }
 
-/** Reports an invalid current Bundle boundary before any recovery port is called. */
 export class KnowledgeStartupBundleValidationError extends TypeError {
-  /** Creates a sanitized Bundle validation failure. */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("The current knowledge Bundle does not satisfy the startup contract");
     this.name = "KnowledgeStartupBundleValidationError";
   }
 }
 
-/** Reports a Queue adapter result that cannot be trusted by the startup gate. */
 export class KnowledgeStartupQueueValidationError extends Error {
-  /** Creates a sanitized Queue result validation failure. */
   constructor(
     public readonly bundleId: string,
     public readonly diagnostics: readonly KnowledgeDiagnostic[]
@@ -140,15 +125,12 @@ export class KnowledgeStartupQueueValidationError extends Error {
   }
 }
 
-/** Stable reason an injected startup boundary contradicted an earlier durable observation. */
 export type KnowledgeStartupSnapshotConsistencyErrorReason =
   | "runtime_revision_regressed"
   | "queue_revision_regressed"
   | "queue_same_revision_mismatch";
 
-/** Reports a non-monotonic or internally contradictory startup snapshot. */
 export class KnowledgeStartupSnapshotConsistencyError extends Error {
-  /** Creates a sanitized durable-snapshot consistency failure. */
   constructor(
     public readonly bundleId: string,
     public readonly reason: KnowledgeStartupSnapshotConsistencyErrorReason,
@@ -160,9 +142,7 @@ export class KnowledgeStartupSnapshotConsistencyError extends Error {
   }
 }
 
-/** Reports failure to normalize one newly persisted sticky transaction conflict. */
 export class KnowledgeStartupRecoveryNormalizationError extends Error {
-  /** Creates a sanitized transaction-normalization failure. */
   constructor(
     public readonly expectedTransactionId: string,
     public readonly observedKind: ApplyCommitReconciliationResult["kind"],
@@ -173,9 +153,7 @@ export class KnowledgeStartupRecoveryNormalizationError extends Error {
   }
 }
 
-/** Reports a missing, duplicated, or unrelated accepted Review classification. */
 export class KnowledgeStartupAcceptedClassificationError extends Error {
-  /** Creates a sanitized accepted-classification set mismatch. */
   constructor(
     public readonly bundleId: string,
     public readonly expectedCount: number,
@@ -186,9 +164,7 @@ export class KnowledgeStartupAcceptedClassificationError extends Error {
   }
 }
 
-/** Reports persistent Review churn across the outer startup reconciliation loop. */
 export class KnowledgeStartupGateUnstableError extends Error {
-  /** Creates a bounded-retry exhaustion error. */
   constructor(
     public readonly bundleId: string,
     public readonly attempts: number
@@ -198,7 +174,6 @@ export class KnowledgeStartupGateUnstableError extends Error {
   }
 }
 
-/** Strictly validates one current Bundle configuration. */
 function parseStartupBundle(value: unknown): KnowledgeBundleConfig {
   const parsed = parseKnowledgeBundleConfig(value);
   if (!parsed.ok) {
@@ -211,7 +186,6 @@ function parseStartupBundle(value: unknown): KnowledgeBundleConfig {
   return parsed.value;
 }
 
-/** Strictly validates a Queue result returned by an injected startup port. */
 function parseStartupQueue(bundleId: string, value: unknown): IngestQueueSnapshot {
   const parsed = parseIngestQueueSnapshot(value);
   if (!parsed.ok) {
@@ -233,7 +207,6 @@ function parseStartupQueue(bundleId: string, value: unknown): IngestQueueSnapsho
   return parsed.value;
 }
 
-/** Compares normalized Queue snapshots whose shared revision claims one exact state. */
 function startupQueueSnapshotsMatch(
   left: IngestQueueSnapshot,
   right: IngestQueueSnapshot
@@ -241,7 +214,6 @@ function startupQueueSnapshotsMatch(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** Rejects a final atomic Queue snapshot that predates or contradicts startup recovery. */
 function assertQueueSnapshotProgression(
   bundleId: string,
   recovered: IngestQueueSnapshot,
@@ -265,7 +237,6 @@ function assertQueueSnapshotProgression(
   }
 }
 
-/** Advances the known Queue observation after proving monotonic exact state. */
 function observeQueueSnapshot(
   bundleId: string,
   previous: IngestQueueSnapshot,
@@ -276,7 +247,6 @@ function observeQueueSnapshot(
   return actual.revision > previous.revision ? actual : previous;
 }
 
-/** Advances the known Runtime revision floor or rejects an impossible rollback. */
 function observeRuntimeRevision(
   bundleId: string,
   previousRevision: number | undefined,
@@ -293,7 +263,6 @@ function observeRuntimeRevision(
   return actualRevision;
 }
 
-/** Reads the Bundle id retained by one accepted classification variant. */
 function classificationBundleId(classification: NoJournalApplyRecoveryClassification): string {
   if (classification.kind === "accepted_not_started") {
     return classification.bundleId;
@@ -304,7 +273,6 @@ function classificationBundleId(classification: NoJournalApplyRecoveryClassifica
   return classification.reference.bundleId;
 }
 
-/** Reads the opaque accepted Review reference retained by every classification variant. */
 function classificationReference(
   classification: NoJournalApplyRecoveryClassification
 ): NoJournalApplyRecoveryReference {
@@ -314,12 +282,10 @@ function classificationReference(
   return classification.reference;
 }
 
-/** Serializes an opaque Bundle-scoped recovery reference for exact set comparison. */
 function recoveryReferenceKey(reference: NoJournalApplyRecoveryReference): string {
   return `${reference.bundleId}\u0000${reference.recoveryId}`;
 }
 
-/** Validates one sanitized Vault-global transaction observation. */
 function globalTransactionObservationIsValid(value: unknown): boolean {
   if (value === null) return true;
   if (typeof value !== "object" || value === undefined) return false;
@@ -338,7 +304,6 @@ function globalTransactionObservationIsValid(value: unknown): boolean {
   );
 }
 
-/** Proves stable Review actions and atomic Runtime classifications correspond one-to-one. */
 function assertAcceptedClassificationSet(
   bundleId: string,
   actions: readonly ReviewQueueStartupAction[],
@@ -370,7 +335,6 @@ function assertAcceptedClassificationSet(
   }
 }
 
-/** Validates the minimum identity of an atomic recovery snapshot result. */
 function assertRecoverySnapshotResult(
   bundleId: string,
   expectedReviewRevision: number,
@@ -404,7 +368,6 @@ function assertRecoverySnapshotResult(
   }
 }
 
-/** Selects only queue mutations already completed by Review startup reconciliation. */
 function selectReviewReconciliations(
   actions: readonly ReviewQueueStartupAction[]
 ): KnowledgeStartupReviewReconciliation[] {
@@ -414,7 +377,6 @@ function selectReviewReconciliations(
   );
 }
 
-/** Adds one attention record only once by its stable serialized identity. */
 function addUniqueAttention(
   attention: KnowledgeStartupAttention[],
   seen: Set<string>,
@@ -426,7 +388,6 @@ function addUniqueAttention(
   attention.push(value);
 }
 
-/** Detects whether one exact accepted no-journal candidate owns the Queue recovery pause. */
 function noJournalDecisionExplainsQueueRecovery(snapshot: NoJournalApplyRecoverySnapshot): boolean {
   const claim = snapshot.queueSnapshot.applyClaim;
   if (!claim?.reviewedChangeSet || !claim.acceptedReview) return false;
@@ -447,7 +408,6 @@ function noJournalDecisionExplainsQueueRecovery(snapshot: NoJournalApplyRecovery
   });
 }
 
-/** Derives deterministic sanitized attention rows from one atomic observation. */
 function deriveStartupAttention(
   applyCommit: ApplyCommitReconciliationResult,
   snapshot: NoJournalApplyRecoverySnapshot
@@ -569,7 +529,6 @@ function deriveStartupAttention(
   return attention;
 }
 
-/** Maps sanitized attention rows to the conservative startup disposition. */
 function deriveStartupDisposition(
   attention: readonly KnowledgeStartupAttention[]
 ): KnowledgeStartupGateDisposition {
@@ -580,18 +539,9 @@ function deriveStartupDisposition(
   return attention.length > 0 ? "attention_required" : "observed_clear";
 }
 
-/**
- * Orchestrates startup recovery without starting new jobs or automatic decisions.
- *
- * A valid current Bundle is required because prepared/applying transaction
- * recovery may observe and atomically update Wiki files. No-journal continue,
- * abandon, accepted-not-started apply, model execution, and Queue resume are
- * deliberately outside this gate.
- */
 export class KnowledgeStartupGate {
   private readonly maxStartupPasses: number;
 
-  /** Creates the gate over narrow durable recovery ports. */
   constructor(private readonly dependencies: KnowledgeStartupGateDependencies) {
     this.maxStartupPasses = dependencies.maxStartupPasses ?? DEFAULT_MAX_STARTUP_PASSES;
     if (!Number.isSafeInteger(this.maxStartupPasses) || this.maxStartupPasses < 1) {
@@ -599,13 +549,6 @@ export class KnowledgeStartupGate {
     }
   }
 
-  /**
-   * Produces one stable, non-authoritative recovery observation for a Bundle.
-   *
-   * @param bundleValue - Current strictly configured Bundle boundary
-   * @param assertCurrent - Optional per-run lifecycle proof checked between durable phases
-   * @returns Stable recovery observation; no Queue resume occurs
-   */
   async run(
     bundleValue: unknown,
     assertCurrent: () => void = () => undefined
@@ -673,7 +616,6 @@ export class KnowledgeStartupGate {
     throw new KnowledgeStartupGateUnstableError(bundle.id, this.maxStartupPasses);
   }
 
-  /** Normalizes the first sticky file conflict into the next read-only blocked result. */
   private async reconcileApplyCommit(
     bundle: KnowledgeBundleConfig
   ): Promise<ApplyCommitReconciliationResult> {
@@ -699,7 +641,6 @@ export class KnowledgeStartupGate {
     }
   }
 
-  /** Validates the identity token returned by Review reconciliation. */
   private assertReviewResult(
     bundleId: string,
     result: ReviewQueueStartupReconciliationResult

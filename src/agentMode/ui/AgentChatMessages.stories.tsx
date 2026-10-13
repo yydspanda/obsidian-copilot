@@ -123,12 +123,32 @@ const meta = {
 } satisfies Meta<AgentChatMessagesProps>;
 export default meta;
 
-/** Resolve questions first, then each full-width permission in queue order. */
 export const QueuedActions: StoryObj<AgentChatMessagesProps> = {
   render: () => <QueuedActionsDemo {...actionRailArgs} />,
 };
 
-/** A verbose blocking question remains resolvable when the chat pane is shorter than the card. */
+export const LongResponse: StoryObj<AgentChatMessagesProps> = {
+  args: {
+    ...actionRailArgs,
+    currentPlan: null,
+    pendingToolPermissions: [],
+    pendingAskUserQuestions: [],
+    messages: [
+      { ...message, id: "long-request", sender: "user", message: "Review the project notes." },
+      {
+        ...message,
+        id: "long-response",
+        message: Array.from(
+          { length: 12 },
+          (_, index) => `Finding ${index + 1}: The notes clarify the next step for the project.`
+        ).join("\n\n"),
+      },
+    ],
+    isLoading: true,
+  },
+  render: (props) => <QueuedActionsDemo {...actionRailArgs} {...props} />,
+};
+
 export const TallQuestion: StoryObj<AgentChatMessagesProps> = {
   render: () => (
     <QueuedActionsDemo
@@ -139,7 +159,6 @@ export const TallQuestion: StoryObj<AgentChatMessagesProps> = {
   ),
 };
 
-/** A new turn keeps its running indicator after the preceding turn was stopped. */
 export const RunningAfterStop: StoryObj<AgentChatMessagesProps> = {
   args: {
     ...actionRailArgs,
@@ -158,6 +177,62 @@ export const RunningAfterStop: StoryObj<AgentChatMessagesProps> = {
       { ...message, id: "running-response", message: "" },
     ],
     isLoading: true,
+  },
+  render: (props) => <QueuedActionsDemo {...actionRailArgs} {...props} />,
+};
+
+export const ApprovedPlanRunning: StoryObj<AgentChatMessagesProps> = {
+  args: {
+    ...actionRailArgs,
+    currentPlan: null,
+    pendingToolPermissions: [],
+    pendingAskUserQuestions: [],
+    messages: [
+      { ...message, id: "plan-request", sender: "user", message: "Plan a note for my trip." },
+      {
+        ...message,
+        id: "plan-implementation",
+        message: "The plan is approved. I'm creating the note now.",
+      },
+    ],
+    isLoading: true,
+  },
+  render: (props) => <QueuedActionsDemo {...actionRailArgs} {...props} />,
+};
+
+export const PlanResponses: StoryObj<AgentChatMessagesProps> = {
+  args: {
+    ...actionRailArgs,
+    currentPlan: null,
+    pendingToolPermissions: [],
+    pendingAskUserQuestions: [],
+    messages: [
+      { ...message, id: "request", sender: "user", message: "Plan my trip." },
+      {
+        ...message,
+        id: "responses",
+        message: "",
+        parts: [
+          {
+            kind: "tool_call",
+            id: "answer",
+            title: "Answered: Checklist",
+            status: "completed",
+            userResponse: "Answered: Checklist",
+            output: [{ type: "text", text: "Choose a format: Checklist" }],
+          },
+          {
+            kind: "tool_call",
+            id: "plan-approval",
+            title: "Approved plan",
+            status: "completed",
+            toolKind: "switch_mode",
+            userResponse: "Approved plan",
+          },
+        ],
+      },
+    ],
+    isLoading: false,
   },
   render: (props) => <QueuedActionsDemo {...actionRailArgs} {...props} />,
 };

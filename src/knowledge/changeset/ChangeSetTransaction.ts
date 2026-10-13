@@ -39,7 +39,6 @@ import {
   type TransactionTarget,
 } from "@/knowledge/changeset/TransactionStorage";
 
-/** Claim and knowledge payload required to begin a recoverable apply. */
 export interface ChangeSetTransactionApplyInput {
   changeSet: unknown;
   bundle: unknown;
@@ -48,7 +47,6 @@ export interface ChangeSetTransactionApplyInput {
   manifestCommitIntentDigest: string;
 }
 
-/** Exact detached identity proved before any apply-time Vault file access. */
 export interface ChangeSetTransactionAuthorityRequest {
   transactionId: string;
   bundle: KnowledgeBundleConfig;
@@ -59,33 +57,20 @@ export interface ChangeSetTransactionAuthorityRequest {
   manifestCommitIntentDigest: string;
 }
 
-/** Detached logical-time floor proved before one source transaction starts. */
 export interface ChangeSetTransactionAuthorityProof {
   readonly minimumTimestamp: number;
 }
 
-/** Durable authority boundary required by every transaction runtime. */
 export interface ChangeSetTransactionAuthorityPort {
-  /**
-   * Proves that one exact accepted apply still owns its Queue and Review state.
-   *
-   * This check must not observe or modify Wiki files. The prepared-journal
-   * storage CAS repeats the same proof atomically to close the preflight race.
-   *
-   * @param request - Strict detached apply identity
-   * @returns Frozen logical-time floor owned by the proved durable predecessors
-   */
   verify(
     request: ChangeSetTransactionAuthorityRequest
   ): Promise<Readonly<ChangeSetTransactionAuthorityProof>>;
 }
 
-/** Content-addressed final state safe to copy into manifest bookkeeping. */
 export type TransactionCommittedTarget =
   | { path: string; kind: "missing" }
   | { path: string; kind: "file"; contentHash: string };
 
-/** Durable proof that all file after-states preceded the commit marker. */
 export interface TransactionCommitReceipt {
   transactionId: string;
   commitRevision: number;
@@ -97,20 +82,13 @@ export interface TransactionCommitReceipt {
   targets: TransactionCommittedTarget[];
 }
 
-/** Reports a malformed or mismatched final Manifest projection before file mutation. */
 export class ChangeSetTransactionManifestIntentValidationError extends Error {
-  /**
-   * Creates a fail-closed Manifest intent validation error.
-   *
-   * @param diagnostics - Safe deterministic intent diagnostics
-   */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("The accepted Manifest commit intent is invalid");
     this.name = "ChangeSetTransactionManifestIntentValidationError";
   }
 }
 
-/** Startup result for the Vault-global transaction slot. */
 export type TransactionRecoveryResult =
   | { kind: "none" }
   | {
@@ -126,7 +104,6 @@ export type TransactionRecoveryResult =
       conflicts: readonly TransactionConflict[];
     };
 
-/** Constructor dependencies for a pure, adapter-driven transaction runtime. */
 export interface ChangeSetTransactionDependencies {
   storage: TransactionStorage;
   fileStore: KnowledgeFileStore;
@@ -136,7 +113,6 @@ export interface ChangeSetTransactionDependencies {
   createTransactionId?: () => string;
 }
 
-/** Internal result of one target-level atomic compare-and-swap attempt. */
 type TargetMutationResult =
   | { kind: "after" }
   | {
@@ -147,40 +123,21 @@ type TargetMutationResult =
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-/** Reports persisted journal JSON that cannot satisfy the current contract. */
 export class ChangeSetTransactionJournalValidationError extends Error {
-  /**
-   * Creates a fail-closed journal validation error.
-   *
-   * @param diagnostics - Safe structural or semantic diagnostics
-   */
   constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
     super("Active ChangeSet transaction journal is invalid");
     this.name = "ChangeSetTransactionJournalValidationError";
   }
 }
 
-/** Reports a persisted journal version that this runtime cannot migrate safely. */
 export class ChangeSetTransactionIncompatibleVersionError extends Error {
-  /**
-   * Creates an incompatible journal version failure.
-   *
-   * @param version - Unknown persisted version value
-   */
   constructor(public readonly version: unknown) {
     super("Active ChangeSet transaction uses an unsupported version");
     this.name = "ChangeSetTransactionIncompatibleVersionError";
   }
 }
 
-/** Reports a different transaction occupying the Vault-global active slot. */
 export class ChangeSetTransactionBusyError extends Error {
-  /**
-   * Creates a global active-slot conflict.
-   *
-   * @param activeTransactionId - Transaction currently occupying the slot
-   * @param activeChangeSetId - ChangeSet owned by the active transaction
-   */
   constructor(
     public readonly activeTransactionId: string,
     public readonly activeChangeSetId: string
@@ -190,53 +147,28 @@ export class ChangeSetTransactionBusyError extends Error {
   }
 }
 
-/** Reports reuse of one ChangeSet id with a different exact payload. */
 export class ChangeSetTransactionIdentityConflictError extends Error {
-  /**
-   * Creates a ChangeSet digest conflict.
-   *
-   * @param changeSetId - Reused ChangeSet identifier
-   */
   constructor(public readonly changeSetId: string) {
     super(`ChangeSet '${changeSetId}' no longer matches its active transaction payload`);
     this.name = "ChangeSetTransactionIdentityConflictError";
   }
 }
 
-/** Reports an active transaction owned by another durable job attempt. */
 export class ChangeSetTransactionClaimConflictError extends Error {
-  /**
-   * Creates an owning job-claim conflict.
-   *
-   * @param transactionId - Active transaction identifier
-   */
   constructor(public readonly transactionId: string) {
     super(`Transaction '${transactionId}' belongs to a different ingest-job attempt`);
     this.name = "ChangeSetTransactionClaimConflictError";
   }
 }
 
-/** Reports a changed Bundle boundary beside an unfinished transaction. */
 export class ChangeSetTransactionBundleConflictError extends Error {
-  /**
-   * Creates a Bundle configuration drift failure.
-   *
-   * @param bundleId - Bundle whose durable write boundary changed
-   */
   constructor(public readonly bundleId: string) {
     super(`Bundle '${bundleId}' changed while its ChangeSet transaction was active`);
     this.name = "ChangeSetTransactionBundleConflictError";
   }
 }
 
-/** Reports file state that automatic roll-forward must never overwrite. */
 export class ChangeSetTransactionRecoveryRequiredError extends Error {
-  /**
-   * Creates a sticky recovery-required failure.
-   *
-   * @param transactionId - Blocked transaction identifier
-   * @param conflicts - Safe content-addressed conflict details
-   */
   constructor(
     public readonly transactionId: string,
     public readonly conflicts: readonly TransactionConflict[]
@@ -246,14 +178,7 @@ export class ChangeSetTransactionRecoveryRequiredError extends Error {
   }
 }
 
-/** Reports revision exhaustion before JavaScript integer precision can be lost. */
 export class ChangeSetTransactionRevisionOverflowError extends Error {
-  /**
-   * Creates a safe-integer revision overflow failure.
-   *
-   * @param transactionId - Transaction whose revision cannot advance
-   * @param revision - Last safely represented revision
-   */
   constructor(
     public readonly transactionId: string,
     public readonly revision: number
@@ -263,13 +188,7 @@ export class ChangeSetTransactionRevisionOverflowError extends Error {
   }
 }
 
-/** Reports unavailable storage or file I/O without persisting raw error text. */
 export class ChangeSetTransactionInfrastructureError extends Error {
-  /**
-   * Creates a sanitized transaction infrastructure failure.
-   *
-   * @param stage - Durable or file I/O stage that did not complete reliably
-   */
   constructor(
     public readonly stage:
       | "storage_read"
@@ -283,55 +202,26 @@ export class ChangeSetTransactionInfrastructureError extends Error {
   }
 }
 
-/**
- * Checks whether an unknown value is a non-array record.
- *
- * @param value - Runtime value to inspect
- * @returns Whether named fields can be read safely
- */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Creates a globally unique default transaction identifier.
- *
- * @returns UUID-backed transaction identifier
- */
 function createDefaultTransactionId(): string {
   return `knowledge-transaction-${crypto.randomUUID()}`;
 }
 
-/**
- * Requires a non-whitespace identifier at an orchestration boundary.
- *
- * @param value - Identifier supplied by a caller or injected factory
- * @param field - Field name used by the error message
- */
 function assertIdentifier(value: unknown, field: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must be a non-empty string`);
   }
 }
 
-/**
- * Requires one non-negative safe integer.
- *
- * @param value - Runtime numeric input
- * @param field - Field name used by the error message
- */
 function assertNonNegativeSafeInteger(value: unknown, field: string): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${field} must be a non-negative safe integer`);
   }
 }
 
-/**
- * Snapshots the exact logical-time floor returned by durable apply authority.
- *
- * @param value - Untrusted authority result
- * @returns Frozen timestamp proof safe to use before journal publication
- */
 function snapshotAuthorityProof(value: unknown): Readonly<ChangeSetTransactionAuthorityProof> {
   const descriptor = isRecord(value)
     ? Object.getOwnPropertyDescriptor(value, "minimumTimestamp")
@@ -348,23 +238,12 @@ function snapshotAuthorityProof(value: unknown): Readonly<ChangeSetTransactionAu
   return Object.freeze({ minimumTimestamp: descriptor.value as number });
 }
 
-/**
- * Requires one canonical lowercase SHA-256 digest.
- *
- * @param value - Runtime hash supplied by the queue claim
- * @param field - Field name used by the error message
- */
 function assertSha256(value: unknown, field: string): void {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
     throw new TypeError(`${field} must be a lowercase SHA-256 digest`);
   }
 }
 
-/**
- * Validates the durable job attempt that owns a new transaction.
- *
- * @param claim - Caller-supplied queue claim
- */
 function assertJobClaim(claim: unknown): asserts claim is TransactionJobClaim {
   if (!isRecord(claim)) {
     throw new TypeError("jobClaim must be an object");
@@ -384,13 +263,6 @@ function assertJobClaim(claim: unknown): asserts claim is TransactionJobClaim {
   assertNonNegativeSafeInteger(claim.inputRevision, "jobClaim.inputRevision");
 }
 
-/**
- * Compares exact durable job-attempt ownership.
- *
- * @param left - First job claim
- * @param right - Second job claim
- * @returns Whether both claims identify the same attempt
- */
 function sameJobClaim(left: TransactionJobClaim, right: TransactionJobClaim): boolean {
   return (
     left.jobId === right.jobId &&
@@ -403,23 +275,10 @@ function sameJobClaim(left: TransactionJobClaim, right: TransactionJobClaim): bo
   );
 }
 
-/**
- * Creates the ABA-safe token for one parsed active journal.
- *
- * @param journal - Current active journal
- * @returns Exact transaction id and revision token
- */
 function toStorageToken(journal: ChangeSetTransactionJournal): TransactionStorageToken {
   return { transactionId: journal.transactionId, revision: journal.revision };
 }
 
-/**
- * Compares an exact file observation with a journaled file state.
- *
- * @param observation - Current Vault path observation
- * @param expected - Journaled missing or exact file state
- * @returns Whether the states match byte-for-byte text semantics
- */
 function observationMatchesState(
   observation: KnowledgeFileObservation,
   expected: TransactionFileState
@@ -434,22 +293,10 @@ function observationMatchesState(
   );
 }
 
-/**
- * Computes a safe actual hash for conflict diagnostics.
- *
- * @param observation - Current Vault path observation
- * @returns Exact content hash for files, otherwise undefined
- */
 function getActualHash(observation: KnowledgeFileObservation): string | undefined {
   return observation.kind === "file" ? createFileContentHash(observation.content) : undefined;
 }
 
-/**
- * Creates the public receipt for one committed journal.
- *
- * @param journal - Valid committed journal
- * @returns Detached content-addressed commit proof
- */
 export function createTransactionCommitReceipt(
   journal: ChangeSetTransactionJournal & { phase: "committed" }
 ): TransactionCommitReceipt {
@@ -473,13 +320,6 @@ export function createTransactionCommitReceipt(
   };
 }
 
-/**
- * Canonically compares a supplied receipt with its active committed journal.
- *
- * @param receipt - Caller-supplied durable commit proof
- * @param journal - Current committed journal
- * @returns Whether every receipt field matches the journal-derived proof
- */
 export function transactionCommitReceiptMatchesJournal(
   receipt: TransactionCommitReceipt,
   journal: ChangeSetTransactionJournal & { phase: "committed" }
@@ -490,25 +330,12 @@ export function transactionCommitReceiptMatchesJournal(
   );
 }
 
-/**
- * Computes the canonical identity of one public transaction commit receipt.
- *
- * @param receipt - Content-addressed proof derived from a committed journal
- * @returns Namespaced lowercase SHA-256 digest
- */
 export function createTransactionCommitReceiptDigest(receipt: TransactionCommitReceipt): string {
   return sha256(
     `knowledge-transaction-receipt-v1\n${canonicalizeJson(receipt as unknown as JsonValue)}`
   );
 }
 
-/**
- * Compares exact versioned Bundle configurations deterministically.
- *
- * @param left - First validated Bundle configuration
- * @param right - Second validated Bundle configuration
- * @returns Whether every write-boundary field is identical
- */
 function sameBundleConfig(left: KnowledgeBundleConfig, right: KnowledgeBundleConfig): boolean {
   return (
     canonicalizeJson(left as unknown as JsonValue) ===
@@ -516,12 +343,6 @@ function sameBundleConfig(left: KnowledgeBundleConfig, right: KnowledgeBundleCon
   );
 }
 
-/**
- * Parses and semantically validates a Bundle supplied for transaction recovery.
- *
- * @param value - Current configured Bundle value
- * @returns Strictly parsed valid Bundle
- */
 function parseRecoveryBundle(value: unknown): KnowledgeBundleConfig {
   const parsed = parseKnowledgeBundleConfig(value);
   if (!parsed.ok) {
@@ -534,16 +355,6 @@ function parseRecoveryBundle(value: unknown): KnowledgeBundleConfig {
   return parsed.value;
 }
 
-/**
- * Strictly parses and binds a final Manifest intent to one accepted apply request.
- *
- * @param value - Unknown intent supplied by the accepted review record
- * @param digest - Caller-supplied exact intent digest
- * @param changeSet - Validated accepted ChangeSet
- * @param bundle - Validated Bundle write boundary
- * @param jobClaim - Exact queue attempt that owns the apply
- * @returns Detached final Manifest intent
- */
 function parseApplyManifestCommitIntent(
   value: unknown,
   digest: string,
@@ -595,13 +406,6 @@ function parseApplyManifestCommitIntent(
   return parsed.value;
 }
 
-/**
- * Compares two final Manifest intents independently of object insertion order.
- *
- * @param left - First final intent
- * @param right - Second final intent
- * @returns Whether both carry identical canonical JSON
- */
 function sameManifestCommitIntent(
   left: ManifestCommitIntent,
   right: ManifestCommitIntent
@@ -612,7 +416,6 @@ function sameManifestCommitIntent(
   );
 }
 
-/** Vault-global durable ChangeSet transaction runtime. */
 export class ChangeSetTransaction {
   private readonly storage: TransactionStorage;
   private readonly fileStore: KnowledgeFileStore;
@@ -622,11 +425,6 @@ export class ChangeSetTransaction {
   private readonly createTransactionId: () => string;
   private operationTail: Promise<void> = Promise.resolve();
 
-  /**
-   * Creates a transaction runtime with injected durable and Vault adapters.
-   *
-   * @param dependencies - Storage, file, validation, clock, and id dependencies
-   */
   constructor(dependencies: ChangeSetTransactionDependencies) {
     this.storage = dependencies.storage;
     this.fileStore = dependencies.fileStore;
@@ -636,16 +434,6 @@ export class ChangeSetTransaction {
     this.createTransactionId = dependencies.createTransactionId ?? createDefaultTransactionId;
   }
 
-  /**
-   * Validates, journals, and idempotently applies one accepted ChangeSet.
-   *
-   * The returned receipt exists only after every after-state was re-observed and
-   * the committed marker became durable. Callers must then durably update the
-   * manifest and queue before acknowledging the receipt.
-   *
-   * @param input - ChangeSet, Bundle boundary, and owning queue attempt
-   * @returns Durable commit receipt
-   */
   async apply(input: ChangeSetTransactionApplyInput): Promise<TransactionCommitReceipt> {
     assertJobClaim(input.jobClaim);
     return this.runExclusive(async () => {
@@ -716,16 +504,6 @@ export class ChangeSetTransaction {
     });
   }
 
-  /**
-   * Recovers the one active journal without requiring the original ChangeSet input.
-   *
-   * Prepared and applying journals roll forward only when every target is still
-   * exactly before or after. A committed marker is authoritative and is never
-   * replayed merely because a user later edits its output.
-   *
-   * @param bundleValue - Current configured Bundle used to re-prove write boundaries
-   * @returns No work, durable committed proof, or sticky conflict details
-   */
   async recoverOnStartup(bundleValue: unknown): Promise<TransactionRecoveryResult> {
     return this.runExclusive(async () => {
       const journal = await this.readActiveJournal();
@@ -764,24 +542,10 @@ export class ChangeSetTransaction {
     });
   }
 
-  /**
-   * Reads and validates the current active journal without mutating files.
-   *
-   * @returns Detached active journal, or null for an empty slot
-   */
   async loadActive(): Promise<ChangeSetTransactionJournal | null> {
     return this.runExclusive(() => this.readActiveJournal());
   }
 
-  /**
-   * Clears a committed journal after manifest and queue success are durable.
-   *
-   * Calling this method before downstream bookkeeping completes violates the
-   * recovery protocol. An empty slot is treated as an idempotent prior success.
-   *
-   * @param receipt - Exact receipt returned by apply or startup recovery
-   * @returns Whether this call cleared the active slot
-   */
   async acknowledgeCommitted(receipt: TransactionCommitReceipt): Promise<boolean> {
     return this.runExclusive(async () => {
       const journal = await this.readActiveJournal();
@@ -806,15 +570,6 @@ export class ChangeSetTransaction {
     });
   }
 
-  /**
-   * Serializes operations within one runtime instance.
-   *
-   * Cross-instance safety remains the responsibility of the storage adapter's
-   * atomic transaction-id plus revision compare-and-swap.
-   *
-   * @param work - Exclusive async operation
-   * @returns Work result after preceding local operations finish
-   */
   private async runExclusive<T>(work: () => Promise<T>): Promise<T> {
     const previous = this.operationTail;
     let release: () => void = () => undefined;
@@ -829,13 +584,6 @@ export class ChangeSetTransaction {
     }
   }
 
-  /**
-   * Resumes only an exact active ChangeSet and job claim.
-   *
-   * @param active - Parsed active journal
-   * @param input - Caller apply request
-   * @returns Existing or newly committed receipt
-   */
   private async resumeMatchingApply(
     active: ChangeSetTransactionJournal,
     input: ChangeSetTransactionApplyInput
@@ -892,11 +640,6 @@ export class ChangeSetTransaction {
     return createTransactionCommitReceipt(await this.rollForward(active));
   }
 
-  /**
-   * Re-proves one strict unfinished journal through the injected authority port.
-   *
-   * @param journal - Prepared or applying journal about to access Wiki files
-   */
   private async verifyJournalAuthority(
     journal: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
   ): Promise<void> {
@@ -911,11 +654,6 @@ export class ChangeSetTransaction {
     });
   }
 
-  /**
-   * Loads strict persisted JSON and rejects malformed or incompatible journals.
-   *
-   * @returns Parsed active journal, or null when the slot is empty
-   */
   private async readActiveJournal(): Promise<ChangeSetTransactionJournal | null> {
     let raw: unknown;
     try {
@@ -943,12 +681,6 @@ export class ChangeSetTransaction {
     return parsed.value;
   }
 
-  /**
-   * Persists one complete journal revision after validating runtime invariants.
-   *
-   * @param journal - Complete next journal state
-   * @param expected - Previous journal, or null for global slot creation
-   */
   private async writeJournal(
     journal: ChangeSetTransactionJournal,
     expected: ChangeSetTransactionJournal | null
@@ -970,12 +702,6 @@ export class ChangeSetTransaction {
     }
   }
 
-  /**
-   * Applies or verifies every target and then durably commits the journal.
-   *
-   * @param initial - Prepared or applying journal
-   * @returns Durable committed journal
-   */
   private async rollForward(
     initial: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
   ): Promise<ChangeSetTransactionJournal & { phase: "committed" }> {
@@ -1029,12 +755,6 @@ export class ChangeSetTransaction {
     return this.persistCommitted(journal);
   }
 
-  /**
-   * Marks a prepared journal as applying before any file mutation.
-   *
-   * @param journal - Durable prepared journal
-   * @returns Durable applying journal
-   */
   private async persistApplying(
     journal: ChangeSetTransactionJournal & { phase: "prepared" }
   ): Promise<ChangeSetTransactionJournal & { phase: "applying" }> {
@@ -1048,13 +768,6 @@ export class ChangeSetTransaction {
     return next;
   }
 
-  /**
-   * Persists one verified prefix advance.
-   *
-   * @param journal - Current applying journal
-   * @param appliedCount - Newly verified prefix length
-   * @returns Durable applying journal revision
-   */
   private async persistProgress(
     journal: ChangeSetTransactionJournal & { phase: "applying" },
     appliedCount: number
@@ -1072,12 +785,6 @@ export class ChangeSetTransaction {
     return next;
   }
 
-  /**
-   * Persists the commit marker after final after-state verification.
-   *
-   * @param journal - Applying journal with a fully verified prefix
-   * @returns Durable committed journal
-   */
   private async persistCommitted(
     journal: ChangeSetTransactionJournal & { phase: "applying" }
   ): Promise<ChangeSetTransactionJournal & { phase: "committed" }> {
@@ -1094,12 +801,6 @@ export class ChangeSetTransaction {
     return next;
   }
 
-  /**
-   * Persists a sticky recovery gate and always throws its typed failure.
-   *
-   * @param journal - Current applying journal
-   * @param conflicts - One or more exact state conflicts
-   */
   private async blockRecovery(
     journal: ChangeSetTransactionJournal & { phase: "applying" },
     conflicts: TransactionConflict[]
@@ -1124,12 +825,6 @@ export class ChangeSetTransaction {
     throw new ChangeSetTransactionRecoveryRequiredError(journal.transactionId, normalizedConflicts);
   }
 
-  /**
-   * Observes every target concurrently while retaining deterministic order.
-   *
-   * @param targets - Deterministically sorted transaction targets
-   * @returns Current observations in target order
-   */
   private async observeAll(
     targets: readonly TransactionTarget[]
   ): Promise<KnowledgeFileObservation[]> {
@@ -1140,12 +835,6 @@ export class ChangeSetTransaction {
     }
   }
 
-  /**
-   * Observes one target with sanitized infrastructure handling.
-   *
-   * @param path - Validated Vault-relative path
-   * @returns Current exact state
-   */
   private async observeOne(path: string): Promise<KnowledgeFileObservation> {
     try {
       return await this.fileStore.observe(path);
@@ -1154,13 +843,6 @@ export class ChangeSetTransaction {
     }
   }
 
-  /**
-   * Finds conflicts before a recovery attempt performs any new file write.
-   *
-   * @param journal - Current applying journal
-   * @param observations - One current observation per sorted target
-   * @returns All detected conflicts in deterministic target order
-   */
   private findRollForwardConflicts(
     journal: ChangeSetTransactionJournal & { phase: "applying" },
     observations: readonly KnowledgeFileObservation[]
@@ -1178,12 +860,6 @@ export class ChangeSetTransaction {
     return conflicts;
   }
 
-  /**
-   * Atomically applies one target and resolves ambiguous adapter errors by re-observation.
-   *
-   * @param target - Current deterministic transaction target
-   * @returns Verified after-state or a non-mutating conflict observation
-   */
   private async mutateTarget(target: TransactionTarget): Promise<TargetMutationResult> {
     let result: KnowledgeFileCompareAndSwapResult;
     try {
@@ -1216,14 +892,6 @@ export class ChangeSetTransaction {
         };
   }
 
-  /**
-   * Creates one safe content-addressed conflict record.
-   *
-   * @param target - Journaled transaction target
-   * @param observation - Unexpected current Vault state
-   * @param code - Stable conflict classification
-   * @returns Persistable conflict without raw file content
-   */
   private createConflict(
     target: TransactionTarget,
     observation: KnowledgeFileObservation,
@@ -1238,12 +906,6 @@ export class ChangeSetTransaction {
     };
   }
 
-  /**
-   * Advances a journal revision without exceeding safe-integer precision.
-   *
-   * @param journal - Current active journal
-   * @returns Next exact revision
-   */
   private nextRevision(journal: ChangeSetTransactionJournal): number {
     if (journal.revision === Number.MAX_SAFE_INTEGER) {
       throw new ChangeSetTransactionRevisionOverflowError(journal.transactionId, journal.revision);
@@ -1251,16 +913,6 @@ export class ChangeSetTransaction {
     return journal.revision + 1;
   }
 
-  /**
-   * Reserves enough exact revisions to reach a commit marker before file I/O.
-   *
-   * Every uncounted target may require one progress write, the prepared phase
-   * needs one applying marker, and the final state always needs one commit
-   * marker. Rejecting up front prevents a file mutation that the journal can no
-   * longer record safely.
-   *
-   * @param journal - Prepared or applying journal about to roll forward
-   */
   private assertRevisionCapacity(
     journal: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
   ): void {
@@ -1271,12 +923,6 @@ export class ChangeSetTransaction {
     }
   }
 
-  /**
-   * Reads a nondecreasing safe timestamp from the injected clock.
-   *
-   * @param minimum - Earliest allowed timestamp
-   * @returns Safe timestamp not preceding the supplied minimum
-   */
   private readTimestamp(minimum: number): number {
     const timestamp = this.now();
     assertNonNegativeSafeInteger(timestamp, "now");

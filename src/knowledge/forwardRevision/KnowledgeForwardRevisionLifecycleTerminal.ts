@@ -17,10 +17,8 @@ import type {
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict version of forward lifecycle lineage and terminal records. */
 export const KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION = 1 as const;
 
-/** Exact Runtime and Windows-safe page identity shared by one lifecycle. */
 export interface KnowledgeForwardRevisionLifecycleResourceIdentityV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_lifecycle_resource_identity";
@@ -31,13 +29,11 @@ export interface KnowledgeForwardRevisionLifecycleResourceIdentityV1 {
   readonly windowsPathKey: string;
 }
 
-/** Input for one canonical lifecycle resource identity. */
 export type CreateKnowledgeForwardRevisionLifecycleResourceIdentityInput = Omit<
   KnowledgeForwardRevisionLifecycleResourceIdentityV1,
   "version" | "kind" | "windowsPathKey"
 >;
 
-/** Content-free ledger edge used to prove an exact CAS lineage. */
 export interface KnowledgeForwardRevisionLedgerLineageRefV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_ledger_lineage_ref";
@@ -50,13 +46,11 @@ export interface KnowledgeForwardRevisionLedgerLineageRefV1 {
   readonly appliedAt: number;
 }
 
-/** Input for one content-free ledger lineage edge. */
 export type CreateKnowledgeForwardRevisionLedgerLineageRefInput = Omit<
   KnowledgeForwardRevisionLedgerLineageRefV1,
   "version" | "kind"
 >;
 
-/** Durable proof that one active forward overlay was atomically superseded. */
 export interface KnowledgeForwardRevisionSupersessionRecordV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_supersession_record";
@@ -67,14 +61,12 @@ export interface KnowledgeForwardRevisionSupersessionRecordV1 {
   readonly supersessionDigest: string;
 }
 
-/** Input for one atomic forward-overlay supersession proof. */
 export interface CreateKnowledgeForwardRevisionSupersessionRecordInput {
   readonly predecessor: unknown;
   readonly successor: unknown;
   readonly supersededAt: number;
 }
 
-/** Exact accepted decision and non-authoritative Apply-claim identity. */
 export interface KnowledgeForwardRevisionAcceptedClaimIdentityV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_accepted_claim_identity";
@@ -88,13 +80,11 @@ export interface KnowledgeForwardRevisionAcceptedClaimIdentityV1 {
   readonly acceptedAt: number;
 }
 
-/** Input for one exact accepted decision and Apply-claim identity. */
 export type CreateKnowledgeForwardRevisionAcceptedClaimIdentityInput = Omit<
   KnowledgeForwardRevisionAcceptedClaimIdentityV1,
   "version" | "kind"
 >;
 
-/** Durable accepted-not-started terminal record with explicit proof absences. */
 export interface KnowledgeForwardRevisionAbandonmentRecordV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_abandonment_record";
@@ -109,13 +99,11 @@ export interface KnowledgeForwardRevisionAbandonmentRecordV1 {
   readonly abandonmentDigest: string;
 }
 
-/** Input for one accepted-not-started abandonment. */
 export interface CreateKnowledgeForwardRevisionAbandonmentRecordInput {
   readonly acceptedIdentity: unknown;
   readonly abandonedAt: number;
 }
 
-/** Safe external file observation retained without Vault bytes. */
 export type KnowledgeForwardRevisionExternalObservationV1 =
   | {
       readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
@@ -131,7 +119,6 @@ export type KnowledgeForwardRevisionExternalObservationV1 =
       readonly observedAt: number;
     };
 
-/** Input for one bounded external file observation. */
 export type CreateKnowledgeForwardRevisionExternalObservationInput =
   | {
       readonly actualKind: "file";
@@ -143,7 +130,6 @@ export type CreateKnowledgeForwardRevisionExternalObservationInput =
       readonly observedAt: number;
     };
 
-/** Fields common to every exact sticky-recovery journal identity. */
 interface KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_recovery_journal_ref";
@@ -159,35 +145,29 @@ interface KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly updatedAt: number;
 }
 
-/** Recovery revision one proves no write was authorized. */
 export interface KnowledgeForwardRevisionRecoveryJournalRefRevision1V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 1;
 }
 
-/** Recovery revision two has an intentionally uncertain write outcome. */
 export interface KnowledgeForwardRevisionRecoveryJournalRefRevision2V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 2;
 }
 
-/** Recovery revision three proves an exact committed marker preceded external drift. */
 export interface KnowledgeForwardRevisionRecoveryJournalRefRevision3V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 3;
   readonly committedAt: number;
 }
 
-/** Any exact sticky-recovery journal identity accepted by terminalization. */
 export type KnowledgeForwardRevisionRecoveryJournalRefV1 =
   | KnowledgeForwardRevisionRecoveryJournalRefRevision1V1
   | KnowledgeForwardRevisionRecoveryJournalRefRevision2V1
   | KnowledgeForwardRevisionRecoveryJournalRefRevision3V1;
 
-/** Input for one exact sticky-recovery journal identity. */
 export type CreateKnowledgeForwardRevisionRecoveryJournalRefInput =
   | Omit<KnowledgeForwardRevisionRecoveryJournalRefRevision1V1, "version" | "kind" | "phase">
   | Omit<KnowledgeForwardRevisionRecoveryJournalRefRevision2V1, "version" | "kind" | "phase">
   | Omit<KnowledgeForwardRevisionRecoveryJournalRefRevision3V1, "version" | "kind" | "phase">;
 
-/** Fields common to all sticky-recovery terminalization outcomes. */
 interface KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_LIFECYCLE_TERMINAL_VERSION;
   readonly kind: "forward_revision_recovery_terminal_record";
@@ -199,31 +179,26 @@ interface KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly terminalizationDigest: string;
 }
 
-/** Prepared recovery abandoned without starting a Vault write. */
 export interface KnowledgeForwardRevisionAbandonedRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "abandoned_before_write";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision1V1>;
 }
 
-/** Applying recovery closed only after an unrelated external supersession. */
 export interface KnowledgeForwardRevisionUncertainRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "write_outcome_uncertain_external_supersession";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision2V1>;
 }
 
-/** Committed recovery closed only after a later external supersession. */
 export interface KnowledgeForwardRevisionCommittedRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "committed_then_external_supersession";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision3V1>;
 }
 
-/** Truthful terminalization of one sticky recovery without a Vault mutation. */
 export type KnowledgeForwardRevisionRecoveryTerminalRecordV1 =
   | KnowledgeForwardRevisionAbandonedRecoveryTerminalRecordV1
   | KnowledgeForwardRevisionUncertainRecoveryTerminalRecordV1
   | KnowledgeForwardRevisionCommittedRecoveryTerminalRecordV1;
 
-/** Input for one sticky-recovery terminalization; outcome derives from journal revision. */
 export interface CreateKnowledgeForwardRevisionRecoveryTerminalRecordInput {
   readonly acceptedIdentity: unknown;
   readonly journal: unknown;
@@ -374,9 +349,7 @@ const TERMINALIZATION_ID_PATTERN = /^forward-revision-recovery-terminal-[a-f0-9]
 const APPLY_CLAIM_ID_PATTERN = /^forward-revision-apply-claim-[a-f0-9]{64}$/;
 const PROPOSAL_ID_PATTERN = /^forward-revision-proposal-[a-f0-9]{64}$/;
 
-/** Fixed value-free failure for malformed forward lifecycle terminal material. */
 export class KnowledgeForwardRevisionLifecycleTerminalValidationError extends TypeError {
-  /** Creates one sanitized error; only this module can mark it authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision lifecycle terminal material does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionLifecycleTerminalValidationError";
@@ -387,14 +360,12 @@ export class KnowledgeForwardRevisionLifecycleTerminalValidationError extends Ty
 const ERROR_TOKEN = Symbol("KnowledgeForwardRevisionLifecycleTerminalValidationError");
 const authenticErrors = new WeakSet<KnowledgeForwardRevisionLifecycleTerminalValidationError>();
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionLifecycleTerminalValidationError(ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local failure. */
 function isAuthenticError(
   value: unknown
 ): value is KnowledgeForwardRevisionLifecycleTerminalValidationError {
@@ -405,12 +376,10 @@ function isAuthenticError(
   );
 }
 
-/** Hashes one strict value under an explicit protocol domain. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Captures one canonical Windows-safe Vault page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -428,7 +397,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Detects one own data property without invoking candidate code. */
 function hasOwnDataProperty(value: unknown, key: string): boolean {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -439,7 +407,6 @@ function hasOwnDataProperty(value: unknown, key: string): boolean {
   }
 }
 
-/** Compares exact lifecycle resource identities without locale behavior. */
 function sameResourceIdentity(
   left: Readonly<KnowledgeForwardRevisionLifecycleResourceIdentityV1>,
   right: Readonly<KnowledgeForwardRevisionLifecycleResourceIdentityV1>
@@ -453,7 +420,6 @@ function sameResourceIdentity(
   );
 }
 
-/** Strictly snapshots one exact Runtime and page identity. */
 export function snapshotKnowledgeForwardRevisionLifecycleResourceIdentity(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionLifecycleResourceIdentityV1> {
@@ -487,7 +453,6 @@ export function snapshotKnowledgeForwardRevisionLifecycleResourceIdentity(
   }
 }
 
-/** Creates one canonical Runtime and page identity. */
 export function createKnowledgeForwardRevisionLifecycleResourceIdentity(
   value: CreateKnowledgeForwardRevisionLifecycleResourceIdentityInput
 ): Readonly<KnowledgeForwardRevisionLifecycleResourceIdentityV1> {
@@ -510,7 +475,6 @@ export function createKnowledgeForwardRevisionLifecycleResourceIdentity(
   }
 }
 
-/** Computes the domain-separated digest of one strict resource identity. */
 export function createKnowledgeForwardRevisionLifecycleResourceIdentityDigest(
   value: unknown
 ): string {
@@ -518,7 +482,6 @@ export function createKnowledgeForwardRevisionLifecycleResourceIdentityDigest(
   return digestValue("knowledge-forward-revision-lifecycle-resource-identity-v1", identity);
 }
 
-/** Strictly snapshots one content-free Apply-ledger lineage edge. */
 export function snapshotKnowledgeForwardRevisionLedgerLineageRef(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionLedgerLineageRefV1> {
@@ -561,7 +524,6 @@ export function snapshotKnowledgeForwardRevisionLedgerLineageRef(
   }
 }
 
-/** Creates one content-free Apply-ledger lineage edge. */
 export function createKnowledgeForwardRevisionLedgerLineageRef(
   value: CreateKnowledgeForwardRevisionLedgerLineageRefInput
 ): Readonly<KnowledgeForwardRevisionLedgerLineageRefV1> {
@@ -579,13 +541,11 @@ export function createKnowledgeForwardRevisionLedgerLineageRef(
   }
 }
 
-/** Computes the domain-separated digest of one ledger lineage edge. */
 export function createKnowledgeForwardRevisionLedgerLineageRefDigest(value: unknown): string {
   const reference = snapshotKnowledgeForwardRevisionLedgerLineageRef(value);
   return digestValue("knowledge-forward-revision-ledger-lineage-ref-v1", reference);
 }
 
-/** Strictly snapshots one canonical atomic supersession record. */
 export function snapshotKnowledgeForwardRevisionSupersessionRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionSupersessionRecordV1> {
@@ -645,7 +605,6 @@ export function snapshotKnowledgeForwardRevisionSupersessionRecord(
   }
 }
 
-/** Creates one canonical atomic supersession record. */
 export function createKnowledgeForwardRevisionSupersessionRecord(
   value: CreateKnowledgeForwardRevisionSupersessionRecordInput
 ): Readonly<KnowledgeForwardRevisionSupersessionRecordV1> {
@@ -676,7 +635,6 @@ export function createKnowledgeForwardRevisionSupersessionRecord(
   }
 }
 
-/** Rejoins a stored supersession to exact replay lineage fields. */
 export function snapshotKnowledgeForwardRevisionSupersessionRecordForReplay(
   value: unknown,
   input: CreateKnowledgeForwardRevisionSupersessionRecordInput
@@ -687,12 +645,10 @@ export function snapshotKnowledgeForwardRevisionSupersessionRecordForReplay(
   return stored;
 }
 
-/** Computes the canonical self-consistency digest of one supersession record. */
 export function createKnowledgeForwardRevisionSupersessionRecordDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionSupersessionRecord(value).supersessionDigest;
 }
 
-/** Parses one untrusted supersession into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionSupersessionRecord(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionSupersessionRecordV1>> {
@@ -713,7 +669,6 @@ export function parseKnowledgeForwardRevisionSupersessionRecord(
   }
 }
 
-/** Validates one untrusted supersession without retaining rejected data. */
 export function validateKnowledgeForwardRevisionSupersessionRecord(
   value: unknown
 ): KnowledgeValidationResult {
@@ -723,7 +678,6 @@ export function validateKnowledgeForwardRevisionSupersessionRecord(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Strictly snapshots one accepted decision and Apply-claim identity. */
 export function snapshotKnowledgeForwardRevisionAcceptedClaimIdentity(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1> {
@@ -764,7 +718,6 @@ export function snapshotKnowledgeForwardRevisionAcceptedClaimIdentity(
   }
 }
 
-/** Creates one exact accepted decision and Apply-claim identity. */
 export function createKnowledgeForwardRevisionAcceptedClaimIdentity(
   value: CreateKnowledgeForwardRevisionAcceptedClaimIdentityInput
 ): Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1> {
@@ -782,13 +735,11 @@ export function createKnowledgeForwardRevisionAcceptedClaimIdentity(
   }
 }
 
-/** Computes the domain-separated digest of one accepted decision identity. */
 export function createKnowledgeForwardRevisionAcceptedClaimIdentityDigest(value: unknown): string {
   const identity = snapshotKnowledgeForwardRevisionAcceptedClaimIdentity(value);
   return digestValue("knowledge-forward-revision-accepted-claim-identity-v1", identity);
 }
 
-/** Strictly snapshots one accepted-not-started abandonment record. */
 export function snapshotKnowledgeForwardRevisionAbandonmentRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionAbandonmentRecordV1> {
@@ -845,7 +796,6 @@ export function snapshotKnowledgeForwardRevisionAbandonmentRecord(
   }
 }
 
-/** Creates one accepted-not-started abandonment with explicit proof absences. */
 export function createKnowledgeForwardRevisionAbandonmentRecord(
   value: CreateKnowledgeForwardRevisionAbandonmentRecordInput
 ): Readonly<KnowledgeForwardRevisionAbandonmentRecordV1> {
@@ -881,7 +831,6 @@ export function createKnowledgeForwardRevisionAbandonmentRecord(
   }
 }
 
-/** Rejoins an abandonment to its exact accepted identity and timestamp. */
 export function snapshotKnowledgeForwardRevisionAbandonmentRecordForReplay(
   value: unknown,
   input: CreateKnowledgeForwardRevisionAbandonmentRecordInput
@@ -892,12 +841,10 @@ export function snapshotKnowledgeForwardRevisionAbandonmentRecordForReplay(
   return stored;
 }
 
-/** Computes the canonical self-consistency digest of one abandonment record. */
 export function createKnowledgeForwardRevisionAbandonmentRecordDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionAbandonmentRecord(value).abandonmentDigest;
 }
 
-/** Parses one untrusted abandonment into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionAbandonmentRecord(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>> {
@@ -918,7 +865,6 @@ export function parseKnowledgeForwardRevisionAbandonmentRecord(
   }
 }
 
-/** Validates one untrusted abandonment without retaining rejected data. */
 export function validateKnowledgeForwardRevisionAbandonmentRecord(
   value: unknown
 ): KnowledgeValidationResult {
@@ -928,7 +874,6 @@ export function validateKnowledgeForwardRevisionAbandonmentRecord(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Strictly snapshots one bounded external observation without Vault bytes. */
 export function snapshotKnowledgeForwardRevisionExternalObservation(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionExternalObservationV1> {
@@ -974,7 +919,6 @@ export function snapshotKnowledgeForwardRevisionExternalObservation(
   }
 }
 
-/** Creates one bounded external observation without retaining Vault bytes. */
 export function createKnowledgeForwardRevisionExternalObservation(
   value: CreateKnowledgeForwardRevisionExternalObservationInput
 ): Readonly<KnowledgeForwardRevisionExternalObservationV1> {
@@ -996,7 +940,6 @@ export function createKnowledgeForwardRevisionExternalObservation(
   }
 }
 
-/** Strictly snapshots one exact sticky-recovery journal identity. */
 export function snapshotKnowledgeForwardRevisionRecoveryJournalRef(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionRecoveryJournalRefV1> {
@@ -1059,7 +1002,6 @@ export function snapshotKnowledgeForwardRevisionRecoveryJournalRef(
   }
 }
 
-/** Creates one exact sticky-recovery journal identity. */
 export function createKnowledgeForwardRevisionRecoveryJournalRef(
   value: CreateKnowledgeForwardRevisionRecoveryJournalRefInput
 ): Readonly<KnowledgeForwardRevisionRecoveryJournalRefV1> {
@@ -1082,13 +1024,11 @@ export function createKnowledgeForwardRevisionRecoveryJournalRef(
   }
 }
 
-/** Computes the domain-separated digest of one recovery journal reference. */
 export function createKnowledgeForwardRevisionRecoveryJournalRefDigest(value: unknown): string {
   const reference = snapshotKnowledgeForwardRevisionRecoveryJournalRef(value);
   return digestValue("knowledge-forward-revision-recovery-journal-ref-v1", reference);
 }
 
-/** Derives the only truthful terminal outcome for one recovery revision. */
 function deriveRecoveryOutcome(
   revision: KnowledgeForwardRevisionRecoveryJournalRefV1["journalRevision"]
 ): KnowledgeForwardRevisionRecoveryTerminalRecordV1["outcome"] {
@@ -1097,7 +1037,6 @@ function deriveRecoveryOutcome(
   return "committed_then_external_supersession";
 }
 
-/** Strictly snapshots one sticky-recovery terminalization record. */
 export function snapshotKnowledgeForwardRevisionRecoveryTerminalRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> {
@@ -1172,7 +1111,6 @@ export function snapshotKnowledgeForwardRevisionRecoveryTerminalRecord(
   }
 }
 
-/** Creates one sticky-recovery terminalization with a revision-derived outcome. */
 export function createKnowledgeForwardRevisionRecoveryTerminalRecord(
   value: CreateKnowledgeForwardRevisionRecoveryTerminalRecordInput
 ): Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> {
@@ -1209,7 +1147,6 @@ export function createKnowledgeForwardRevisionRecoveryTerminalRecord(
   }
 }
 
-/** Rejoins one terminalization to its exact accepted, journal, and observation replay. */
 export function snapshotKnowledgeForwardRevisionRecoveryTerminalRecordForReplay(
   value: unknown,
   input: CreateKnowledgeForwardRevisionRecoveryTerminalRecordInput
@@ -1220,12 +1157,10 @@ export function snapshotKnowledgeForwardRevisionRecoveryTerminalRecordForReplay(
   return stored;
 }
 
-/** Computes the canonical self-consistency digest of one recovery terminal record. */
 export function createKnowledgeForwardRevisionRecoveryTerminalRecordDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionRecoveryTerminalRecord(value).terminalizationDigest;
 }
 
-/** Parses one untrusted recovery terminal into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionRecoveryTerminalRecord(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>> {
@@ -1246,7 +1181,6 @@ export function parseKnowledgeForwardRevisionRecoveryTerminalRecord(
   }
 }
 
-/** Validates one untrusted recovery terminal without retaining rejected data. */
 export function validateKnowledgeForwardRevisionRecoveryTerminalRecord(
   value: unknown
 ): KnowledgeValidationResult {
@@ -1256,7 +1190,6 @@ export function validateKnowledgeForwardRevisionRecoveryTerminalRecord(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed parser diagnostic. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

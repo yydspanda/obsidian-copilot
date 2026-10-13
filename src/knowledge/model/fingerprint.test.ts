@@ -10,7 +10,6 @@ import {
 } from "@/knowledge/model/fingerprint";
 import type { JsonValue, PipelineFingerprintInput } from "@/knowledge/model/types";
 
-/** Creates a complete fingerprint input with no provider credentials. */
 function createFingerprintInput(): PipelineFingerprintInput {
   return {
     version: 1,

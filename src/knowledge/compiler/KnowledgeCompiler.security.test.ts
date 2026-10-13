@@ -31,7 +31,6 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
   });
 }
 
-/** Creates compile input backed by one quote locator over caller-supplied text. */
 function createQuoteCompileInput(
   text: string,
   excerpt: string,

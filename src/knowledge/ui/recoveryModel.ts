@@ -3,7 +3,6 @@ import type {
   NoJournalApplyRecoverySnapshot,
 } from "@/knowledge/recovery/NoJournalApplyRecovery";
 
-/** Stable recovery conditions rendered without exposing note content or source paths. */
 export type KnowledgeRecoveryStatus =
   | "accepted_not_started"
   | "decision_required"
@@ -14,13 +13,11 @@ export type KnowledgeRecoveryStatus =
   | "queue_recovery_required"
   | "queue_commit_pending_ack";
 
-/** Explicit actions allowed by one freshly re-proved durable recovery state. */
 export interface KnowledgeRecoveryActions {
   canContinue: boolean;
   canAbandon: boolean;
 }
 
-/** One opaque recovery row derived from a single Runtime-envelope observation. */
 export interface KnowledgeRecoveryItem {
   id: string;
   status: KnowledgeRecoveryStatus;
@@ -32,19 +29,16 @@ export interface KnowledgeRecoveryItem {
   continueBlockedReason?: "manifest_read_set_changed";
 }
 
-/** Complete immutable recovery projection for one configured Bundle. */
 export interface KnowledgeRecoveryModel {
   bundleId: string;
   runtimeRevision: number;
   items: readonly Readonly<KnowledgeRecoveryItem>[];
 }
 
-/** Creates frozen action flags for one recovery row. */
 function createActions(canContinue: boolean, canAbandon: boolean): KnowledgeRecoveryActions {
   return Object.freeze({ canContinue, canAbandon });
 }
 
-/** Converts one accepted Review classification into a safe recovery row, if still actionable. */
 function deriveClassificationItem(
   classification: NoJournalApplyRecoveryClassification
 ): KnowledgeRecoveryItem | undefined {
@@ -108,17 +102,10 @@ function deriveClassificationItem(
   }
 }
 
-/** Reports whether an accepted classification already represents one global transaction. */
 function hasTransaction(items: readonly KnowledgeRecoveryItem[], transactionId: string): boolean {
   return items.some((item) => item.transactionId === transactionId);
 }
 
-/**
- * Derives a deterministic, content-free recovery model from one atomic Runtime snapshot.
- *
- * Action flags are only optimistic display hints. Production commands must reload
- * the opaque recovery id and repeat every Queue, Review, Manifest, and transaction proof.
- */
 export function deriveKnowledgeRecoveryModel(
   snapshot: NoJournalApplyRecoverySnapshot
 ): Readonly<KnowledgeRecoveryModel> {

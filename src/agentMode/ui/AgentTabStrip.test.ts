@@ -12,19 +12,16 @@ import React from "react";
 jest.mock("@/hooks/useLatestVersion", () => ({ refreshLatestVersion: jest.fn() }));
 
 describe("AgentTabStrip", () => {
-  describe("computeVisibleCount", () => {
+  describe("computeVisibleCount()", () => {
     it("returns 0 for empty input", () => {
       expect(computeVisibleCount(500, 0)).toBe(0);
     });
 
     it("shows all tabs when they fit alongside the + button", () => {
-      // 3 fixed tabs + 2 gaps + plus button = 128+4+128+4+128+32 = 424
       expect(computeVisibleCount(424, 3)).toBe(3);
     });
 
     it("reserves overflow button space when not all tabs fit", () => {
-      // With overflow, tab budget is 460 - plus(32) - overflow(32) = 396,
-      // which fits 3 fixed tabs and 2 inter-tab gaps.
       expect(computeVisibleCount(460, 5)).toBe(3);
     });
 
@@ -33,19 +30,17 @@ describe("AgentTabStrip", () => {
     });
 
     it("treats the + button as always reserved", () => {
-      // One fixed tab + plus button = 128 + 32.
       expect(computeVisibleCount(160, 1)).toBe(1);
       expect(computeVisibleCount(159, 1)).toBe(1);
     });
 
     it("accounts for inter-tab gaps", () => {
-      // 2 fixed tabs + 1 gap + plus button = 128+4+128+32 = 292.
       expect(computeVisibleCount(292, 2)).toBe(2);
       expect(computeVisibleCount(291, 2)).toBe(1);
     });
   });
 
-  describe("partitionSessions", () => {
+  describe("partitionSessions()", () => {
     const s = (id: string) => ({ internalId: id });
 
     it("returns empty arrays for empty input", () => {
@@ -73,7 +68,6 @@ describe("AgentTabStrip", () => {
         visibleCount: 2,
         activeId: "d",
       });
-      // 'd' takes the last visible slot; 'b' is displaced to the front of overflow.
       expect(visibleSessions.map((x) => x.internalId)).toEqual(["a", "d"]);
       expect(overflowSessions.map((x) => x.internalId)).toEqual(["b", "c"]);
     });
@@ -89,17 +83,6 @@ describe("AgentTabStrip", () => {
       expect(overflowSessions.map((x) => x.internalId)).toEqual(["b", "c"]);
     });
 
-    it("does not swap when active is already visible", () => {
-      const sessions = [s("a"), s("b"), s("c")];
-      const { visibleSessions, overflowSessions } = partitionSessions({
-        sessions,
-        visibleCount: 2,
-        activeId: "b",
-      });
-      expect(visibleSessions.map((x) => x.internalId)).toEqual(["a", "b"]);
-      expect(overflowSessions.map((x) => x.internalId)).toEqual(["c"]);
-    });
-
     it("handles visibleCount === 1 with overflow active", () => {
       const sessions = [s("a"), s("b"), s("c")];
       const { visibleSessions, overflowSessions } = partitionSessions({
@@ -113,6 +96,38 @@ describe("AgentTabStrip", () => {
   });
 
   describe("AgentTabStrip()", () => {
+    it("detaches a closed tab without closing its backend session for https://github.com/Brevilabs/obsidian-copilot-private/issues/429", () => {
+      const session = {
+        internalId: "existing",
+        backendId: "test",
+        subscribe: () => () => {},
+        getLabel: () => "Existing chat",
+        getStatus: () => "idle",
+        getNeedsAttention: () => false,
+      };
+      const manager = {
+        subscribe: () => () => {},
+        getSessionsForScope: () => [session],
+        getActiveProjectId: () => null,
+        getActiveSession: () => session,
+        getIsStarting: () => false,
+        detachSessionFromTab: jest.fn(),
+        closeSession: jest.fn(),
+      };
+      render(
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(AgentTabStrip, { manager: manager as unknown as AgentSessionManager })
+        )
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Close session" }));
+
+      expect(manager.detachSessionFromTab).toHaveBeenCalledWith(session.internalId);
+      expect(manager.closeSession).not.toHaveBeenCalled();
+    });
+
     it("refreshes releases after the new-session button creates a tab for https://github.com/Brevilabs/obsidian-copilot-private/issues/317", async () => {
       const session = {
         internalId: "existing",

@@ -12,7 +12,6 @@ import type {
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-/** Content-free command that can express only whole-proposal rejection. */
 export interface KnowledgeLiteralRejectCommand {
   changeSetId: string;
   proposalDigest: string;
@@ -20,22 +19,18 @@ export interface KnowledgeLiteralRejectCommand {
   decisions: readonly Readonly<{ changeId: string; decision: "reject" }>[];
 }
 
-/** Stable reasons why a reject command is structurally unsafe. */
 export type KnowledgeLiteralRejectCommandErrorReason =
   | "command_invalid"
   | "decision_invalid"
   | "decision_duplicate";
 
-/** Reports a malformed or non-literal Reject command without retaining input values. */
 export class KnowledgeLiteralRejectCommandError extends Error {
-  /** Creates one sanitized strict-command rejection. */
   constructor(public readonly reason: KnowledgeLiteralRejectCommandErrorReason) {
     super("The Knowledge Review command is not a strict whole-proposal rejection");
     this.name = "KnowledgeLiteralRejectCommandError";
   }
 }
 
-/** Stable fail-closed reasons produced by the durable Reject state machine. */
 export type KnowledgeReviewRejectConflictReason =
   | "bundle_mismatch"
   | "record_missing"
@@ -47,16 +42,13 @@ export type KnowledgeReviewRejectConflictReason =
   | "revision_overflow"
   | "timestamp_invalid";
 
-/** Reports a Queue/Review identity conflict without exposing durable payloads. */
 export class KnowledgeReviewRejectConflictError extends Error {
-  /** Creates one sanitized durable-state rejection. */
   constructor(public readonly reason: KnowledgeReviewRejectConflictReason) {
     super("The durable Knowledge Review rejection state does not match the requested proposal");
     this.name = "KnowledgeReviewRejectConflictError";
   }
 }
 
-/** Durable identity returned after one atomic Reject transition or exact replay. */
 export interface KnowledgeReviewRejectTransitionReceipt {
   outcome: "rejected";
   bundleId: string;
@@ -70,7 +62,6 @@ export interface KnowledgeReviewRejectTransitionReceipt {
   reviewRevision: number;
 }
 
-/** Pure projection returned to the shared Runtime envelope. */
 export type KnowledgeReviewRejectProjection =
   | {
       kind: "changed";
@@ -83,7 +74,6 @@ export type KnowledgeReviewRejectProjection =
       receipt: KnowledgeReviewRejectTransitionReceipt;
     };
 
-/** Inputs required to project one exact Queue+Review rejection. */
 export interface KnowledgeReviewRejectProjectionInput {
   bundleId: string;
   queue: IngestQueueSnapshot;
@@ -92,7 +82,6 @@ export interface KnowledgeReviewRejectProjectionInput {
   decidedAt: number;
 }
 
-/** Reads an exact plain record without invoking accessors. */
 function readExactDataRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -122,7 +111,6 @@ function readExactDataRecord(
   }
 }
 
-/** Snapshots a dense array without accepting holes, accessors, or named properties. */
 function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -157,17 +145,10 @@ function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   }
 }
 
-/** Requires one non-empty identity string. */
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/**
- * Strictly snapshots a command whose every file decision is literally Reject.
- *
- * `expectedSnapshotToken` remains a UI anti-mistake token. The durable mutation
- * authority is re-proved from Queue and Review in the atomic projection.
- */
 export function parseKnowledgeLiteralRejectCommand(value: unknown): KnowledgeLiteralRejectCommand {
   const command = readExactDataRecord(value, [
     "changeSetId",
@@ -210,7 +191,6 @@ export function parseKnowledgeLiteralRejectCommand(value: unknown): KnowledgeLit
   });
 }
 
-/** Reports whether a Queue job belongs to one exact Review attempt. */
 function jobMatchesClaim(
   job: KnowledgeIngestJob | undefined,
   claim: ChangeSetReviewJobClaim
@@ -226,7 +206,6 @@ function jobMatchesClaim(
   );
 }
 
-/** Requires the command to reject every proposal change exactly once. */
 function assertExactDecisionSet(
   record: PendingChangeSetReviewRecord | RejectedChangeSetReviewRecord,
   command: KnowledgeLiteralRejectCommand
@@ -241,12 +220,10 @@ function assertExactDecisionSet(
   }
 }
 
-/** Returns whether a Queue job still consumes scheduling capacity. */
 function isActiveJob(job: KnowledgeIngestJob): boolean {
   return job.status !== "failed" && job.status !== "completed" && job.status !== "cancelled";
 }
 
-/** Converts one retained rerun request into its pending successor job. */
 function createJobFromRerun(
   bundleId: string,
   rerun: IngestRerunRequest,
@@ -268,7 +245,6 @@ function createJobFromRerun(
   };
 }
 
-/** Promotes at most one retained latest rerun after its predecessor is terminal. */
 function promoteRerun(
   snapshot: IngestQueueSnapshot,
   sourceId: string,
@@ -286,7 +262,6 @@ function promoteRerun(
   };
 }
 
-/** Builds the detached durable receipt represented by an exact final state. */
 function createReceipt(
   queue: IngestQueueSnapshot,
   review: ChangeSetReviewSnapshot,
@@ -307,12 +282,6 @@ function createReceipt(
   };
 }
 
-/**
- * Proves and projects the only legal whole-proposal Reject transition.
- *
- * The function is synchronous and side-effect free so Runtime can execute it
- * inside one atomic envelope transform. Exact terminal replay is byte-preserving.
- */
 export function projectKnowledgeReviewRejection(
   input: KnowledgeReviewRejectProjectionInput
 ): KnowledgeReviewRejectProjection {

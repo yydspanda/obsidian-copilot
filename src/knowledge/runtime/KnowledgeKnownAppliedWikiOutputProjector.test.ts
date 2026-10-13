@@ -72,20 +72,17 @@ const PAGE_PATH = "Wiki/Topic.md";
 const FORWARD_SELECTED_CONTENT = "# Forward selected historical output\n";
 const FORWARD_CURRENT_CONTENT = "# Forward current source output\n";
 
-/** One exact accepted Review and matching Apply ledger fixture. */
 interface AppliedFixture {
   record: AcceptedChangeSetReviewRecord;
   ledger: KnowledgeApplyCommitLedgerRecord;
 }
 
-/** One exact accepted Forward Review and matching canonical Forward ledger. */
 interface ForwardAppliedFixture {
   review: Readonly<KnowledgeForwardRevisionReviewSnapshotV2>;
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
   afterContent: string;
 }
 
-/** Creates one valid proposed create or update. */
 function createChange(id: string, content: string, beforeContent?: string): KnowledgeFileChange {
   return beforeContent === undefined
     ? {
@@ -110,7 +107,6 @@ function createChange(id: string, content: string, beforeContent?: string): Know
       };
 }
 
-/** Creates one strict proposal around a single page mutation. */
 function createProposal(
   id: string,
   change: KnowledgeFileChange,
@@ -129,7 +125,6 @@ function createProposal(
   };
 }
 
-/** Creates the complete Manifest plan required by one fixture proposal. */
 function createPlan(
   proposal: KnowledgeChangeSet,
   inputRevision: number,
@@ -165,7 +160,6 @@ function createPlan(
   };
 }
 
-/** Creates one accepted Review with an exact matching Apply ledger. */
 function createAppliedFixture(options: {
   suffix: string;
   content: string;
@@ -229,7 +223,6 @@ function createAppliedFixture(options: {
   };
 }
 
-/** Creates the exact applied source authority retained by a Forward ledger source base. */
 function createForwardAppliedAuthority(
   runtimeRevision: number,
   completedAt: number
@@ -265,7 +258,6 @@ function createForwardAppliedAuthority(
   };
 }
 
-/** Creates one strict Forward proposal bound to the current generated page. */
 function createForwardProposal(requestedAt: number) {
   const selectedContentHash = createFileContentHash(FORWARD_SELECTED_CONTENT);
   const intent = createKnowledgeForwardRevisionIntent({
@@ -336,7 +328,6 @@ function createForwardProposal(requestedAt: number) {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: requestedAt });
 }
 
-/** Creates one exact deterministic validation receipt for a Forward body. */
 function createForwardValidationReceipt(
   proposal: ReturnType<typeof createForwardProposal>,
   authority: KnowledgeForwardRevisionAcceptanceAuthority,
@@ -394,7 +385,6 @@ function createForwardValidationReceipt(
   };
 }
 
-/** Creates one exact current source entry for a Forward ledger source base. */
 function createForwardSourceEntry(completedAt: number): SourceManifestEntry {
   return {
     sourceId: "source-1",
@@ -425,7 +415,6 @@ function createForwardSourceEntry(completedAt: number): SourceManifestEntry {
   };
 }
 
-/** Creates one canonical accepted Forward Review and finalized ledger. */
 function createForwardAppliedFixture(options: {
   afterContent: string;
   appliedAt: number;
@@ -515,12 +504,10 @@ function createForwardAppliedFixture(options: {
   return { review, ledger, afterContent: options.afterContent };
 }
 
-/** Creates one strict Review snapshot. */
 function createReview(records: ChangeSetReviewRecord[]): ChangeSetReviewSnapshot {
   return { version: 2, bundleId: "personal", revision: records.length, records };
 }
 
-/** Creates common index input around exact Review and ledger fixtures. */
 function createIndexInput(fixtures: AppliedFixture[]) {
   const currentChange = fixtures.at(-1)?.record.acceptedChangeSet.changes[0];
   const currentContentHash =
@@ -546,7 +533,6 @@ function createIndexInput(fixtures: AppliedFixture[]) {
   };
 }
 
-/** Selects the exact narrow detail input surface from one index fixture. */
 function createDetailInput(
   input: ReturnType<typeof createIndexInput>,
   authority: ReturnType<

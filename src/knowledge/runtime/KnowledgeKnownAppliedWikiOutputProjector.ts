@@ -24,7 +24,6 @@ import {
 } from "@/knowledge/review/ReviewStorage";
 import type { KnowledgeApplyCommitLedgerRecord } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
-/** Hard limits for one known-applied-output Runtime read. */
 export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   maxApplyCommits: 10_000,
   maxForwardApplyCommits: 10_000,
@@ -41,7 +40,6 @@ export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   maxSnapshotNodes: 5_000_000,
 });
 
-/** Stable bounded resource whose exhaustion aborted a projection. */
 export type KnowledgeKnownAppliedWikiOutputLimit =
   | "apply_commits"
   | "forward_apply_commits"
@@ -52,25 +50,20 @@ export type KnowledgeKnownAppliedWikiOutputLimit =
   | "snapshot_characters"
   | "snapshot_complexity";
 
-/** Reports a valid-shaped read that exceeds the bounded projection contract. */
 export class KnowledgeKnownAppliedWikiOutputLimitError extends Error {
-  /** Creates one sanitized resource-limit failure. */
   constructor(public readonly limit: KnowledgeKnownAppliedWikiOutputLimit) {
     super("Known applied Wiki outputs exceed the bounded read contract");
     this.name = "KnowledgeKnownAppliedWikiOutputLimitError";
   }
 }
 
-/** Reports malformed projection arguments without retaining rejected values. */
 export class KnowledgeKnownAppliedWikiOutputProjectionError extends Error {
-  /** Creates one sanitized projection failure. */
   constructor() {
     super("Known applied Wiki outputs do not satisfy the read projection contract");
     this.name = "KnowledgeKnownAppliedWikiOutputProjectionError";
   }
 }
 
-/** Current content-addressed Manifest page captured in the same Runtime envelope. */
 export interface KnowledgeKnownAppliedWikiCurrentPage {
   readonly path: string;
   readonly windowsPathKey: string;
@@ -78,12 +71,6 @@ export interface KnowledgeKnownAppliedWikiCurrentPage {
   readonly contentHash: string;
 }
 
-/**
- * Private exact version identity retained by the Coordinator behind an opaque ref.
- *
- * This is read authority only. It never authorizes Restore, Review, Apply, or a
- * Vault write, and must be rejoined against a later atomic Runtime envelope.
- */
 interface KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly runtimeId: string;
   readonly bundleId: string;
@@ -102,7 +89,6 @@ interface KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly appliedAt: number;
 }
 
-/** Exact ordinary Source Apply authority retained behind an opaque detail ref. */
 export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly origin: "source_apply";
   readonly changeSetId: string;
@@ -110,7 +96,6 @@ export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity extends K
   readonly manifestIntentDigest: string;
 }
 
-/** Exact forward revision authority retained behind an opaque detail ref. */
 export interface KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly origin: "forward_revision";
   readonly ledgerId: string;
@@ -124,12 +109,10 @@ export interface KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity exten
   readonly manualOverride: boolean;
 }
 
-/** One exact provenance-discriminated private detail authority. */
 export type KnowledgeKnownAppliedWikiOutputAuthorityIdentity =
   | KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
   | KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity;
 
-/** Aggregate metadata for one verified Apply provenance kind. */
 export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
   readonly kind: "source_apply" | "forward_revision";
   readonly verifiedApplyCount: number;
@@ -137,7 +120,6 @@ export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
   readonly newestManifestRevision: number;
 }
 
-/** Metadata-only content-addressed output returned by the index read. */
 export interface KnowledgeKnownAppliedWikiOutputIndexItem {
   readonly path: string;
   readonly windowsPathKey: string;
@@ -151,7 +133,6 @@ export interface KnowledgeKnownAppliedWikiOutputIndexItem {
   readonly authority: Readonly<KnowledgeKnownAppliedWikiOutputAuthorityIdentity>;
 }
 
-/** Metadata-only known-output index from exactly one atomic Runtime envelope. */
 export interface KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot {
   readonly runtimeId: string;
   readonly runtimeRevision: number;
@@ -165,7 +146,6 @@ export interface KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot {
   readonly outputs: readonly Readonly<KnowledgeKnownAppliedWikiOutputIndexItem>[];
 }
 
-/** Result of rejoining one private index identity against a fresh Runtime envelope. */
 export type KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot =
   | {
       readonly kind: "available";
@@ -188,7 +168,6 @@ export type KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot =
       readonly runtimeRevision: number;
     };
 
-/** Strict index inputs captured from one already-validated Runtime envelope. */
 export interface KnowledgeKnownAppliedWikiOutputIndexProjectionInput {
   readonly runtimeId: string;
   readonly runtimeRevision: number;
@@ -202,7 +181,6 @@ export interface KnowledgeKnownAppliedWikiOutputIndexProjectionInput {
   readonly currentManifestPage?: KnowledgeKnownAppliedWikiCurrentPage;
 }
 
-/** Strict detail inputs captured from one already-validated Runtime envelope. */
 export interface KnowledgeKnownAppliedWikiOutputDetailProjectionInput {
   readonly runtimeId: string;
   readonly runtimeRevision: number;
@@ -215,20 +193,17 @@ export interface KnowledgeKnownAppliedWikiOutputDetailProjectionInput {
   readonly authority: KnowledgeKnownAppliedWikiOutputAuthorityIdentity;
 }
 
-/** Mutable descriptor-safe JSON snapshot budget. */
 interface SnapshotBudget {
   nodes: number;
   characters: number;
 }
 
-/** Page metadata retained after validated accepted content has been discarded. */
 interface AcceptedPageMetadata {
   path: string;
   contentHash: string;
   characterCount: number;
 }
 
-/** Accepted Review identity retained without proposal or accepted body bytes. */
 interface AcceptedRecordMetadata {
   recordIndex: number;
   bundleId: string;
@@ -242,13 +217,11 @@ interface AcceptedRecordMetadata {
   page?: AcceptedPageMetadata;
 }
 
-/** Bounded accepted Review index used by both narrow reads. */
 interface AcceptedRecordIndex {
   revision: number;
   byJoinKey: ReadonlyMap<string, readonly AcceptedRecordMetadata[]>;
 }
 
-/** Strict accepted Forward Review records indexed by durable decision identity. */
 interface ForwardAcceptedRecordIndex {
   revision: number;
   byAcceptedDecisionDigest: ReadonlyMap<
@@ -257,23 +230,19 @@ interface ForwardAcceptedRecordIndex {
   >;
 }
 
-/** Mutable metadata-only output accumulator. */
 interface SourceApplyProof {
   origin: "source_apply";
   ledger: KnowledgeApplyCommitLedgerRecord;
 }
 
-/** Exact canonical Forward ledger and accepted Review proof. */
 interface ForwardRevisionProof {
   origin: "forward_revision";
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
   accepted: Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>;
 }
 
-/** Any exact Apply proof that can contribute one historical output. */
 type KnownAppliedOutputProof = SourceApplyProof | ForwardRevisionProof;
 
-/** Mutable metadata-only output accumulator. */
 interface OutputAccumulator {
   path: string;
   contentHash: string;
@@ -281,7 +250,6 @@ interface OutputAccumulator {
   proofs: KnownAppliedOutputProof[];
 }
 
-/** Reports whether an object exposes exactly the expected own string keys. */
 function hasExactOwnKeys(
   value: object,
   expected: readonly string[],
@@ -307,7 +275,6 @@ function hasExactOwnKeys(
   }
 }
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: object, key: PropertyKey): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -319,7 +286,6 @@ function readDataProperty(value: object, key: PropertyKey): unknown {
   }
 }
 
-/** Reads a dense array length without invoking an accessor. */
 function readDenseArrayLength(value: unknown): number | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -331,16 +297,10 @@ function readDenseArrayLength(value: unknown): number | undefined {
   }
 }
 
-/** Reads one dense array item through its own enumerable data descriptor. */
 function readDenseArrayItem(value: readonly unknown[], index: number): unknown {
   return readDataProperty(value, String(index));
 }
 
-/**
- * Detaches JSON data without invoking accessors, traversing cycles, or accepting
- * exotic prototypes. The Runtime parser normally supplies plain JSON; this
- * fence keeps the leaf safe under hostile structurally-typed tests and callers.
- */
 function snapshotJsonData(
   value: unknown,
   budget: SnapshotBudget,
@@ -421,7 +381,6 @@ function snapshotJsonData(
   return result;
 }
 
-/** Creates the exact ledger ↔ accepted Review join key. */
 function createJoinKey(fields: {
   bundleId: string;
   sourceId: string;
@@ -444,12 +403,6 @@ function createJoinKey(fields: {
   ]);
 }
 
-/**
- * Compares one exact Apply ledger with one strict accepted Review record.
- *
- * Sharing this predicate prevents current-provenance and known-output reads
- * from drifting into different commit-proof rules.
- */
 export function knowledgeApplyLedgerMatchesAcceptedRecord(
   ledger: KnowledgeApplyCommitLedgerRecord,
   bundleId: string,
@@ -467,12 +420,10 @@ export function knowledgeApplyLedgerMatchesAcceptedRecord(
   );
 }
 
-/** Reports whether a string is an exact lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
-/** Creates one plain strict ledger snapshot through data descriptors only. */
 function snapshotLedgerRecord(value: unknown): KnowledgeApplyCommitLedgerRecord | undefined {
   if (!value || typeof value !== "object") return undefined;
   const stringFields = ["transactionId", "bundleId", "sourceId", "changeSetId"] as const;
@@ -519,7 +470,6 @@ function snapshotLedgerRecord(value: unknown): KnowledgeApplyCommitLedgerRecord 
   return snapshot as unknown as KnowledgeApplyCommitLedgerRecord;
 }
 
-/** Snapshots and validates one accepted Review record independently of peers. */
 function snapshotAcceptedRecord(
   value: unknown,
   bundleId: string,
@@ -542,7 +492,6 @@ function snapshotAcceptedRecord(
     : undefined;
 }
 
-/** Re-proves accepted bytes, digest, and final Manifest intent. */
 function acceptedRecordHasExactProjection(record: AcceptedChangeSetReviewRecord): boolean {
   if (
     record.acceptedChangeSet.status !== "accepted" ||
@@ -566,7 +515,6 @@ function acceptedRecordHasExactProjection(record: AcceptedChangeSetReviewRecord)
   }
 }
 
-/** Selects exactly one create/update targeting the requested Windows-safe path. */
 function findPageChange(
   record: AcceptedChangeSetReviewRecord,
   pagePath: string,
@@ -589,7 +537,6 @@ function findPageChange(
   return createFileContentHash(change.afterContent) === change.afterHash ? change : undefined;
 }
 
-/** Converts one validated accepted record into metadata that retains no content. */
 function createAcceptedMetadata(
   record: AcceptedChangeSetReviewRecord,
   recordIndex: number,
@@ -620,7 +567,6 @@ function createAcceptedMetadata(
   };
 }
 
-/** Captures accepted join fields without reading or copying proposal/content bytes. */
 function captureAcceptedJoinMetadata(
   value: unknown,
   recordIndex: number,
@@ -697,7 +643,6 @@ function captureAcceptedJoinMetadata(
   };
 }
 
-/** Builds a metadata-only accepted index while enforcing Review limits first. */
 function indexAcceptedRecords(
   review: unknown,
   bundleId: string,
@@ -775,7 +720,6 @@ function indexAcceptedRecords(
   return { revision: Number(revision), byJoinKey };
 }
 
-/** Re-proves the exact canonical Forward ledger ↔ accepted Review join. */
 export function knowledgeForwardApplyLedgerMatchesAcceptedReview(
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>,
   entry: Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>
@@ -800,7 +744,6 @@ export function knowledgeForwardApplyLedgerMatchesAcceptedReview(
   );
 }
 
-/** Builds a bounded strict accepted Forward Review index. */
 function indexForwardAcceptedRecords(
   review: unknown,
   bundleId: string,
@@ -847,7 +790,6 @@ function indexForwardAcceptedRecords(
   return { revision: snapshot.revision, byAcceptedDecisionDigest };
 }
 
-/** Captures and validates common projection inputs without invoking accessors. */
 function captureCommonInput(input: object): {
   runtimeId: string;
   runtimeRevision: number;
@@ -922,7 +864,6 @@ function captureCommonInput(input: object): {
   };
 }
 
-/** Requires the exact public index projection input surface. */
 function assertIndexInputKeys(input: object): void {
   const required = [
     "runtimeId",
@@ -944,7 +885,6 @@ function assertIndexInputKeys(input: object): void {
   }
 }
 
-/** Requires the exact public detail projection input surface. */
 function assertDetailInputKeys(input: object): void {
   const required = [
     "runtimeId",
@@ -965,22 +905,18 @@ function assertDetailInputKeys(input: object): void {
   }
 }
 
-/** Returns the true durable Apply time for one verified proof. */
 function getProofAppliedAt(proof: KnownAppliedOutputProof): number {
   return proof.origin === "source_apply" ? proof.ledger.recordedAt : proof.ledger.appliedAt;
 }
 
-/** Returns the committed Manifest revision for one verified proof. */
 function getProofManifestRevision(proof: KnownAppliedOutputProof): number {
   return proof.ledger.manifestAfterRevision;
 }
 
-/** Returns the exact transaction identity for one verified proof. */
 function getProofTransactionId(proof: KnownAppliedOutputProof): string {
   return proof.ledger.transactionId;
 }
 
-/** Orders verified Apply proofs by commit time and stable identity. */
 function compareProofs(left: KnownAppliedOutputProof, right: KnownAppliedOutputProof): number {
   return (
     getProofAppliedAt(right) - getProofAppliedAt(left) ||
@@ -997,7 +933,6 @@ function compareProofs(left: KnownAppliedOutputProof, right: KnownAppliedOutputP
   );
 }
 
-/** Creates one deeply frozen private detail authority. */
 function freezeAuthority(
   common: ReturnType<typeof captureCommonInput>,
   output: OutputAccumulator,
@@ -1048,7 +983,6 @@ function freezeAuthority(
   });
 }
 
-/** Creates canonical per-origin summaries without discarding mixed provenance. */
 function freezeOriginSummaries(
   proofs: readonly KnownAppliedOutputProof[]
 ): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
@@ -1070,7 +1004,6 @@ function freezeOriginSummaries(
   return Object.freeze(summaries);
 }
 
-/** Creates one deeply frozen metadata-only index item. */
 function freezeIndexItem(
   common: ReturnType<typeof captureCommonInput>,
   output: OutputAccumulator
@@ -1095,7 +1028,6 @@ function freezeIndexItem(
   });
 }
 
-/** Orders metadata by newest exact Apply commit. */
 function compareIndexItems(
   left: KnowledgeKnownAppliedWikiOutputIndexItem,
   right: KnowledgeKnownAppliedWikiOutputIndexItem
@@ -1107,7 +1039,6 @@ function compareIndexItems(
   );
 }
 
-/** Captures the optional current Manifest page without retaining source evidence. */
 function captureCurrentManifestPage(
   value: unknown,
   expectedPagePath: string,
@@ -1143,7 +1074,6 @@ function captureCurrentManifestPage(
   return Object.freeze({ path, windowsPathKey, ownership, contentHash });
 }
 
-/** Adds one verified proof while preserving every distinct Apply provenance. */
 function addVerifiedOutputProof(
   outputs: Map<string, OutputAccumulator>,
   page: AcceptedPageMetadata,
@@ -1180,15 +1110,6 @@ function addVerifiedOutputProof(
   }
 }
 
-/**
- * Projects a metadata-only index of exact known applied page outputs.
- *
- * Ordinary candidates require one unique source Apply-ledger ↔ accepted-Review
- * join. Forward candidates require one canonical forward ledger ↔ accepted
- * Forward Review join. Both paths re-prove the selected body hash before the
- * body is discarded. Pending, rejected, uncommitted, ambiguous, or tampered
- * records contribute nothing.
- */
 export function projectKnowledgeKnownAppliedWikiOutputIndex(
   input: KnowledgeKnownAppliedWikiOutputIndexProjectionInput
 ): KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot {
@@ -1312,7 +1233,6 @@ export function projectKnowledgeKnownAppliedWikiOutputIndex(
   });
 }
 
-/** Captures a private authority through data descriptors only. */
 function captureAuthority(
   value: unknown
 ): KnowledgeKnownAppliedWikiOutputAuthorityIdentity | undefined {
@@ -1460,7 +1380,6 @@ function captureAuthority(
   return ledger ? Object.freeze({ ...candidate }) : undefined;
 }
 
-/** Reports whether one source ledger is the exact private authority selected by the index. */
 function sourceLedgerMatchesAuthority(
   ledger: KnowledgeApplyCommitLedgerRecord,
   authority: KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
@@ -1481,7 +1400,6 @@ function sourceLedgerMatchesAuthority(
   );
 }
 
-/** Reports whether one Forward ledger is the exact private authority selected by the index. */
 function forwardLedgerMatchesAuthority(
   ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>,
   authority: KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
@@ -1512,7 +1430,6 @@ function forwardLedgerMatchesAuthority(
   );
 }
 
-/** Creates a deeply frozen stale detail response. */
 function freezeStaleDetail(
   runtimeId: string,
   runtimeRevision: number
@@ -1520,7 +1437,6 @@ function freezeStaleDetail(
   return Object.freeze({ kind: "stale" as const, runtimeId, runtimeRevision });
 }
 
-/** Rejoins one exact Forward authority to its canonical ledger and accepted body. */
 function projectForwardRevisionOutputDetail(
   common: ReturnType<typeof captureCommonInput>,
   authority: KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
@@ -1595,14 +1511,6 @@ function projectForwardRevisionOutputDetail(
   });
 }
 
-/**
- * Rejoins one private index identity and returns at most one bounded body.
- *
- * No other accepted output body survives this projection. Runtime replacement,
- * missing/torn identity, a non-unique Review join, changed bytes, or a different
- * page target returns `stale`; an exact body above 2 Mi characters returns only
- * 2,000,000 characters returns only `too_large` metadata.
- */
 export function projectKnowledgeKnownAppliedWikiOutputDetail(
   input: KnowledgeKnownAppliedWikiOutputDetailProjectionInput
 ): KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot {

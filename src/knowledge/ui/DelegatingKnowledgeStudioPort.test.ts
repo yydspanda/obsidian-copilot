@@ -25,21 +25,18 @@ import type {
 const FORWARD_REVIEW_REF = `forward-studio-review-${"a".repeat(64)}`;
 const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"b".repeat(64)}`;
 
-/** Promise whose settlement is controlled by one test. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
   reject(reason: unknown): void;
 }
 
-/** One recorded delegate hint subscription. */
 interface RecordedHintSubscription {
   bundleId: string;
   onHint: () => void;
   active: boolean;
 }
 
-/** One recorded command call. */
 interface RecordedCommandCall {
   kind: "pause" | "resume" | "cancel" | "retry" | "review";
   bundleId: string;
@@ -48,7 +45,6 @@ interface RecordedCommandCall {
   signal: AbortSignal;
 }
 
-/** One read-only Query or opaque citation call received by a delegate. */
 type RecordedQueryCall =
   | {
       kind: "query";
@@ -71,7 +67,6 @@ type RecordedQueryCall =
       signal: AbortSignal;
     };
 
-/** Optional behavior injected into the recording Studio port. */
 interface RecordingPortHandlers {
   load?: (bundleId: string, signal: AbortSignal) => Promise<KnowledgeStudioSnapshot>;
   command?: (call: RecordedCommandCall) => Promise<void>;
@@ -88,7 +83,6 @@ interface RecordingPortHandlers {
   ) => Promise<KnowledgeStudioQueryWritebackResult>;
 }
 
-/** Creates a manually controlled promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -99,19 +93,11 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** Flushes delegate calls scheduled through a promise continuation. */
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/**
- * Creates a ready snapshot with an explicit revision.
- *
- * @param revisionToken - Durable revision represented by the snapshot
- * @param bundleId - Bundle represented by the snapshot
- * @returns Ready snapshot
- */
 function createReadySnapshot(
   revisionToken: string,
   bundleId = "personal"
@@ -129,7 +115,6 @@ function createReadySnapshot(
   };
 }
 
-/** Creates a content-free review command for command-routing tests. */
 function createReviewCommand(): KnowledgeReviewCommand {
   return {
     changeSetId: "changeset-1",
@@ -139,7 +124,6 @@ function createReviewCommand(): KnowledgeReviewCommand {
   };
 }
 
-/** Creates one exact accepted-ready Apply command for delegation tests. */
 function createForwardApplyCommand(): KnowledgeForwardRevisionStudioCommand {
   return {
     version: 1,
@@ -150,7 +134,6 @@ function createForwardApplyCommand(): KnowledgeForwardRevisionStudioCommand {
   };
 }
 
-/** Creates one empty but valid grounded Query result for delegation tests. */
 function createQueryResult(queryId = "query-1"): KnowledgeGroundedRetrievalResult {
   return {
     mode: "grounded_retrieval",
@@ -162,7 +145,6 @@ function createQueryResult(queryId = "query-1"): KnowledgeGroundedRetrievalResul
   };
 }
 
-/** Read/command delegate that records operations, signals, and hint bindings. */
 class RecordingKnowledgeStudioPort
   implements
     KnowledgeStudioReadPort,
@@ -177,18 +159,11 @@ class RecordingKnowledgeStudioPort
   readonly hintSubscriptions: RecordedHintSubscription[] = [];
   unsubscribeCount = 0;
 
-  /**
-   * Creates a recording port with optional asynchronous behavior.
-   *
-   * @param name - Revision prefix returned by the default load implementation
-   * @param handlers - Optional load and command implementations
-   */
   constructor(
     private readonly name: string,
     private readonly handlers: RecordingPortHandlers = {}
   ) {}
 
-  /** Records and executes one snapshot load. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     this.loadCalls.push({ bundleId, signal });
     return (
@@ -197,7 +172,6 @@ class RecordingKnowledgeStudioPort
     );
   }
 
-  /** Records one delegate hint subscription and its cleanup. */
   subscribe(bundleId: string, onHint: () => void): () => void {
     const subscription: RecordedHintSubscription = { bundleId, onHint, active: true };
     this.hintSubscriptions.push(subscription);
@@ -210,7 +184,6 @@ class RecordingKnowledgeStudioPort
     };
   }
 
-  /** Records and executes one Bundle pause. */
   async pauseBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -219,7 +192,6 @@ class RecordingKnowledgeStudioPort
     return this.runVoidCommand({ kind: "pause", bundleId, expectedQueueRevision, signal });
   }
 
-  /** Records and executes one Bundle resume. */
   async resumeBundle(
     bundleId: string,
     expectedQueueRevision: number,
@@ -228,7 +200,6 @@ class RecordingKnowledgeStudioPort
     return this.runVoidCommand({ kind: "resume", bundleId, expectedQueueRevision, signal });
   }
 
-  /** Records and executes one job cancellation. */
   async cancelJob(
     bundleId: string,
     jobId: string,
@@ -244,7 +215,6 @@ class RecordingKnowledgeStudioPort
     });
   }
 
-  /** Records and executes one job retry. */
   async retryJob(
     bundleId: string,
     jobId: string,
@@ -260,7 +230,6 @@ class RecordingKnowledgeStudioPort
     });
   }
 
-  /** Records and executes one review submission. */
   async submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
@@ -271,7 +240,6 @@ class RecordingKnowledgeStudioPort
     return this.handlers.review?.(call, command) ?? Promise.resolve({ kind: "applied" });
   }
 
-  /** Records and executes one retrieval-only Query. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
@@ -282,7 +250,6 @@ class RecordingKnowledgeStudioPort
     return this.handlers.query?.(call) ?? Promise.resolve(createQueryResult());
   }
 
-  /** Records and executes one opaque citation jump. */
   async openCitation(
     bundleId: string,
     queryId: string,
@@ -294,7 +261,6 @@ class RecordingKnowledgeStudioPort
     return this.handlers.citation?.(call) ?? Promise.resolve();
   }
 
-  /** Records and executes one reviewed current-answer registration. */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -306,21 +272,12 @@ class RecordingKnowledgeStudioPort
     return this.handlers.writeback?.(call) ?? Promise.resolve({ kind: "registered" });
   }
 
-  /** Records synchronous exact or Bundle-wide Query revocation. */
   revokeCurrent(bundleId: string, queryId?: string): void {
     this.revokeCalls.push({ bundleId, ...(queryId === undefined ? {} : { queryId }) });
   }
 
-  /** Satisfies the complete Query contract; delegate lifetime remains externally owned. */
-  close(): void {
-    // The production composer, not the stable wrapper, owns delegate closure.
-  }
+  close(): void {}
 
-  /**
-   * Emits a hint from every active delegate subscription for one Bundle.
-   *
-   * @param bundleId - Bundle whose active callbacks are invoked
-   */
   emitHint(bundleId: string): void {
     for (const subscription of this.hintSubscriptions) {
       if (subscription.active && subscription.bundleId === bundleId) {
@@ -329,20 +286,10 @@ class RecordingKnowledgeStudioPort
     }
   }
 
-  /**
-   * Invokes a retained callback even after unsubscription to simulate a late source.
-   *
-   * @param index - Recorded subscription index
-   */
   emitRetainedHint(index: number): void {
     this.hintSubscriptions[index]?.onHint();
   }
 
-  /**
-   * Records and executes one void command.
-   *
-   * @param call - Captured command boundary arguments
-   */
   private async runVoidCommand(call: RecordedCommandCall): Promise<void> {
     this.commandCalls.push(call);
     return this.handlers.command?.(call) ?? Promise.resolve();

@@ -2,15 +2,12 @@ jest.mock("obsidian", () => {
   const path = jest.requireActual<typeof import("node:path")>("node:path");
 
   class FileSystemAdapter {
-    /** Creates one fake desktop adapter rooted at a real temporary directory. */
     constructor(private readonly basePath: string) {}
 
-    /** Returns the fake Vault root. */
     getBasePath(): string {
       return this.basePath;
     }
 
-    /** Resolves one canonical Vault-relative path beneath the fake root. */
     getFullPath(vaultPath: string): string {
       return path.join(this.basePath, ...vaultPath.split("/"));
     }
@@ -46,7 +43,6 @@ type TestFileSystemAdapter = FileSystemAdapter & {
 const temporaryDirectories: string[] = [];
 const SOURCE_ROOT = "Sources/Imported";
 
-/** Loads the real native modules used by the filesystem-backed test edge. */
 function loadTestRuntime(): KnowledgeFolderImportNodeRuntime {
   return {
     fs: fs as unknown as KnowledgeFolderImportNodeFileSystem,
@@ -55,7 +51,6 @@ function loadTestRuntime(): KnowledgeFolderImportNodeRuntime {
   };
 }
 
-/** Creates one fake FileSystemAdapter over a fresh temporary Vault. */
 async function createAdapter(createSourceRoot = true): Promise<TestFileSystemAdapter> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-folder-import-store-"));
   temporaryDirectories.push(root);
@@ -69,17 +64,14 @@ async function createAdapter(createSourceRoot = true): Promise<TestFileSystemAda
   return adapter;
 }
 
-/** Creates one current generation capability for a test store. */
 function createGeneration(isCurrent: () => boolean = () => true) {
   return {
-    /** Rejects when the test generation has been revoked. */
     assertCurrent: () => {
       if (!isCurrent()) throw new Error("stale test generation");
     },
   };
 }
 
-/** Forwards both number and bigint stat overloads from one wrapped native handle. */
 function forwardHandleStat(
   handle: KnowledgeFolderImportNodeFileHandle
 ): KnowledgeFolderImportNodeFileHandle["stat"] {
@@ -89,7 +81,6 @@ function forwardHandleStat(
   );
 }
 
-/** Creates one exact overloaded stat reader from separate number and bigint observations. */
 function createHandleStatReader(
   readNumberStat: () => Promise<KnowledgeFolderImportNodeStat>,
   readIdentityStat: () => Promise<KnowledgeFolderImportNodeIdentityStat>
@@ -100,12 +91,10 @@ function createHandleStatReader(
       : readNumberStat()) as KnowledgeFolderImportNodeFileHandle["stat"];
 }
 
-/** Creates one native-style rejection carrying only a stable Node error code. */
 function createNodeError(code: string): Error & { readonly code: string } {
   return Object.assign(new Error("simulated native rejection"), { code });
 }
 
-/** Forwards both lstat overloads while replacing one case-insensitive alias. */
 function createAliasedLstat(
   baseFileSystem: KnowledgeFolderImportNodeFileSystem,
   requestedPath: string,
@@ -119,7 +108,6 @@ function createAliasedLstat(
   }) as KnowledgeFolderImportNodeFileSystem["lstat"];
 }
 
-/** Creates one store over a real temporary Vault. */
 function createStore(
   adapter: TestFileSystemAdapter,
   runtimeLoader: () => KnowledgeFolderImportNodeRuntime = loadTestRuntime,
@@ -133,7 +121,6 @@ function createStore(
   );
 }
 
-/** Lists private publication temporaries below one native directory. */
 async function listTemporaryFiles(directory: string): Promise<string[]> {
   const entries = await fs.readdir(directory);
   return entries.filter((entry) => entry.startsWith(".") && entry.endsWith(".tmp"));
@@ -213,38 +200,37 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Resolves the requested case variant to the existing actual directory spelling. */
+
         realpath: (targetPath) =>
           targetPath === requestedParent
             ? Promise.resolve(actualParent)
             : baseRuntime.fs.realpath(targetPath),
         lstat: createAliasedLstat(baseRuntime.fs, requestedParent, actualParent),
-        /** Simulates case-insensitive EEXIST for the differently cased directory. */
+
         mkdir: async (targetPath, options) => {
           if (targetPath === requestedParent) throw createNodeError("EEXIST");
           await baseRuntime.fs.mkdir(targetPath, options);
         },
-        /** Counts any forbidden file-open boundary reached after the case mismatch. */
+
         open: async (targetPath, flags, mode) => {
           openCalls += 1;
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           return {
-            /** Counts and forwards any forbidden exact-byte write. */
             writeFile: async (data) => {
               writeCalls += 1;
               await handle.writeFile(data);
             },
-            /** Reads bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Reads number or bigint stat through the bound native handle. */
+
             stat: forwardHandleStat(handle),
-            /** Flushes the bound native handle. */
+
             sync: () => handle.sync(),
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
-        /** Counts any forbidden publication after the case mismatch. */
+
         link: async (existingPath, newPath) => {
           linkCalls += 1;
           await baseRuntime.fs.link(existingPath, newPath);
@@ -283,33 +269,32 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Returns the actual on-disk spelling for the case-insensitive target lookup. */
+
         realpath: (targetPath) =>
           targetPath === requestedTarget
             ? Promise.resolve(actualTarget)
             : baseRuntime.fs.realpath(targetPath),
         lstat: createAliasedLstat(baseRuntime.fs, requestedTarget, actualTarget),
-        /** Counts any forbidden read or private temporary open after the mismatch. */
+
         open: async (targetPath, flags, mode) => {
           openCalls += 1;
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           return {
-            /** Counts and forwards any forbidden exact-byte write. */
             writeFile: async (data) => {
               writeCalls += 1;
               await handle.writeFile(data);
             },
-            /** Reads bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Reads number or bigint stat through the bound native handle. */
+
             stat: forwardHandleStat(handle),
-            /** Flushes the bound native handle. */
+
             sync: () => handle.sync(),
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
-        /** Counts any forbidden publication after the case mismatch. */
+
         link: async (existingPath, newPath) => {
           linkCalls += 1;
           await baseRuntime.fs.link(existingPath, newPath);
@@ -345,28 +330,27 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       isSymbolicLink: () => false,
     };
     const fakeFileSystem: KnowledgeFolderImportNodeFileSystem = {
-      /** Canonicalizes only the adapter drive while preserving descendant spellings. */
       realpath: async (targetPath) =>
         targetPath === adapter.getBasePath() ? realVaultRoot : targetPath,
-      /** Observes directories created in the simulated Windows namespace. */
+
       lstat: ((targetPath: string) => {
         if (!directories.has(targetPath)) throw createNodeError("ENOENT");
         return Promise.resolve(directoryStat);
       }) as KnowledgeFolderImportNodeFileSystem["lstat"],
-      /** Creates one exact descendant directory in the simulated namespace. */
+
       mkdir: async (targetPath) => {
         if (directories.has(targetPath)) throw createNodeError("EEXIST");
         directories.add(targetPath);
       },
-      /** Rejects an unexpected file-open boundary in this parent-only test. */
+
       open: async () => {
         throw new Error("unexpected open");
       },
-      /** Rejects an unexpected publication boundary in this parent-only test. */
+
       link: async () => {
         throw new Error("unexpected link");
       },
-      /** Rejects an unexpected cleanup boundary in this parent-only test. */
+
       unlink: async () => {
         throw new Error("unexpected unlink");
       },
@@ -390,16 +374,15 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Returns lossy number identity fields while preserving exact bigint stat support. */
+
         open: async (targetPath, flags, mode) => {
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           if (flags !== "wx") return handle;
           return {
-            /** Writes exact test bytes through the bound native handle. */
             writeFile: (data) => handle.writeFile(data),
-            /** Reads exact test bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Separates intentionally unsafe number fields from exact bigint identity. */
+
             stat: createHandleStatReader(
               async () => {
                 const observed = await handle.stat();
@@ -414,9 +397,9 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
               },
               () => handle.stat({ bigint: true })
             ),
-            /** Flushes the exact private temporary. */
+
             sync: () => handle.sync(),
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
@@ -443,25 +426,24 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Simulates a native handle without bigint stat support. */
+
         open: async (targetPath, flags, mode) => {
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           if (flags !== "wx") return handle;
           return {
-            /** Writes exact test bytes through the bound native handle. */
             writeFile: (data) => handle.writeFile(data),
-            /** Reads exact test bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Rejects only the bigint identity overload. */
+
             stat: createHandleStatReader(
               () => handle.stat(),
               async () => {
                 throw new Error("private unsupported bigint detail");
               }
             ),
-            /** Flushes the exact private temporary. */
+
             sync: () => handle.sync(),
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
@@ -568,33 +550,32 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Resolves the configured case variant to the actual source-root spelling. */
+
         realpath: (targetPath) =>
           targetPath === requestedSourceRoot
             ? Promise.resolve(actualSourceRoot)
             : baseRuntime.fs.realpath(targetPath),
         lstat: createAliasedLstat(baseRuntime.fs, requestedSourceRoot, actualSourceRoot),
-        /** Counts any forbidden file-open boundary below the mismatched source root. */
+
         open: async (targetPath, flags, mode) => {
           openCalls += 1;
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           return {
-            /** Counts and forwards any forbidden exact-byte write. */
             writeFile: async (data) => {
               writeCalls += 1;
               await handle.writeFile(data);
             },
-            /** Reads bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Reads number or bigint stat through the bound native handle. */
+
             stat: forwardHandleStat(handle),
-            /** Flushes the bound native handle. */
+
             sync: () => handle.sync(),
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
-        /** Counts any forbidden publication below the mismatched source root. */
+
         link: async (existingPath, newPath) => {
           linkCalls += 1;
           await baseRuntime.fs.link(existingPath, newPath);
@@ -651,7 +632,7 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Swaps the final parent immediately before the private temp is opened. */
+
         open: async (targetPath, flags, mode) => {
           if (flags === "wx" && !swapped) {
             swapped = true;
@@ -692,21 +673,20 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Swaps the parent after the private temporary is closed but before link reproof. */
+
         open: async (targetPath, flags, mode) => {
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           if (flags !== "wx") return handle;
           temporaryName = path.basename(targetPath);
           return {
-            /** Writes exact test bytes through the bound native handle. */
             writeFile: (data) => handle.writeFile(data),
-            /** Reads exact test bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Reads exact test stat data through the bound native handle. */
+
             stat: forwardHandleStat(handle),
-            /** Flushes the exact private temporary. */
+
             sync: () => handle.sync(),
-            /** Replaces the parent namespace immediately after the exact handle closes. */
+
             close: async () => {
               await handle.close();
               if (swapped) return;
@@ -754,23 +734,22 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Wraps native handles so the exact test generation aborts after durable temp sync. */
+
         open: async (targetPath, flags, mode) => {
           const handle = await baseRuntime.fs.open(targetPath, flags, mode);
           if (flags !== "wx") return handle;
           return {
-            /** Writes exact test bytes through the bound native handle. */
             writeFile: (data) => handle.writeFile(data),
-            /** Reads exact test bytes through the bound native handle. */
+
             readFile: () => handle.readFile(),
-            /** Reads exact test stat data through the bound native handle. */
+
             stat: forwardHandleStat(handle),
-            /** Flushes exact bytes and revokes the caller before publication. */
+
             sync: async () => {
               await handle.sync();
               controller.abort();
             },
-            /** Closes the bound native handle. */
+
             close: () => handle.close(),
           } satisfies KnowledgeFolderImportNodeFileHandle;
         },
@@ -797,7 +776,7 @@ describe("ObsidianKnowledgeFolderImportFileStore", () => {
       ...baseRuntime,
       fs: {
         ...baseRuntime.fs,
-        /** Simulates one native link failure whose sensitive message must not escape. */
+
         link: async () => {
           throw new Error("D:\\secret\\personal-note.md");
         },

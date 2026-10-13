@@ -8,12 +8,6 @@ type SourceRecoveryStartupResult = Extract<
 > &
   Readonly<{ sourceRecoveryBundleIds: readonly [string] }>;
 
-/**
- * Projects exact watcher evidence into the sole pre-release lifecycle result.
- *
- * A generic pending observation is insufficient: at least one recoverable
- * missing/delete/rename issue must belong to the one configured Bundle.
- */
 export function createSourceObservationPreReleaseResult(
   result: KnowledgeProductionObservationResult,
   bundleIds: readonly string[],

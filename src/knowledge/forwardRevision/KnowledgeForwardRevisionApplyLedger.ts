@@ -26,10 +26,8 @@ import type {
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current dedicated forward-Apply ledger record version. */
 export const KNOWLEDGE_FORWARD_REVISION_APPLY_LEDGER_VERSION = 2 as const;
 
-/** Legacy content-free success record accepted only by the explicit migration helper. */
 export interface KnowledgeForwardRevisionApplyLedgerRecordV1 {
   readonly version: 1;
   readonly kind: "forward_revision_apply_ledger_record";
@@ -60,7 +58,6 @@ export interface KnowledgeForwardRevisionApplyLedgerRecordV1 {
   readonly ledgerDigest: string;
 }
 
-/** Content-free exact success record for one finalized forward update. */
 export interface KnowledgeForwardRevisionApplyLedgerRecordV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_LEDGER_VERSION;
   readonly kind: "forward_revision_apply_ledger_record";
@@ -79,7 +76,7 @@ export interface KnowledgeForwardRevisionApplyLedgerRecordV2 {
   readonly proposalDigest: string;
   readonly originalValidationReceiptDigest: string;
   readonly revalidationReceiptDigest: string;
-  /** Body-free immutable source-base snapshot retained for future lineage proof. */
+
   readonly sourceBase: Readonly<KnowledgeForwardRevisionSourceBaseV1>;
   readonly sourceBaseDigest: string;
   readonly sourceAppliedContentHash: string;
@@ -88,7 +85,7 @@ export interface KnowledgeForwardRevisionApplyLedgerRecordV2 {
   readonly manifestBeforeRevision: number;
   readonly manifestBeforeDigest: string;
   readonly forwardLedgerIdentityDigest: string;
-  /** Legacy v1 overlay identity retained only across cold migration. */
+
   readonly legacyForwardLedgerIdentityDigest: string | null;
   readonly manifestAfterRevision: number;
   readonly manifestAfterDigest: string;
@@ -96,10 +93,8 @@ export interface KnowledgeForwardRevisionApplyLedgerRecordV2 {
   readonly ledgerDigest: string;
 }
 
-/** Version-neutral canonical ledger record returned by every strict reader. */
 export type KnowledgeForwardRevisionApplyLedgerRecord = KnowledgeForwardRevisionApplyLedgerRecordV2;
 
-/** Exact finalize fields supplied only after the Manifest overlay is projected. */
 export interface CreateKnowledgeForwardRevisionApplyLedgerRecordInput {
   readonly committedJournal: unknown;
   readonly sourceBase: unknown;
@@ -108,7 +103,6 @@ export interface CreateKnowledgeForwardRevisionApplyLedgerRecordInput {
   readonly appliedAt: number;
 }
 
-/** Exact outer-migration facts needed to enrich a legacy ledger without rewriting its Manifest. */
 export interface MigrateKnowledgeForwardRevisionApplyLedgerRecordV1Input {
   readonly sourceBase: unknown;
   readonly manifestAfterDigest: string;
@@ -186,9 +180,7 @@ const MIGRATE_V1_KEYS = ["sourceBase", "manifestAfterDigest"] as const;
 const LEDGER_ID_PATTERN = /^forward-revision-apply-ledger-[a-f0-9]{64}$/;
 const MAX_OUTER_RUNTIME_BYTES = 64 * 1024 * 1024;
 
-/** Fixed value-free error for malformed forward-Apply ledger material. */
 export class KnowledgeForwardRevisionApplyLedgerValidationError extends TypeError {
-  /** Creates one sanitized error; only this module can mark it authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision Apply ledger does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionApplyLedgerValidationError";
@@ -199,14 +191,12 @@ export class KnowledgeForwardRevisionApplyLedgerValidationError extends TypeErro
 const ERROR_TOKEN = Symbol("KnowledgeForwardRevisionApplyLedgerValidationError");
 const authenticErrors = new WeakSet<KnowledgeForwardRevisionApplyLedgerValidationError>();
 
-/** Throws one authentic frozen validation failure. */
 function invalid(): never {
   const error = new KnowledgeForwardRevisionApplyLedgerValidationError(ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught value is an authentic local failure. */
 function isAuthenticError(
   value: unknown
 ): value is KnowledgeForwardRevisionApplyLedgerValidationError {
@@ -217,12 +207,10 @@ function isAuthenticError(
   );
 }
 
-/** Hashes one strict value with an explicit domain separator. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Reports whether one body-free source base fits the enclosing Runtime cap. */
 function isSourceBaseWithinOuterLimit(
   sourceBase: Readonly<KnowledgeForwardRevisionSourceBaseV1>
 ): boolean {
@@ -236,7 +224,6 @@ function isSourceBaseWithinOuterLimit(
   }
 }
 
-/** Captures one canonical Vault page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 1_024) return undefined;
   try {
@@ -247,7 +234,6 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Creates the acyclic identity payload projected into the Manifest overlay. */
 function createIdentityPayload(
   journal: Readonly<KnowledgeForwardRevisionCommittedApplyJournalV1>,
   sourceBase: Readonly<KnowledgeForwardRevisionSourceBaseV1>
@@ -280,7 +266,6 @@ function createIdentityPayload(
   });
 }
 
-/** Reconstructs the acyclic identity payload from a standalone ledger record. */
 function createIdentityPayloadFromRecord(
   record: Omit<KnowledgeForwardRevisionApplyLedgerRecordV2, "ledgerId" | "ledgerDigest">
 ): JsonValue {
@@ -312,7 +297,6 @@ function createIdentityPayloadFromRecord(
   });
 }
 
-/** Reconstructs the original v1 identity payload for migration validation. */
 function createLegacyIdentityPayloadFromRecord(
   record: Omit<KnowledgeForwardRevisionApplyLedgerRecordV1, "ledgerId" | "ledgerDigest">
 ): JsonValue {
@@ -342,7 +326,6 @@ function createLegacyIdentityPayloadFromRecord(
   });
 }
 
-/** Reconstructs the only legacy identity that a canonical migration may alias. */
 function createLegacyIdentityPayloadFromCanonicalRecord(
   record: Omit<KnowledgeForwardRevisionApplyLedgerRecordV2, "ledgerId" | "ledgerDigest">
 ): JsonValue {
@@ -372,7 +355,6 @@ function createLegacyIdentityPayloadFromCanonicalRecord(
   });
 }
 
-/** Computes the acyclic identity embedded in both overlay and final ledger. */
 export function createKnowledgeForwardRevisionApplyLedgerIdentityDigest(
   committedJournalValue: unknown,
   sourceBaseValue: unknown
@@ -389,7 +371,6 @@ export function createKnowledgeForwardRevisionApplyLedgerIdentityDigest(
   );
 }
 
-/** Creates the final record payload excluding its content-addressed id and digest. */
 function createLedgerPayload(
   journal: Readonly<KnowledgeForwardRevisionCommittedApplyJournalV1>,
   sourceBase: Readonly<KnowledgeForwardRevisionSourceBaseV1>,
@@ -432,7 +413,6 @@ function createLedgerPayload(
   });
 }
 
-/** Strictly validates one legacy record before an outer migration supplies its source base. */
 export function snapshotKnowledgeForwardRevisionApplyLedgerRecordV1(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1> {
@@ -521,7 +501,6 @@ export function snapshotKnowledgeForwardRevisionApplyLedgerRecordV1(
   }
 }
 
-/** Strictly snapshots one canonical self-contained body-free ledger record. */
 export function snapshotKnowledgeForwardRevisionApplyLedgerRecord(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionApplyLedgerRecordV2> {
@@ -639,15 +618,6 @@ export function snapshotKnowledgeForwardRevisionApplyLedgerRecord(
   }
 }
 
-/**
- * Migrates one validated v1 ledger after Runtime reconstructs its exact source base.
- *
- * The old `baseContentHash` represented both the immutable source-applied base
- * and the sole effective predecessor, so both v2 identities are initialized to
- * that value. The historical Manifest digest must be retained byte-for-byte;
- * overlay compatibility is carried by `legacyForwardLedgerIdentityDigest`
- * instead of rewriting a Manifest that may already anchor an active journal.
- */
 export function migrateKnowledgeForwardRevisionApplyLedgerRecordV1(
   value: unknown,
   inputValue: MigrateKnowledgeForwardRevisionApplyLedgerRecordV1Input
@@ -718,13 +688,6 @@ export function migrateKnowledgeForwardRevisionApplyLedgerRecordV1(
   }
 }
 
-/**
- * Derives the v2 identity while retaining the current v1 overlay as a legacy alias.
- *
- * Runtime normally needs only the full migration helper. This projection exists
- * for graph validation that must compare the new canonical identity separately
- * from the retained v1 overlay identity without mutating the Manifest.
- */
 export function createKnowledgeForwardRevisionApplyLedgerIdentityDigestForV1Migration(
   value: unknown,
   sourceBaseValue: unknown
@@ -736,7 +699,6 @@ export function createKnowledgeForwardRevisionApplyLedgerIdentityDigestForV1Migr
   }).forwardLedgerIdentityDigest;
 }
 
-/** Creates one exact finalized ledger from its committed journal and Manifest result. */
 export function createKnowledgeForwardRevisionApplyLedgerRecord(
   value: CreateKnowledgeForwardRevisionApplyLedgerRecordInput
 ): Readonly<KnowledgeForwardRevisionApplyLedgerRecordV2> {
@@ -774,7 +736,6 @@ export function createKnowledgeForwardRevisionApplyLedgerRecord(
   }
 }
 
-/** Strictly rejoins a ledger to its committed journal and source base. */
 export function snapshotKnowledgeForwardRevisionApplyLedgerRecordForCommittedJournal(
   value: unknown,
   committedJournalValue: unknown,
@@ -800,12 +761,10 @@ export function snapshotKnowledgeForwardRevisionApplyLedgerRecordForCommittedJou
   return ledger;
 }
 
-/** Computes the canonical self-consistency digest of one strict ledger. */
 export function createKnowledgeForwardRevisionApplyLedgerRecordDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionApplyLedgerRecord(value).ledgerDigest;
 }
 
-/** Parses one untrusted ledger into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionApplyLedgerRecord(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV2>> {
@@ -826,7 +785,6 @@ export function parseKnowledgeForwardRevisionApplyLedgerRecord(
   }
 }
 
-/** Validates one untrusted ledger without retaining rejected data. */
 export function validateKnowledgeForwardRevisionApplyLedgerRecord(
   value: unknown
 ): KnowledgeValidationResult {
@@ -836,7 +794,6 @@ export function validateKnowledgeForwardRevisionApplyLedgerRecord(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed parser diagnostic. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

@@ -28,13 +28,10 @@ import { validateSourceManifestForBundle } from "@/knowledge/model/validation";
 import { isPathWithinRoot, parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict runtime contract for one knowledge pipeline profile. */
 export const KNOWLEDGE_PIPELINE_PROFILE_VERSION = 1 as const;
 
-/** Current citation material contract consumed by the knowledge compiler. */
 export const KNOWLEDGE_CITATION_CONTRACT_VERSION = 1 as const;
 
-/** One parser implementation and the Vault path suffixes it exclusively owns. */
 export interface KnowledgeSourceParserProfile {
   id: string;
   version: string;
@@ -42,7 +39,6 @@ export interface KnowledgeSourceParserProfile {
   configuration: JsonValue;
 }
 
-/** Caller-projected pipeline behavior with defensive credential rejection. */
 export interface KnowledgeBundlePipelineProfile {
   version: typeof KNOWLEDGE_PIPELINE_PROFILE_VERSION;
   bundleId: string;
@@ -61,13 +57,11 @@ export interface KnowledgeBundlePipelineProfile {
   citationContractVersion: typeof KNOWLEDGE_CITATION_CONTRACT_VERSION;
 }
 
-/** Exact schema artifact captured before constructing a watch plan. */
 export interface KnowledgeSchemaSnapshot {
   path: string;
   bytes: Uint8Array;
 }
 
-/** Complete authority required to build one Bundle's watched-source projection. */
 export interface KnowledgeBundleWatchPlanInput {
   bundle: KnowledgeBundleConfig;
   manifest: SourceManifest;
@@ -75,7 +69,6 @@ export interface KnowledgeBundleWatchPlanInput {
   pipeline: KnowledgeBundlePipelineProfile;
 }
 
-/** Fields retained for every durable source without changing legacy ingest identity. */
 interface WatchedKnowledgeSourceBase {
   bundleId: string;
   sourceId: string;
@@ -84,22 +77,18 @@ interface WatchedKnowledgeSourceBase {
   pipelineFingerprint: string;
 }
 
-/** Legacy-compatible ordinary ingest source projection. */
 export type WatchedKnowledgeIngestSource = WatchedKnowledgeSourceBase;
 
-/** Managed derived source whose exact origin authorizes query writeback. */
 export interface WatchedKnowledgeQueryWritebackSource extends WatchedKnowledgeSourceBase {
   operation: "query_writeback";
   sourceOriginDigest: string;
   expectedSourceContentHash: string;
 }
 
-/** One durable Manifest source projected into the exact watcher contract. */
 export type WatchedKnowledgeSource =
   | WatchedKnowledgeIngestSource
   | WatchedKnowledgeQueryWritebackSource;
 
-/** One committed Manifest output projected without granting source or write authority. */
 export interface WatchedKnowledgeGeneratedOutput {
   bundleId: string;
   outputPath: string;
@@ -112,7 +101,6 @@ export interface WatchedKnowledgeGeneratedOutput {
   sourceIds: readonly string[];
 }
 
-/** Config-free parser routing authority retained for one durable source. */
 export interface KnowledgeSourceParserAuthority {
   bundleId: string;
   sourceId: string;
@@ -121,7 +109,6 @@ export interface KnowledgeSourceParserAuthority {
   parserProfileDigest: string;
 }
 
-/** Immutable Bundle-level authority retained without schema bytes or pipeline settings. */
 export interface KnowledgeBundleWatchAuthority {
   bundleId: string;
   bundleConfigDigest: string;
@@ -132,7 +119,6 @@ export interface KnowledgeBundleWatchAuthority {
   sourceCount: number;
 }
 
-/** Stable, value-free categories emitted when strict watch-plan construction fails. */
 export type KnowledgeSourceWatchPlanBuildErrorCode =
   | "input_invalid"
   | "bundle_invalid"
@@ -151,18 +137,15 @@ export type KnowledgeSourceWatchPlanBuildErrorCode =
   | "schema_snapshot_conflict"
   | "plan_not_authoritative";
 
-/** Reports a strict watch-plan failure without echoing paths, content, or configuration. */
 export class KnowledgeSourceWatchPlanBuildError extends TypeError {
-  /** Stable failure category safe for tests and future diagnostics. */
   readonly code: KnowledgeSourceWatchPlanBuildErrorCode;
-  /** Deterministic Bundle position after input-order-independent sorting. */
+
   readonly bundleIndex?: number;
-  /** Deterministic Manifest source position when a source caused the failure. */
+
   readonly sourceIndex?: number;
-  /** Deterministic parser position when a parser caused the failure. */
+
   readonly parserIndex?: number;
 
-  /** Creates one sanitized plan-build error. */
   constructor(
     code: KnowledgeSourceWatchPlanBuildErrorCode,
     location: { bundleIndex?: number; sourceIndex?: number; parserIndex?: number } = {}
@@ -241,26 +224,12 @@ const PLAN_CONSTRUCTOR_TOKEN = Symbol("KnowledgeSourceWatchPlan.constructor");
 const planStates = new WeakMap<object, KnowledgeSourceWatchPlanState>();
 const EMPTY_SOURCES: readonly ImmutableWatchedKnowledgeSource[] = Object.freeze([]);
 
-/**
- * Compares text by code unit so plan identity never depends on host locale.
- *
- * @param left - First text value
- * @param right - Second text value
- * @returns Negative, zero, or positive comparison result
- */
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
 }
 
-/**
- * Checks whether a runtime value is a plain record with exactly the allowed keys.
- *
- * @param value - Unknown runtime value
- * @param keys - Complete allowed-key set
- * @returns Whether the value is a strict plain record
- */
 function isExactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
@@ -277,13 +246,6 @@ function isExactRecord(value: unknown, keys: readonly string[]): value is Record
   );
 }
 
-/**
- * Reads an exact record's enumerable data properties once into a detached object.
- *
- * @param value - Unknown runtime record
- * @param keys - Complete required key set
- * @returns Frozen one-read snapshot, or undefined for accessors/shape mismatch
- */
 function snapshotExactDataRecord(
   value: unknown,
   keys: readonly string[]
@@ -302,17 +264,6 @@ function snapshotExactDataRecord(
   return Object.freeze(snapshot);
 }
 
-/**
- * Materializes one strict JSON value from data properties exactly once.
- *
- * Accessors, sparse arrays, symbol keys, non-enumerable object fields, cycles,
- * and non-JSON runtime values are rejected. The detached frozen result becomes
- * the only configuration value used by later validation and hashing.
- *
- * @param value - Unknown runtime JSON candidate
- * @param ancestors - Values on the current recursion stack
- * @returns Detached immutable JSON snapshot
- */
 function snapshotJsonValue(value: unknown, ancestors: Set<object> = new Set<object>()): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
@@ -386,44 +337,18 @@ function snapshotJsonValue(value: unknown, ancestors: Set<object> = new Set<obje
   }
 }
 
-/**
- * Checks for a canonical, non-empty identity or version string.
- *
- * @param value - Unknown runtime value
- * @returns Whether the value contains no surrounding whitespace
- */
 function isCanonicalText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/**
- * Tests two valid Vault paths for equal or ancestor overlap.
- *
- * @param left - First canonical Vault-relative path
- * @param right - Second canonical Vault-relative path
- * @returns Whether either path owns the other under Windows rules
- */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/**
- * Produces a stable key for one Bundle/source pair.
- *
- * @param bundleId - Exact Bundle identity
- * @param sourceId - Exact durable source identity
- * @returns Unambiguous in-memory lookup key
- */
 function createBundleSourceKey(bundleId: string, sourceId: string): string {
   return `${bundleId.length}:${bundleId}${sourceId.length}:${sourceId}`;
 }
 
-/**
- * Reads only a strict Bundle id data property for deterministic pre-parse sorting.
- *
- * @param value - Unknown Bundle watch input
- * @returns Exact Bundle id, or an empty invalid-input sort sentinel
- */
 function readBundleIdForSorting(value: unknown): string {
   const input = snapshotExactDataRecord(value, ["bundle", "manifest", "schema", "pipeline"]);
   if (!input) return "";
@@ -438,12 +363,6 @@ function readBundleIdForSorting(value: unknown): string {
   return bundle && typeof bundle.id === "string" ? bundle.id : "";
 }
 
-/**
- * Validates and normalizes one generic file suffix without hardcoded formats.
- *
- * @param value - Unknown suffix value
- * @returns Windows-comparison suffix, or undefined when invalid
- */
 function normalizePathSuffix(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -458,14 +377,6 @@ function normalizePathSuffix(value: unknown): string | undefined {
   return toWindowsPathKey(value);
 }
 
-/**
- * Converts one parser input into a strict, deterministically ordered profile.
- *
- * @param value - Unknown parser profile
- * @param bundleIndex - Stable owning Bundle position
- * @param parserIndex - Original parser position used only for diagnostics
- * @returns Normalized parser profile
- */
 function normalizeParserProfile(
   value: unknown,
   bundleIndex: number,
@@ -507,12 +418,6 @@ function normalizeParserProfile(
   };
 }
 
-/**
- * Rejects parser suffix ownership that could route one source to two parsers.
- *
- * @param parsers - Deterministically ordered normalized parser registry
- * @param bundleIndex - Stable owning Bundle position
- */
 function validateParserRegistry(
   parsers: readonly NormalizedParserProfile[],
   bundleIndex: number
@@ -545,16 +450,6 @@ function validateParserRegistry(
   }
 }
 
-/**
- * Strictly snapshots and validates one caller-projected Bundle pipeline profile.
- *
- * @param value - Unknown profile supplied by a production configuration adapter
- * @param bundle - Exact validated owning Bundle
- * @param bundleConfigDigest - Exact compiler-visible Bundle configuration digest
- * @param schemaContentHash - Raw hash of the exact schema snapshot
- * @param bundleIndex - Stable Bundle position used by sanitized errors
- * @returns Normalized profile and its behavior-complete digest
- */
 function normalizePipelineProfile(
   value: unknown,
   bundle: KnowledgeBundleConfig,
@@ -651,15 +546,6 @@ function normalizePipelineProfile(
   }
 }
 
-/**
- * Builds the exact generic fingerprint input for one selected parser.
- *
- * @param profile - Strict Bundle pipeline profile
- * @param parser - Parser selected for one source
- * @param bundleConfigDigest - Exact compiler-visible Bundle configuration digest
- * @param schemaContentHash - Raw exact schema content hash
- * @returns Behavior-complete fingerprint input
- */
 function createFingerprintInput(
   profile: NormalizedPipelineProfile,
   parser: NormalizedParserProfile,
@@ -685,15 +571,6 @@ function createFingerprintInput(
   };
 }
 
-/**
- * Binds a managed query origin into its pipeline identity without changing any
- * legacy ingest fingerprint.
- *
- * @param basePipelineFingerprint - Existing exact parser/compiler fingerprint
- * @param operation - Operation derived from the exact Manifest source
- * @param sourceOriginDigest - Canonical strict origin-extension identity
- * @returns Operation-bound pipeline fingerprint
- */
 function createSourcePipelineFingerprint(
   basePipelineFingerprint: string,
   operation: KnowledgeSourceCompileOperation,
@@ -712,13 +589,6 @@ function createSourcePipelineFingerprint(
   );
 }
 
-/**
- * Parses and validates one Bundle input without retaining schema bytes.
- *
- * @param value - Unknown-at-runtime Bundle plan input
- * @param bundleIndex - Stable Bundle position used by sanitized errors
- * @returns Detached validated authority inputs
- */
 function parseBundleWatchInput(value: unknown, bundleIndex: number): ParsedBundleWatchInput {
   const input = snapshotExactDataRecord(value, ["bundle", "manifest", "schema", "pipeline"]);
   if (!input) {
@@ -783,14 +653,6 @@ function parseBundleWatchInput(value: unknown, bundleIndex: number): ParsedBundl
   };
 }
 
-/**
- * Rejects cross-Bundle write boundaries that were not proven by the config source.
- *
- * Source roots may overlap so one physical source can intentionally feed several
- * Bundles. Generated Wiki roots may never overlap another Wiki or source root.
- *
- * @param inputs - Strict Bundle inputs in deterministic Bundle-id order
- */
 function validateCrossBundleBoundaries(inputs: readonly ParsedBundleWatchInput[]): void {
   for (let bundleIndex = 0; bundleIndex < inputs.length; bundleIndex += 1) {
     const current = inputs[bundleIndex].bundle;
@@ -820,15 +682,6 @@ function validateCrossBundleBoundaries(inputs: readonly ParsedBundleWatchInput[]
   }
 }
 
-/**
- * Selects exactly one parser for a durable source path.
- *
- * @param profile - Strict normalized pipeline profile
- * @param sourcePathKey - Windows-normalized source path
- * @param bundleIndex - Stable Bundle position
- * @param sourceIndex - Deterministic source position
- * @returns The one authorized parser
- */
 function selectSourceParser(
   profile: NormalizedPipelineProfile,
   sourcePathKey: string,
@@ -853,7 +706,6 @@ function selectSourceParser(
   return matches[0];
 }
 
-/** Reports whether legacy Manifest page references conflict on one Windows identity. */
 function hasGeneratedOutputCollision(manifest: SourceManifest): boolean {
   const seen = new Map<string, GeneratedOutputCollisionProbe>();
   for (const entry of manifest.entries) {
@@ -883,17 +735,6 @@ function hasGeneratedOutputCollision(manifest: SourceManifest): boolean {
   return false;
 }
 
-/**
- * Compiles committed Manifest pages into one Windows-keyed read-only projection.
- *
- * The source-compile hash remains explicit while an active strict forward
- * overlay supplies the current effective hash. Co-owners and overlay lineage
- * are validated by the shared effective-page authority leaf.
- *
- * @param input - Strict validated Bundle and Manifest input
- * @param bundleIndex - Stable Bundle position used by sanitized errors
- * @returns Deterministically ordered immutable generated outputs
- */
 function projectGeneratedOutputs(
   input: ParsedBundleWatchInput,
   bundleIndex: number
@@ -924,13 +765,6 @@ function projectGeneratedOutputs(
   }
 }
 
-/**
- * Creates immutable source and Bundle authority projections for one input.
- *
- * @param input - Strict validated Bundle watch input
- * @param bundleIndex - Stable Bundle position
- * @returns Sources and Bundle authority with no schema bytes or settings retained
- */
 function projectBundleWatchInput(
   input: ParsedBundleWatchInput,
   bundleIndex: number
@@ -1012,16 +846,6 @@ function projectBundleWatchInput(
   };
 }
 
-/**
- * Computes the config-free identity of one strict parser capability profile.
- *
- * The digest includes suffix routing because changing which paths a parser owns
- * must invalidate an execution binding even when an existing source would still
- * select the same implementation.
- *
- * @param parser - Strict parser profile or its normalized internal projection
- * @returns Domain-separated parser capability digest
- */
 export function createKnowledgeSourceParserProfileDigest(
   parser: KnowledgeSourceParserProfile
 ): string {
@@ -1063,7 +887,6 @@ export function createKnowledgeSourceParserProfileDigest(
   );
 }
 
-/** Converts immutable effective-page provenance into an exact digestable JSON value. */
 function createGeneratedOutputOriginDigestValue(
   origin: Readonly<KnowledgeEffectivePageOrigin>
 ): JsonValue {
@@ -1071,15 +894,6 @@ function createGeneratedOutputOriginDigestValue(
   return { kind: origin.kind, overlay: { ...origin.overlay } };
 }
 
-/**
- * Computes one digest over the exact immutable watch projection.
- *
- * @param sources - Deterministically ordered watched sources
- * @param generatedOutputs - Deterministically ordered committed output reverse index
- * @param parserAuthorities - Deterministically ordered parser bindings
- * @param authorities - Deterministically ordered Bundle authorities
- * @returns Domain-separated watch-plan digest
- */
 function createWatchPlanDigest(
   sources: readonly ImmutableWatchedKnowledgeSource[],
   generatedOutputs: readonly ImmutableWatchedKnowledgeGeneratedOutput[],
@@ -1100,12 +914,6 @@ function createWatchPlanDigest(
   return sha256(`knowledge-source-watch-plan-v1\n${canonicalizeJson(value)}`);
 }
 
-/**
- * Loads module-private state for one authentic plan instance.
- *
- * @param value - Unknown candidate or method receiver
- * @returns Inaccessible immutable plan state
- */
 function requirePlanState(value: unknown): KnowledgeSourceWatchPlanState {
   if (typeof value !== "object" || value === null) {
     throw new KnowledgeSourceWatchPlanBuildError("plan_not_authoritative");
@@ -1117,15 +925,7 @@ function requirePlanState(value: unknown): KnowledgeSourceWatchPlanState {
   return state;
 }
 
-/**
- * Opaque immutable watcher authority compiled from durable, strict inputs.
- *
- * A module-private construction token and WeakMap state prevent runtime direct
- * construction, reflection, or mutable container access from bypassing the
- * strict builder.
- */
 export class KnowledgeSourceWatchPlan {
-  /** Captures only detached, frozen projections created by the strict builder. */
   private constructor(
     token: symbol,
     sources: readonly ImmutableWatchedKnowledgeSource[],
@@ -1191,12 +991,6 @@ export class KnowledgeSourceWatchPlan {
     Object.freeze(this);
   }
 
-  /**
-   * Builds one all-or-nothing plan from complete Bundle authority inputs.
-   *
-   * @param values - Runtime inputs from config, Manifest, schema, and pipeline adapters
-   * @returns Opaque immutable watcher authority
-   */
   static build(values: readonly KnowledgeBundleWatchPlanInput[]): KnowledgeSourceWatchPlan {
     try {
       if (!Array.isArray(values)) {
@@ -1261,78 +1055,36 @@ export class KnowledgeSourceWatchPlan {
     }
   }
 
-  /**
-   * Rejects structurally forged values at watcher installation boundaries.
-   *
-   * @param value - Unknown candidate plan
-   */
   static assert(value: unknown): asserts value is KnowledgeSourceWatchPlan {
     requirePlanState(value);
   }
 
-  /** Returns every watched source in deterministic Windows-path order. */
   getSources(): readonly ImmutableWatchedKnowledgeSource[] {
     return requirePlanState(this).sources;
   }
 
-  /**
-   * Returns all Bundle projections for one pre-normalized Windows path key.
-   *
-   * @param pathKey - Windows-normalized source path key
-   * @returns Frozen matching source list
-   */
   getSourcesForPathKey(pathKey: string): readonly ImmutableWatchedKnowledgeSource[] {
     return requirePlanState(this).sourcesByPathKey.get(pathKey) ?? EMPTY_SOURCES;
   }
 
-  /**
-   * Resolves one exact durable Bundle/source identity.
-   *
-   * @param bundleId - Exact Bundle identity
-   * @param sourceId - Exact durable source identity
-   * @returns Immutable source projection when registered
-   */
   getSource(bundleId: string, sourceId: string): ImmutableWatchedKnowledgeSource | undefined {
     return requirePlanState(this).sourcesByIdentity.get(createBundleSourceKey(bundleId, sourceId));
   }
 
-  /** Returns every committed generated output in deterministic Windows-path order. */
   getGeneratedOutputs(): readonly ImmutableWatchedKnowledgeGeneratedOutput[] {
     return requirePlanState(this).generatedOutputs;
   }
 
-  /**
-   * Resolves one committed generated-output authority by a pre-normalized Windows key.
-   *
-   * @param pathKey - Windows-normalized output path key
-   * @returns Immutable output projection when the Manifest tracks that path
-   */
   getGeneratedOutputForPathKey(
     pathKey: string
   ): ImmutableWatchedKnowledgeGeneratedOutput | undefined {
     return requirePlanState(this).generatedOutputsByPathKey.get(pathKey);
   }
 
-  /**
-   * Returns all Manifest sources that own one committed output path.
-   *
-   * Returned values remain source authorities. The output path is never
-   * upgraded into a source path or parser input.
-   *
-   * @param pathKey - Windows-normalized output path key
-   * @returns Frozen deterministic owner list
-   */
   getSourcesForGeneratedOutputPathKey(pathKey: string): readonly ImmutableWatchedKnowledgeSource[] {
     return requirePlanState(this).generatedOutputSourcesByPathKey.get(pathKey) ?? EMPTY_SOURCES;
   }
 
-  /**
-   * Resolves the exact parser capability selected while the source fingerprint was built.
-   *
-   * @param bundleId - Exact Bundle identity
-   * @param sourceId - Exact durable source identity
-   * @returns Config-free immutable parser authority when registered
-   */
   getSourceParserAuthority(
     bundleId: string,
     sourceId: string
@@ -1342,22 +1094,14 @@ export class KnowledgeSourceWatchPlan {
     );
   }
 
-  /** Returns every Bundle authority, including Bundles with an empty Manifest. */
   getBundleAuthorities(): readonly ImmutableBundleWatchAuthority[] {
     return requirePlanState(this).authorities;
   }
 
-  /**
-   * Resolves retained authority for one exact Bundle identity.
-   *
-   * @param bundleId - Exact Bundle identity
-   * @returns Immutable authority when the Bundle belongs to this plan
-   */
   getBundleAuthority(bundleId: string): ImmutableBundleWatchAuthority | undefined {
     return requirePlanState(this).authoritiesByBundle.get(bundleId);
   }
 
-  /** Returns the canonical digest of every retained plan authority input. */
   getDigest(): string {
     return requirePlanState(this).digest;
   }
@@ -1366,12 +1110,6 @@ export class KnowledgeSourceWatchPlan {
 Object.freeze(KnowledgeSourceWatchPlan.prototype);
 Object.freeze(KnowledgeSourceWatchPlan);
 
-/**
- * Builds an opaque watch plan without exposing its private constructor.
- *
- * @param inputs - Complete all-or-nothing Bundle watch inputs
- * @returns Strict immutable watch plan
- */
 export function buildKnowledgeSourceWatchPlan(
   inputs: readonly KnowledgeBundleWatchPlanInput[]
 ): KnowledgeSourceWatchPlan {

@@ -1,55 +1,35 @@
-/** Configuration for bounded exponential retry scheduling. */
 export interface RetryPolicyConfig {
-  /** Total executions allowed, including the initial execution. */
   maxAttempts: number;
-  /** Delay after the first failed execution. */
+
   baseDelayMs: number;
-  /** Hard upper bound for a jittered automatic retry delay. */
+
   maxDelayMs: number;
-  /** Symmetric random spread around the exponential delay, from zero to one. */
+
   jitterRatio: number;
 }
 
-/** Runtime facts supplied after one ingest execution has failed. */
 export interface RetryContext {
-  /** Number of completed executions, including the execution that just failed. */
   attempt: number;
-  /** Whether the normalized failure is safe to retry. */
+
   retryable: boolean;
-  /** Explicit provider classification; never inferred from an error message or code. */
+
   rateLimited: boolean;
-  /** Optional provider-directed wait retained on a rate-limit pause. */
+
   retryAfterMs?: number;
 }
 
-/** Bounded action selected after a failed ingest execution. */
 export type RetryDecision =
   | { kind: "retry"; delayMs: number }
   | { kind: "pause"; reason: "rate_limit"; retryAfterMs?: number }
   | { kind: "fail"; reason: "not_retryable" | "attempts_exhausted" };
 
-/** Injectable source of a fractional random value in the range [0, 1). */
 export type RetryRandomSource = () => number;
 
-/** Port consumed by the ingest queue to classify a failed execution. */
 export interface RetryPolicy {
-  /**
-   * Selects an automatic retry, explicit pause, or terminal failure.
-   *
-   * @param context - Validated facts about the execution that just failed
-   * @returns Durable action for the queue state machine
-   */
   decide(context: RetryContext): RetryDecision;
 }
 
-/** Reports invalid policy configuration before the policy can schedule work. */
 export class RetryPolicyConfigurationError extends Error {
-  /**
-   * Creates a stable configuration validation error.
-   *
-   * @param field - Invalid configuration field
-   * @param detail - Human-readable validation detail
-   */
   constructor(
     public readonly field: keyof RetryPolicyConfig | "random",
     detail: string
@@ -59,14 +39,7 @@ export class RetryPolicyConfigurationError extends Error {
   }
 }
 
-/** Reports invalid runtime facts instead of producing an unsafe queue transition. */
 export class RetryPolicyContextError extends Error {
-  /**
-   * Creates a stable retry-context validation error.
-   *
-   * @param field - Invalid context field
-   * @param detail - Human-readable validation detail
-   */
   constructor(
     public readonly field: keyof RetryContext | "random",
     detail: string
@@ -76,32 +49,14 @@ export class RetryPolicyContextError extends Error {
   }
 }
 
-/**
- * Checks whether a value is a positive integer that JavaScript can represent exactly.
- *
- * @param value - Runtime value to inspect
- * @returns Whether the value is a positive safe integer
- */
 function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-/**
- * Checks whether a value is a non-negative integer that JavaScript can represent exactly.
- *
- * @param value - Runtime value to inspect
- * @returns Whether the value is a non-negative safe integer
- */
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/**
- * Validates immutable policy configuration at construction time.
- *
- * @param config - Candidate retry configuration
- * @param random - Candidate injectable random source
- */
 function validateConfiguration(config: RetryPolicyConfig, random: RetryRandomSource): void {
   if (!isPositiveSafeInteger(config.maxAttempts)) {
     throw new RetryPolicyConfigurationError("maxAttempts", "expected a positive safe integer");
@@ -131,11 +86,6 @@ function validateConfiguration(config: RetryPolicyConfig, random: RetryRandomSou
   }
 }
 
-/**
- * Validates facts originating at the execution boundary before deciding a transition.
- *
- * @param context - Candidate retry context
- */
 function validateContext(context: RetryContext): void {
   if (!isPositiveSafeInteger(context.attempt)) {
     throw new RetryPolicyContextError("attempt", "expected a positive safe integer");
@@ -160,14 +110,6 @@ function validateContext(context: RetryContext): void {
   }
 }
 
-/**
- * Computes base × 2^(attempt - 1) without overflowing or looping for a huge attempt.
- *
- * @param baseDelayMs - Delay after the first failed execution
- * @param maxDelayMs - Hard delay cap
- * @param attempt - Completed execution count
- * @returns Capped safe-integer exponential delay
- */
 function calculateCappedExponentialDelay(
   baseDelayMs: number,
   maxDelayMs: number,
@@ -187,15 +129,6 @@ function calculateCappedExponentialDelay(
   return Math.min(delayMs, maxDelayMs);
 }
 
-/**
- * Applies symmetric multiplicative jitter while retaining a hard safe-integer cap.
- *
- * @param delayMs - Capped exponential delay
- * @param maxDelayMs - Hard delay cap
- * @param jitterRatio - Fractional symmetric spread
- * @param random - Injectable random source
- * @returns Jittered integer delay between zero and maxDelayMs
- */
 function applyJitter(
   delayMs: number,
   maxDelayMs: number,
@@ -220,19 +153,12 @@ function applyJitter(
   return Math.round(boundedMs);
 }
 
-/** Pure bounded exponential retry policy with an explicitly injected random source. */
 export class ExponentialRetryPolicy implements RetryPolicy {
   private readonly maxAttempts: number;
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly jitterRatio: number;
 
-  /**
-   * Creates a validated retry policy independent of clocks, timers, and provider SDKs.
-   *
-   * @param config - Exponential retry bounds and jitter ratio
-   * @param random - Fractional random source, injected for deterministic tests
-   */
   constructor(
     config: RetryPolicyConfig,
     private readonly random: RetryRandomSource
@@ -244,17 +170,6 @@ export class ExponentialRetryPolicy implements RetryPolicy {
     this.jitterRatio = config.jitterRatio;
   }
 
-  /**
-   * Selects an automatic retry, explicit pause, or terminal failure.
-   *
-   * Non-retryable failures terminate immediately. The completed execution that
-   * reaches maxAttempts also terminates. Explicit retryable rate limits pause
-   * for queue/user coordination; only ordinary retryable failures receive an
-   * automatically scheduled jittered delay.
-   *
-   * @param context - Facts about the execution that just failed
-   * @returns Durable action for the queue state machine
-   */
   decide(context: RetryContext): RetryDecision {
     validateContext(context);
 

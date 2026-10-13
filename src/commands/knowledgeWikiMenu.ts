@@ -3,16 +3,13 @@ import { snapshotKnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/w
 import type { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 import { TFile, type Menu, type TAbstractFile } from "obsidian";
 
-/** Identity-only request emitted by the menu without retaining Runtime authority. */
 export type KnowledgeWikiInspectionMenuRequest = KnowledgeAppliedWikiPageInspectionRequest;
 
-/** Dependencies retained by the synchronous applied-Wiki file-menu hook. */
 export interface KnowledgeWikiMenuInput {
   readonly index: Pick<KnowledgeAppliedWikiPathIndex, "lookupExact">;
   readonly openInspector: (request: Readonly<KnowledgeWikiInspectionMenuRequest>) => void;
 }
 
-/** Snapshots one unambiguous exact advisory row without invoking row accessors. */
 function hasOneExactAdvisoryRow(value: unknown, pagePath: string): boolean {
   try {
     if (!Array.isArray(value)) return false;
@@ -60,17 +57,6 @@ function hasOneExactAdvisoryRow(value: unknown, pagePath: string): boolean {
   }
 }
 
-/**
- * Adds an inspector action for one exact current applied Knowledge Wiki page.
- *
- * Case aliases, folders, stale historical pages, and unrelated Vault paths
- * never produce an action. The click emits only the canonical page identity;
- * the asynchronous inspector must re-prove current applied state.
- *
- * @param menu - Current Obsidian file menu
- * @param file - File or folder whose menu is being constructed
- * @param input - Exact-only discovery index and inspector-opening callback
- */
 export function registerKnowledgeWikiMenu(
   menu: Menu,
   file: TAbstractFile,

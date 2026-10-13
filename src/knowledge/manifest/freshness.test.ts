@@ -9,7 +9,6 @@ import type { SourceCompileSnapshot } from "@/knowledge/model/types";
 const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 
-/** Creates a valid successful snapshot for freshness tests. */
 function createSnapshot(): SourceCompileSnapshot {
   return {
     sourceContentHash: SOURCE_HASH,
@@ -23,7 +22,6 @@ function createSnapshot(): SourceCompileSnapshot {
   };
 }
 
-/** Creates one Runtime-verifiable no-file success marker for freshness tests. */
 function createNoChangesMarker(
   baseGeneratedPages: NoChangesManifestCommitMarker["baseGeneratedPages"] = []
 ): NoChangesManifestCommitMarker {

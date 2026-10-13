@@ -12,9 +12,8 @@ import {
   ContextSelectedTextBadge,
 } from "@/components/chat-components/ContextBadges";
 import { SelectedTextContext, WebTabContext } from "@/types/message";
-import { useChainType } from "@/aiParams";
 import { useApp } from "@/context";
-import { isPlusChain, openFileInWorkspace } from "@/utils";
+import { openFileInWorkspace } from "@/utils";
 import { mergeWebTabContexts } from "@/utils/urlNormalization";
 import { AtMentionTypeahead } from "./AtMentionTypeahead";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -38,11 +37,6 @@ interface ChatContextMenuProps {
   ) => void;
   lexicalEditorRef?: React.RefObject<{ focus: () => void }>;
   hideAddContextButton?: boolean;
-  /**
-   * True in Agent Mode. Collapses the row entirely when there are no badges —
-   * Agent Mode has no "@ Add context" button here, so an empty row would just
-   * push the editor down (#205).
-   */
   isAgentMode?: boolean;
 }
 
@@ -63,24 +57,19 @@ export const ChatContextMenu: React.FC<ChatContextMenuProps> = ({
   isAgentMode = false,
 }) => {
   const app = useApp();
-  const [currentChain] = useChainType();
   const [showTypeahead, setShowTypeahead] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const isCopilotPlus = isPlusChain(currentChain);
 
   const handleTypeaheadClose = () => {
     setShowTypeahead(false);
   };
 
-  // Simple wrapper that adds focus management to the ContextControl handler
   const handleTypeaheadSelect = (
     category: string,
     data: TFile | string | TFolder | WebTabContext
   ) => {
-    // Delegate to ContextControl handler
     onTypeaheadSelect(category, data);
 
-    // Return focus to the editor after selection
     window.setTimeout(() => {
       if (lexicalEditorRef?.current) {
         lexicalEditorRef.current.focus();
@@ -88,9 +77,6 @@ export const ChatContextMenu: React.FC<ChatContextMenuProps> = ({
     }, 100);
   };
 
-  /**
-   * Handles clicking on a badge to open the file in a new tab (or focus existing tab)
-   */
   const handleBadgeClick = (file: TFile) => {
     void openFileInWorkspace(app, file);
   };
@@ -102,17 +88,12 @@ export const ChatContextMenu: React.FC<ChatContextMenuProps> = ({
 
   const uniqueUrls = React.useMemo(() => Array.from(new Set(contextUrls)), [contextUrls]);
 
-  // Defensive dedupe for web tabs (by URL) using shared normalization policy
   const uniqueWebTabs = React.useMemo(() => mergeWebTabContexts(contextWebTabs), [contextWebTabs]);
-
-  // Active web tabs retain selection precedence.
-  const hasAnySelection = selectedTextContexts.length > 0;
 
   // Removing an excerpt must not change whether the full note is attached.
   // https://github.com/Brevilabs/obsidian-copilot-private/issues/465
   const activeNoteVisible = includeActiveNote && Boolean(currentActiveFile);
-  const activeWebTabVisible =
-    includeActiveWebTab && !hasAnySelection && Boolean(activeWebTab) && isDesktopRuntime();
+  const activeWebTabVisible = includeActiveWebTab && Boolean(activeWebTab) && isDesktopRuntime();
 
   const hasContext =
     uniqueNotes.length > 0 ||
@@ -123,9 +104,6 @@ export const ChatContextMenu: React.FC<ChatContextMenuProps> = ({
     activeNoteVisible ||
     activeWebTabVisible;
 
-  // Agent Mode only: with no "@ Add context" button and the status trigger
-  // living outside this row, an empty row is pure dead height above the
-  // editor — drop it. Legacy Chat must keep rendering (the "@" button below).
   if (isAgentMode && !hasContext) {
     return null;
   }
@@ -153,7 +131,6 @@ export const ChatContextMenu: React.FC<ChatContextMenuProps> = ({
                 isOpen={showTypeahead}
                 onClose={handleTypeaheadClose}
                 onSelect={handleTypeaheadSelect}
-                isCopilotPlus={isCopilotPlus}
                 currentActiveFile={currentActiveFile}
               />
             </PopoverContent>

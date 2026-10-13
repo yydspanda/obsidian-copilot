@@ -11,14 +11,6 @@ import type {
 } from "@/knowledge/review/ReviewDecision";
 import type { KnowledgeReviewDraftState } from "@/knowledge/ui/KnowledgeReviewDraftStore";
 
-/**
- * Creates one changed review block for a focused UI fixture.
- *
- * @param blockId - Opaque block identity
- * @param before - Exact original text
- * @param after - Exact modified text
- * @returns Detached changed block
- */
 function createChangedBlock(blockId: string, before: string, after: string): KnowledgeReviewBlock {
   return {
     blockId,
@@ -30,12 +22,6 @@ function createChangedBlock(blockId: string, before: string, after: string): Kno
   };
 }
 
-/**
- * Creates one review file with safe defaults.
- *
- * @param overrides - Fields that distinguish the test case
- * @returns Complete review file fixture
- */
 function createReviewFile(overrides: Partial<KnowledgeReviewFile> = {}): KnowledgeReviewFile {
   return {
     changeId: "change-1",
@@ -52,13 +38,6 @@ function createReviewFile(overrides: Partial<KnowledgeReviewFile> = {}): Knowled
   };
 }
 
-/**
- * Creates one immutable review plan with deterministic identities.
- *
- * @param files - File projections shown in the panel
- * @param snapshotToken - Content-addressed snapshot identity
- * @returns Complete review-plan fixture
- */
 function createReviewPlan(
   files: KnowledgeReviewFile[],
   snapshotToken = "snapshot-1",
@@ -79,7 +58,6 @@ function createReviewPlan(
   };
 }
 
-/** Creates one safe proposal-level evidence summary. */
 function createEvidence(
   overrides: Partial<KnowledgeReviewEvidenceSummary> = {}
 ): KnowledgeReviewEvidenceSummary {
@@ -99,12 +77,6 @@ function createEvidence(
   };
 }
 
-/**
- * Finds a named button with its concrete disabled-state type.
- *
- * @param name - Accessible button name
- * @returns Matching HTML button
- */
 function getButton(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name });
 }

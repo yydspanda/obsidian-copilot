@@ -1,12 +1,16 @@
 import { Markdown } from "@/components/Markdown";
 import { FullBleedReactModal } from "@/components/modals/ReactModal";
-import { formatReleaseNotesForObsidian } from "@/components/release-update/releaseNotes";
+import {
+  formatReleaseNotesForObsidian,
+  requestReleaseNotesSince,
+} from "@/components/release-update/releaseNotes";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { AlertTriangle, ArrowUpCircle, ExternalLink, LoaderCircle } from "lucide-react";
 import { App } from "obsidian";
 import * as React from "react";
 
-export const GITHUB_RELEASES_URL = "https://github.com/logancyang/obsidian-copilot/releases/latest";
+const GITHUB_RELEASES_URL = "https://github.com/logancyang/obsidian-copilot/releases/latest";
 
 const UPDATE_PLUGIN_URL = "obsidian://show-plugin?id=copilot";
 
@@ -20,7 +24,7 @@ export type ReleaseNotesDialogState =
   | { status: "loading" }
   | { status: "error" }
   | {
-      release: ReleaseNotes;
+      releases: ReleaseNotes[];
       status: "ready";
     };
 
@@ -29,17 +33,11 @@ export interface ReleaseNotesDialogContentProps {
   state: ReleaseNotesDialogState;
 }
 
-/**
- * Presents release content and update actions inside an Obsidian-hosted modal.
- * Network loading and modal lifecycle stay outside this prop-driven boundary.
- */
 export function ReleaseNotesDialogContent({
   onClose,
   state,
 }: ReleaseNotesDialogContentProps): React.ReactElement {
-  // The shell and update action remain usable while notes load, so a slow
-  // image or API response cannot trap the user. https://github.com/Brevilabs/obsidian-copilot-private/issues/317
-  const releaseUrl = state.status === "ready" ? state.release.htmlUrl : GITHUB_RELEASES_URL;
+  const releaseUrl = state.status === "ready" ? state.releases[0].htmlUrl : GITHUB_RELEASES_URL;
 
   return (
     <div className="tw-flex tw-h-[min(80vh,46rem)] tw-max-h-[calc(100vh-2rem)] tw-flex-col tw-overflow-hidden tw-text-normal">
@@ -52,11 +50,15 @@ export function ReleaseNotesDialogContent({
 
       <div className="tw-min-h-0 tw-flex-1 tw-overflow-y-auto tw-overscroll-contain tw-px-5 tw-py-4">
         {state.status === "ready" ? (
-          <Markdown
-            onRendered={formatReleaseNotesForObsidian}
-            sourcePath=""
-            text={state.release.body}
-          />
+          state.releases.map((release, index) => (
+            <Markdown
+              className={cn(index > 0 && "copilot-divider-t tw-mt-6 tw-pt-2")}
+              key={release.version}
+              onRendered={formatReleaseNotesForObsidian}
+              sourcePath=""
+              text={release.body}
+            />
+          ))
         ) : state.status === "error" ? (
           <div
             aria-label="Couldn’t load release notes"
@@ -106,24 +108,42 @@ export function ReleaseNotesDialogContent({
   );
 }
 
-/** Owns the Obsidian modal lifecycle for one already-loaded Copilot release. */
-export class ReleaseNotesModal extends FullBleedReactModal {
-  private readonly release: ReleaseNotes;
+interface SkippedReleaseNotesProps {
+  currentVersion: string;
+  latest: ReleaseNotes;
+  onClose: () => void;
+}
 
-  /**
-   * @param app - Obsidian app that owns the modal window.
-   * @param release - Release record to render without another network request.
-   */
-  constructor(app: App, release: ReleaseNotes) {
+function SkippedReleaseNotes({
+  currentVersion,
+  latest,
+  onClose,
+}: SkippedReleaseNotesProps): React.ReactElement {
+  const [releases, setReleases] = React.useState<ReleaseNotes[]>(() => [latest]);
+
+  React.useEffect(() => {
+    void requestReleaseNotesSince(currentVersion, latest).then(setReleases);
+  }, [currentVersion, latest]);
+
+  return <ReleaseNotesDialogContent onClose={onClose} state={{ status: "ready", releases }} />;
+}
+
+export class ReleaseNotesModal extends FullBleedReactModal {
+  private readonly currentVersion: string;
+  private readonly latest: ReleaseNotes;
+
+  constructor(app: App, latest: ReleaseNotes, currentVersion: string) {
     super(app);
-    this.release = release;
+    this.latest = latest;
+    this.currentVersion = currentVersion;
   }
 
   protected renderContent(close: () => void): React.ReactElement {
     return (
-      <ReleaseNotesDialogContent
+      <SkippedReleaseNotes
+        currentVersion={this.currentVersion}
+        latest={this.latest}
         onClose={close}
-        state={{ status: "ready", release: this.release }}
       />
     );
   }

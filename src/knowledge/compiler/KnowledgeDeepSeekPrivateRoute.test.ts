@@ -67,7 +67,6 @@ const SOURCE_BYTES = new TextEncoder().encode("# Source\nExact source text\n");
 const SCHEMA_BYTES = new TextEncoder().encode("# Knowledge schema\n");
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_BYTES);
 
-/** Creates the project-owned Bundle used by the authentic route harness. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   const config: KnowledgeBundleConfig = {
     version: 1,
@@ -80,7 +79,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   return { projectId: "project-personal", config };
 }
 
-/** Creates one durable source Manifest. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -97,7 +95,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates the byte parser profile shared by planning and execution. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -107,7 +104,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates one DeepSeek-compatible complete pipeline profile. */
 function createPipelineProfile(
   configurationOverrides: Record<string, JsonValue> = {},
   profileOverrides: Partial<KnowledgeBundlePipelineProfile> = {}
@@ -150,7 +146,6 @@ function createPipelineProfile(
   };
 }
 
-/** Creates an exact-reader response with detached bytes. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
@@ -169,7 +164,6 @@ interface AuthorizedRouteAttemptOptions {
   onSettled?: (snapshot: IngestQueueSnapshot) => void | Promise<void>;
 }
 
-/** Creates authentic Queue, Runtime, workflow, parser, and preparation authority. */
 async function runAuthorizedRouteAttempt(
   profile: KnowledgeBundlePipelineProfile,
   handler: (value: AuthorizedRouteHarnessContext) => Promise<void>,
@@ -263,7 +257,6 @@ async function runAuthorizedRouteAttempt(
   return result;
 }
 
-/** Creates the valid compiler input exposed by an authorized preparation. */
 function createCompileInput(
   preparation: KnowledgeAuthorizedSourcePreparation
 ): KnowledgeCompileInput {
@@ -298,7 +291,6 @@ function createCompileInput(
   };
 }
 
-/** Creates deterministic no-write compiler dependencies around one model adapter. */
 function createCompiler(
   model: ReturnType<typeof bindKnowledgeCompilerModelAdapter>
 ): KnowledgeCompiler {
@@ -322,7 +314,6 @@ function createCompiler(
   });
 }
 
-/** Reads the deterministic stage and request from a DeepSeek request body. */
 function parseWirePrompt(body: string): {
   stage: "generation";
   request: Record<string, unknown>;
@@ -338,7 +329,6 @@ function parseWirePrompt(body: string): {
   return { ...input, wire };
 }
 
-/** Creates strict model content for either compiler stage. */
 function createModelContent(_stage: "generation", request: Record<string, unknown>): string {
   const targets = request.targets as { targetId: string }[];
   return JSON.stringify({
@@ -368,7 +358,6 @@ interface ResponseOverrides {
   chunkSize?: number;
 }
 
-/** Creates a streamed native-fetch-compatible DeepSeek response. */
 function createResponse(
   content: string,
   overrides: ResponseOverrides = {}
@@ -422,7 +411,6 @@ function createResponse(
   };
 }
 
-/** Expects one stable factory-level transport failure. */
 function expectTransportError(
   action: () => unknown,
   code: KnowledgeDeepSeekTransportError["code"]

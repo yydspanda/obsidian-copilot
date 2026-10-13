@@ -40,7 +40,6 @@ const BUNDLE: KnowledgeBundleConfig = {
   reviewMode: "always",
 };
 
-/** Creates one exact citation bound to the current Source artifact hash. */
 function createCitation(): ClaimCitation {
   const excerpt = "Source evidence";
   return {
@@ -60,7 +59,6 @@ function createCitation(): ClaimCitation {
   };
 }
 
-/** Creates one exact current applied page provenance. */
 function createPage(
   citation: ClaimCitation = createCitation(),
   overrides: Partial<KnowledgeRuntimeAppliedPageProvenance> = {}
@@ -91,7 +89,6 @@ function createPage(
   };
 }
 
-/** Creates one strict atomic Runtime projection. */
 function createSnapshot(
   runtimeRevision = 1,
   pages: readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[] = [createPage()]
@@ -104,7 +101,6 @@ function createSnapshot(
   };
 }
 
-/** Executes one visitor callback with the exact configured Vault observation. */
 class RecordingVisitor implements ObsidianKnowledgeCompilerTargetVisitPort {
   readonly options: Readonly<ObsidianKnowledgeCompilerTargetVisitOptions>[] = [];
   readonly requests: Readonly<CompilerTargetRequest>[][] = [];
@@ -130,12 +126,9 @@ class RecordingVisitor implements ObsidianKnowledgeCompilerTargetVisitPort {
   }
 }
 
-/** Visitor fixture that rejects with one caller-selected boundary failure. */
 class RejectingVisitor implements ObsidianKnowledgeCompilerTargetVisitPort {
-  /** Captures the exact rejection value without inspecting it. */
   constructor(private readonly failure: Error) {}
 
-  /** Rejects before publishing any Vault observation. */
   async visit(
     _targets: readonly CompilerTargetRequest[],
     _signal: AbortSignal,
@@ -154,7 +147,6 @@ interface Harness {
   snapshots: KnowledgeRuntimeAppliedProvenanceSnapshot[];
 }
 
-/** Creates a coordinator with mutable exact Runtime snapshots for consistency tests. */
 function createHarness(
   snapshots: KnowledgeRuntimeAppliedProvenanceSnapshot[] = [createSnapshot()]
 ): Harness {
@@ -173,7 +165,6 @@ function createHarness(
   return { coordinator, visitor, runtimeReads, navigate, snapshots };
 }
 
-/** Creates an inspector whose Vault boundary rejects with one selected value. */
 function createRejectingCoordinator(
   failure: Error
 ): KnowledgeProductionAppliedWikiPageInspectorCoordinator {
@@ -185,7 +176,6 @@ function createRejectingCoordinator(
   });
 }
 
-/** Returns the authentic first evidence ref from one inspection session. */
 function evidenceRef(session: KnowledgeAppliedWikiPageInspectionSession): string {
   return session.sources[0].evidence[0].evidenceRef;
 }

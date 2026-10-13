@@ -29,16 +29,11 @@ function parseCodexConfig(value: string | undefined): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-/**
- * Current codex-acp versions ignore server-mode argv and consume Codex config
- * from this JSON env var. User config can customize product defaults, while
- * plugin-owned fields win so inherited values cannot silently remove the
- * prompt and safety defaults Agent Mode requires.
- */
 export function mergeCodexConfigEnv(
   existing: string | undefined,
   developerInstructions: string
 ): string {
+  const userConfig = parseCodexConfig(existing);
   const managed: CodexManagedConfig = {
     developer_instructions: developerInstructions,
     approval_policy: "on-request",
@@ -47,7 +42,13 @@ export function mergeCodexConfigEnv(
   };
   return JSON.stringify({
     ...CODEX_DEFAULT_CONFIG,
-    ...parseCodexConfig(existing),
+    ...userConfig,
+    // Codex gates structured questions in Default separately from permission modes.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/551
+    features: {
+      default_mode_request_user_input: true,
+      ...(userConfig.features as Record<string, unknown> | undefined),
+    },
     ...managed,
   });
 }

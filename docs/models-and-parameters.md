@@ -44,6 +44,11 @@ New BYOK chat models start enabled for both Quick Chat and opencode. You can
 turn either copy off without affecting the other. Models newly reported by an
 agent may also appear switched off until you enable them.
 
+For Copilot-hosted models in opencode, the effort picker shows the levels that
+model supports. BYOK model choices follow opencode's model catalog; a custom
+endpoint with no published levels uses low, medium, and high when its model is
+marked as reasoning-capable.
+
 ## Choose a model while chatting
 
 Locked Copilot models link to the pricing page rather than selecting a model.
@@ -55,6 +60,11 @@ In **Agent Chat**, the model picker is grouped by agent. Before the first messag
 an empty session, choosing a model from another installed agent switches that
 session to the other agent. After the conversation has started, the picker
 stays with the current agent.
+
+In the **opencode** group, models from a custom provider appear as
+`Provider name/Model name`, using the display name you gave the provider, so
+the same model from two endpoints stays distinguishable. If the provider's
+display name is blank, the picker shows the provider's internal ID instead.
 
 A model or effort picked beside the message box applies to that chat; it does
 not replace the saved **Default model** or **Default effort**. Saved agent

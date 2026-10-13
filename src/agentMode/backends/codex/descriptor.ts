@@ -1,3 +1,5 @@
+import { prefetchConfigEfforts } from "@/agentMode/backends/shared/prefetchConfigEfforts";
+import { Notice } from "obsidian";
 import { resolveEffort } from "@/lib/model-effort";
 import { codexAuth } from "./codexAuth";
 import type CopilotPlugin from "@/main";
@@ -30,10 +32,11 @@ import type {
 import { formatCodexModelId, parseCodexModelId } from "@/utils/codexModelId";
 import { codexAcpSearchDirs, resolveCodexAcpBinary } from "./codexBinaryResolver";
 import { CodexBinaryManager } from "./CodexBinaryManager";
-import { CODEX_BUNDLE_VERSION } from "./codexArchive";
+import { CODEX_PINNED_VERSION } from "./codexArchive";
 import { CODEX_BINARY_NAME } from "./cliSetup";
-import { buildCodexModeMapping } from "./codexModeMapping";
-import { isSupportedCodexAcpPath, resolveSupportedCodexAcpPackage } from "./codexVersion";
+import { buildCodexModeMapping, buildCodexModeState } from "./codexModeMapping";
+import { isSupportedCodexAcpPath, inspectCodexAcpPackage, CODEX_MIN_VERSION } from "./codexVersion";
+import { classifyBinaryInstall } from "@/agentMode/backends/shared/binaryCompatibility";
 
 const codexBinaryManager = new CodexBinaryManager();
 
@@ -75,35 +78,17 @@ export function codexAcpDetectionSearchDirs(): string[] {
   return codexAcpSearchDirs(codexAcpResolverEnv());
 }
 
-/**
- * Wire-format codec for Codex — see `codexModelId` for the format. No provider
- * segment (Codex's catalog isn't routed through Copilot BYOK keys, so
- * `decode().provider` stays `null`).
- */
 const codexWire: ModelWireCodec = {
   encode: (selection: ModelSelection) =>
     formatCodexModelId(selection.baseModelId, selection.effort),
   decode: (wireId: string) => ({ selection: parseCodexModelId(wireId), provider: null }),
 };
 
-/**
- * Codex backend — wraps the configured `codex-acp`, which inherits auth from
- * the bundled Codex CLI login. Auth is adapter-owned (no Copilot-side keys),
- * so the candidate models come entirely from the CLI's live `availableModels`
- * (active session or preloader cache); curation is the model-management
- * `backends.codex.enabledModels` set surfaced via `getEnabledModelEntries`.
- *
- * codex-acp advertises one model per (base × effort) combination, so effort is
- * read back off the wire id (`codexModelId`) and the variants collapse into a
- * single picker row plus a sibling effort dropdown. The advertised set is the
- * only source of effort levels — Copilot enumerates none of its own.
- */
 export const CodexBackendDescriptor: BackendDescriptor = {
   id: "codex",
   auth: codexAuth,
   displayName: "Codex",
   Icon: CodexLogo,
-  // Cloud agent — flagged with a cloud-egress warning while Self-Host Mode is on.
   selfHostable: false,
   routesCopilotModels: false,
   setupDescription:
@@ -113,25 +98,19 @@ export const CodexBackendDescriptor: BackendDescriptor = {
   restartOnManagedSkillsChange: false,
   restartOnProviderConfigChange: false,
   restartOnSystemPromptChange: true,
-  // codex names a session after the raw first prompt (which leaks the injected
-  // context envelope), so the session derives the tab title client-side instead.
   summarizesSessionTitle: false,
+  // Codex ends its turn on revise_plan without acting on the deny message.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/41
+  planFeedbackDelivery: "next_turn",
   wire: codexWire,
   showModelDescriptions: true,
 
   getEnabledModelEntries(settings: CopilotSettings): EnabledModelEntry[] {
-    // All Codex models are agent-origin.
     return [
       ...agentOriginEnabledModelEntries(settings, "codex", (wireId) => codexWire.decode(wireId)),
     ];
   },
 
-  /**
-   * codex-acp reports inconsistently-cased names (`GPT-5.5` but also
-   * `gpt-5.4`, `gpt-5.3-codex`). Uppercase only the anchored `gpt` prefix so
-   * the column reads consistently — no family/token guessing, so the wire
-   * ids and any mid-string tokens are left untouched.
-   */
   normalizeModelName(name: string): string {
     return name.replace(/^gpt/i, "GPT");
   },
@@ -156,22 +135,24 @@ export const CodexBackendDescriptor: BackendDescriptor = {
     const configured = settings.agentMode?.backends?.codex;
     if (!configured?.binaryPath) return { kind: "absent" };
     try {
-      const installed = resolveSupportedCodexAcpPackage(configured.binaryPath);
-      const source = configured.binarySource ?? "custom";
-      // A supported older bundle stays selectable for the managed Update action.
-      // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
-      if (source === "managed" && installed.version !== CODEX_BUNDLE_VERSION) {
-        return {
-          kind: "incompatible",
-          source,
-          currentVersion: installed.version,
-          minVersion: CODEX_BUNDLE_VERSION,
-          message: `Codex adapter ${installed.version} does not match this Copilot release (${CODEX_BUNDLE_VERSION}).`,
-        };
-      }
-      return { kind: "ready", source };
-    } catch {
-      return { kind: "absent" };
+      const installed = inspectCodexAcpPackage(configured.binaryPath);
+      return classifyBinaryInstall(
+        {
+          kind: "installed",
+          version: installed.runtimeVersion,
+          source: configured.binarySource ?? "custom",
+        },
+        CODEX_MIN_VERSION,
+        "Codex"
+      );
+    } catch (error) {
+      return classifyBinaryInstall(
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? { kind: "absent" }
+          : { kind: "error", message: error instanceof Error ? error.message : String(error) },
+        CODEX_MIN_VERSION,
+        "Codex"
+      );
     }
   },
 
@@ -199,9 +180,10 @@ export const CodexBackendDescriptor: BackendDescriptor = {
   },
 
   async onPluginLoad(): Promise<void> {
-    // A new vault or plugin lifecycle must not inherit a previous installation failure.
-    // https://github.com/Brevilabs/obsidian-copilot-private/issues/368
     codexBinaryManager.forgetSettledError();
+    await codexBinaryManager.autoUpgrade(CODEX_PINNED_VERSION, CODEX_MIN_VERSION, (message) => {
+      new Notice(message);
+    });
   },
 
   managedInstall: {
@@ -213,28 +195,38 @@ export const CodexBackendDescriptor: BackendDescriptor = {
   },
 
   async applySelection(session: ModelSelectionSession, selection: ModelSelection): Promise<void> {
-    const options = session
-      .getState()
-      ?.model?.availableModels.find(
-        (model) => model.baseModelId === selection.baseModelId
-      )?.effortOptions;
-    await session.applyModelWireId(
-      codexWire.encode({ ...selection, effort: resolveEffort(selection.effort, options) })
+    const currentBase = session.getState()?.model?.current.baseModelId;
+    // Model options accept bare ids; effort belongs to the selected model's refreshed
+    // config catalog. https://github.com/Brevilabs/obsidian-copilot-private/issues/550
+    if (currentBase !== selection.baseModelId) {
+      await session.applyModelWireId(selection.baseModelId);
+    }
+    const model = session.getState()?.model;
+    const apply = model?.apply;
+    const effort = resolveEffort(
+      selection.effort,
+      model?.availableModels.find((entry) => entry.baseModelId === selection.baseModelId)
+        ?.effortOptions
     );
+    if (apply?.kind === "setConfigOption" && apply.effortConfigId && effort !== null) {
+      await session.setConfigOption(apply.effortConfigId, effort);
+    }
   },
 
+  prefetchEffortCatalog: prefetchConfigEfforts,
+
   createBackendProcess(args): BackendProcess {
-    // Codex sees managed skills only via the `.agents/skills/<name>`
-    // symlink. The per-agent toggle drives whether the symlink exists; no
-    // deny synthesis is needed because Codex does not cross-discover from
-    // `.claude/skills/` or `.opencode/skills/`.
     return simpleBinaryBackendProcess(args, new CodexBackend(args.clientVersion));
   },
 
   SettingsPanel: CodexSettingsPanel,
 
-  getModeMapping(modeState) {
-    return buildCodexModeMapping(modeState);
+  getModeMapping() {
+    return buildCodexModeMapping();
+  },
+
+  getModeState(modeState, configOptions) {
+    return buildCodexModeState(modeState, configOptions);
   },
 };
 

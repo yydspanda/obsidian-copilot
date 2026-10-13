@@ -37,7 +37,6 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 
-/** Returns the strict Bundle used by the Review evidence fixtures. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -49,7 +48,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one pending grounded proposal with a single visible evidence reference. */
 function createProposal(): KnowledgeChangeSet {
   const afterContent = "# Page\n";
   return {
@@ -92,7 +90,6 @@ function createProposal(): KnowledgeChangeSet {
   };
 }
 
-/** Creates the Manifest commit plan retained beside one pending proposal. */
 function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   return {
     version: 1,
@@ -117,7 +114,6 @@ function createManifestPlan(proposal: KnowledgeChangeSet): ManifestCommitPlan {
   };
 }
 
-/** Creates one exact Queue-anchored pending Review record. */
 function createRecord(proposal = createProposal()): PendingChangeSetReviewRecord {
   const manifestCommitPlan = createManifestPlan(proposal);
   return {
@@ -140,7 +136,6 @@ function createRecord(proposal = createProposal()): PendingChangeSetReviewRecord
   };
 }
 
-/** Creates one atomic Runtime projection containing the pending proposal. */
 function createProjection(
   record: PendingChangeSetReviewRecord
 ): KnowledgeRuntimeStudioBundleSnapshot {
@@ -198,30 +193,24 @@ function createProjection(
   return { bundleId: BUNDLE_ID, runtimeRevision: 3, queue, review };
 }
 
-/** Runtime facade that records every fresh consistency-sandwich read. */
 class FixedRuntime implements KnowledgeStudioRuntimePort {
   reads = 0;
 
-  /** Captures one immutable projection returned on every read. */
   constructor(private readonly projection: KnowledgeRuntimeStudioBundleSnapshot) {}
 
-  /** Returns the exact current projection. */
   async readStudioBundle(): Promise<KnowledgeRuntimeStudioBundleSnapshot> {
     this.reads += 1;
     return this.projection;
   }
 
-  /** Provides no external hints for a single-operation coordinator test. */
   subscribeStudioBundle(): () => void {
     return () => undefined;
   }
 }
 
-/** Resolver that records and returns the current missing create target. */
 class MissingTargetResolver implements CompilerTargetResolver {
   calls: readonly CompilerTargetRequest[][] = [];
 
-  /** Resolves every requested create target as exactly absent. */
   async resolve(requests: readonly CompilerTargetRequest[]): Promise<unknown> {
     this.calls = [...this.calls, [...requests]];
     return requests.map((request) => ({
@@ -232,7 +221,6 @@ class MissingTargetResolver implements CompilerTargetResolver {
   }
 }
 
-/** Promise whose completion is explicitly controlled by a test. */
 function createDeferred<T>(): {
   promise: Promise<T>;
   resolve(value: T): void;
@@ -245,7 +233,6 @@ function createDeferred<T>(): {
 }
 
 describe("KnowledgeProductionReviewEvidenceCoordinator", () => {
-  /** Builds one current request from the same deterministic Review projection. */
   function createRequest(record: PendingChangeSetReviewRecord) {
     const plan = createKnowledgeReviewPlan(record.proposal, [
       { changeId: "change-1", kind: "missing" },
@@ -360,7 +347,7 @@ describe("KnowledgeProductionReviewEvidenceCoordinator", () => {
 
   it("recognizes serialized own-data cancellation without trusting hostile names", async () => {
     const record = createRecord();
-    /** Creates a coordinator whose final navigation boundary rejects with one value. */
+
     const createCoordinator = (failure: Error): KnowledgeProductionReviewEvidenceCoordinator =>
       new KnowledgeProductionReviewEvidenceCoordinator({
         runtime: new FixedRuntime(createProjection(record)),

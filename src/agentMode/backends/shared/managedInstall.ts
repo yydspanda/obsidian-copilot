@@ -1,15 +1,15 @@
+import type { ManagedInstallProgress } from "@/agentMode/backends/shared/installProgress";
 import { renameWithRetry } from "@/agentMode/skills/renameWithRetry";
 import { logError, logWarn } from "@/logger";
 import { requireNodeModule } from "@/utils/desktopRuntime";
 
-export type ManagedInstallRuntimeState<TProgress> =
+export type ManagedInstallRuntimeState =
   | { kind: "idle" }
   | { kind: "detecting" }
-  | { kind: "installing"; progress: TProgress | null }
+  | { kind: "installing"; progress: ManagedInstallProgress | null }
   | { kind: "busy" }
   | { kind: "error"; message: string; operation: "install" | "configure" };
 
-/** Reports a competing process-local operation without changing the active run. */
 export class ManagedInstallOperationInFlightError extends Error {
   constructor(displayName: string) {
     super(`A ${displayName} setup operation is already running.`);
@@ -17,7 +17,6 @@ export class ManagedInstallOperationInFlightError extends Error {
   }
 }
 
-/** Marks user cancellation so the shared state returns to idle instead of Retry. */
 export class ManagedInstallAbortError extends Error {
   constructor() {
     super("Aborted");
@@ -44,8 +43,6 @@ export async function promoteManagedVersion(
   try {
     await renameWithRetry(stageDir, versionDir);
   } catch (error) {
-    // A failed update must leave the previously active managed adapter usable.
-    // https://github.com/Brevilabs/obsidian-copilot-private/issues/368
     if (asideDir) {
       await renameWithRetry(asideDir, versionDir).catch((restoreError) =>
         logError(`[AgentMode] failed to restore previous ${displayName} install`, restoreError)

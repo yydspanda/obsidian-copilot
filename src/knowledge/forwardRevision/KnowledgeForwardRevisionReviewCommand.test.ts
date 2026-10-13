@@ -28,7 +28,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates one canonical pending proposal to which commands must rejoin. */
 function createProposal(transactionId = "transaction-historical") {
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
@@ -98,7 +97,6 @@ function createProposal(transactionId = "transaction-historical") {
   return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: 120 });
 }
 
-/** Creates a mutable JSON clone for hostile persisted-command checks. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

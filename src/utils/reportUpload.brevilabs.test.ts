@@ -1,3 +1,5 @@
+import type { App } from "obsidian";
+import { getPersistedDeviceId } from "@/utils/deviceId";
 import { BREVILABS_API_BASE_URL } from "@/constants";
 import { logError } from "@/logger";
 import { createReportUploader, type ReportRequest } from "@/utils/reportUpload.brevilabs";
@@ -5,14 +7,12 @@ import { ReportUploadError, type ReportUploadAttempt } from "@/utils/reportUploa
 
 jest.mock("@/logger");
 
-/** A request that always answers with the given status and body. */
 function respondWith(status: number, body: unknown): jest.MockedFunction<ReportRequest> {
   return jest
     .fn<ReturnType<ReportRequest>, Parameters<ReportRequest>>()
     .mockResolvedValue({ status, text: typeof body === "string" ? body : JSON.stringify(body) });
 }
 
-/** A request that never answers but throws — a dead connection or a protocol abort. */
 function throwWith(cause: unknown): jest.MockedFunction<ReportRequest> {
   return jest.fn<ReturnType<ReportRequest>, Parameters<ReportRequest>>().mockRejectedValue(cause);
 }
@@ -38,7 +38,6 @@ function makeUploader(request: ReportRequest, deps: { installId?: () => string }
   });
 }
 
-/** The rejection itself, so one test can assert its class and its message together. */
 async function rejection(promise: Promise<unknown>): Promise<ReportUploadError> {
   try {
     await promise;
@@ -59,9 +58,6 @@ describe("reportUpload.brevilabs", () => {
       const sent = request.mock.calls[0][0];
       expect(sent.url).toBe(`${BREVILABS_API_BASE_URL}/reports`);
       expect(sent.method).toBe("POST");
-      // `toEqual`, not `toMatchObject`: the four headers are the request's
-      // entire identity — an Authorization header, a user id, or a
-      // Content-Encoding sneaking in is exactly what this pins against.
       expect(sent.headers).toEqual({
         "Content-Type": "application/zip",
         "X-Copilot-Install-ID": "3f2a1d9e-8b4c-4f6d-9e2a-7c5b3a1d9e8f",
@@ -70,6 +66,43 @@ describe("reportUpload.brevilabs", () => {
       });
       expect(new Uint8Array(sent.body)).toEqual(ZIP_BYTES);
     });
+
+    it("reuses the vault's saved device UUID for report uploads (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)", async () => {
+      const savedDeviceId = "3f2a1d9e-8b4c-4f6d-9e2a-7c5b3a1d9e8f";
+      const app = {
+        loadLocalStorage: jest.fn((key: string) =>
+          key === "obsidian-copilot:device-id:v1" ? savedDeviceId : null
+        ),
+        saveLocalStorage: jest.fn(),
+      } as unknown as App;
+      const request = respondWith(201, OK_BODY);
+      const upload = makeUploader(request, { installId: () => getPersistedDeviceId(app) });
+
+      await upload(ATTEMPT);
+
+      expect(request.mock.calls[0][0].headers["X-Copilot-Install-ID"]).toBe(savedDeviceId);
+      expect(app.saveLocalStorage).not.toHaveBeenCalled();
+    });
+
+    it.each(["unreadable", "discarded writes", "legacy non-UUID"])(
+      "sends no report when device storage has %s (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)",
+      async (failure) => {
+        const app = {
+          loadLocalStorage: jest.fn(() => {
+            if (failure === "unreadable") throw new Error("StorageError");
+            return failure === "legacy non-UUID" ? "legacy-device-id" : null;
+          }),
+          saveLocalStorage: jest.fn(),
+        } as unknown as App;
+        const request = respondWith(201, OK_BODY);
+        const upload = makeUploader(request, { installId: () => getPersistedDeviceId(app) });
+
+        const error = await rejection(upload(ATTEMPT));
+
+        expect(error.message).toMatch(/nothing was uploaded/);
+        expect(request).not.toHaveBeenCalled();
+      }
+    );
 
     it("returns the report id and expiry the server confirmed", async () => {
       await expect(makeUploader(respondWith(200, OK_BODY))(ATTEMPT)).resolves.toEqual({
@@ -87,9 +120,6 @@ describe("reportUpload.brevilabs", () => {
     });
 
     it("refuses to upload when the install id cannot be resolved, with fixed copy only (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)", async () => {
-      // The getter's own message must not survive into this one: it can
-      // carry whatever storage or the uuid library threw, environment paths
-      // included, while this error is written for a person to read.
       const request = respondWith(200, OK_BODY);
       const upload = makeUploader(request, {
         installId: () => {
@@ -101,8 +131,6 @@ describe("reportUpload.brevilabs", () => {
 
       expect(err.message).toMatch(/nothing was uploaded/);
       expect(err.message).not.toContain("alice");
-      // Refused locally — the server must not be reached, or the failed
-      // request would still spend a slot of the upload allowance.
       expect(request).not.toHaveBeenCalled();
     });
 
@@ -206,10 +234,6 @@ describe("reportUpload.brevilabs", () => {
     });
 
     it("replaces a thrown transport's message with fixed copy and logs the real cause", async () => {
-      // The transport's message can carry paths, so the user sees a fixed
-      // sentence; the log is then the only place the actual cause survives,
-      // and without it a DNS failure and a reset connection would be
-      // indistinguishable after the fact.
       const cause = new Error("net::ERR_CONNECTION_RESET at /Users/alice/vault");
 
       const err = await rejection(makeUploader(throwWith(cause))(ATTEMPT));
@@ -220,9 +244,6 @@ describe("reportUpload.brevilabs", () => {
     });
 
     it("replaces even a transport error of the adapter's own class, recognized by identity not type", async () => {
-      // Only the attempt's own deadline error may pass through with its message
-      // intact; a transport that happened to throw ReportUploadError must not
-      // smuggle its message past the fixed-copy boundary on the class name.
       const cause = new ReportUploadError("EACCES /Users/alice/secret-vault");
 
       const err = await rejection(makeUploader(throwWith(cause))(ATTEMPT));
@@ -245,8 +266,6 @@ describe("reportUpload.brevilabs", () => {
     ])(
       "treats a 200 carrying %s as unconfirmed rather than showing a placeholder as success",
       async (_label, body) => {
-        // A proxy, captive portal, or deploy mid-rollout can answer 200 with
-        // anything; only a fully well-formed receipt counts as stored.
         const err = await rejection(makeUploader(respondWith(200, body))(ATTEMPT));
         expect(err.message).toMatch(/could not be read/);
       }

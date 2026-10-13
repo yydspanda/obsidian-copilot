@@ -11,16 +11,13 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_RECOVERY_WORK_PER_BUNDLE = 10_000;
 const COMMIT_ATTEMPTS = 2;
 
-/** Exact current source bytes returned after expected-hash revalidation. */
 export interface KnowledgeSourceObservationExpectedArtifact {
   sourcePath: string;
   bytes: Uint8Array;
   sourceContentHash: string;
 }
 
-/** Exact-byte capability used only to re-prove already-bound observations. */
 export interface KnowledgeSourceObservationExactReaderPort {
-  /** Reads current bytes and requires the supplied durable content hash. */
   readExpected(
     sourcePath: string,
     expectedContentHash: string,
@@ -28,22 +25,18 @@ export interface KnowledgeSourceObservationExactReaderPort {
   ): Promise<KnowledgeSourceObservationExpectedArtifact>;
 }
 
-/** Per-Bundle durable hand-off surface required by startup reconciliation. */
 export interface KnowledgeSourceObservationRecoveryHandoffPort {
-  /** Loads pending allocations and bound observations for one exact Bundle. */
   loadRecoveryWork(bundleId: string): Promise<SourceInputObservationRecoveryWork[]>;
-  /** Replays one exact bound observation through the durable Queue hand-off. */
+
   commit(request: BindSourceInputObservationRequest): Promise<CommitSourceInputObservationResult>;
 }
 
-/** Immutable capabilities owned by one startup-observation generation. */
 export interface KnowledgeSourceObservationStartupReconcilerDependencies {
   watchPlan: KnowledgeSourceWatchPlan;
   artifactReader: KnowledgeSourceObservationExactReaderPort;
   handoffs: ReadonlyMap<string, KnowledgeSourceObservationRecoveryHandoffPort>;
 }
 
-/** Stable, value-free reason why observation recovery failed closed. */
 export type KnowledgeSourceObservationStartupFailureCode =
   | "dependency_invalid"
   | "recovery_load_failed"
@@ -57,7 +50,6 @@ export type KnowledgeSourceObservationStartupFailureCode =
 
 const observationStartupErrors = new WeakSet<object>();
 
-/** Validates one value-free recovery failure category at the runtime boundary. */
 function isKnowledgeSourceObservationStartupFailureCode(
   value: unknown
 ): value is KnowledgeSourceObservationStartupFailureCode {
@@ -74,12 +66,9 @@ function isKnowledgeSourceObservationStartupFailureCode(
   );
 }
 
-/** Sanitized observation-recovery failure that never retains injected causes. */
 export class KnowledgeSourceObservationStartupError extends Error {
-  /** Stable failure category safe for startup diagnostics. */
   readonly code: KnowledgeSourceObservationStartupFailureCode;
 
-  /** Creates one value-free fail-closed recovery error. */
   constructor(code: KnowledgeSourceObservationStartupFailureCode) {
     super("Knowledge source observation startup reconciliation failed");
     if (!isKnowledgeSourceObservationStartupFailureCode(code)) {
@@ -92,14 +81,12 @@ export class KnowledgeSourceObservationStartupError extends Error {
   }
 }
 
-/** Accepts only errors created and frozen by this module's validated constructor. */
 export function isKnowledgeSourceObservationStartupError(
   value: unknown
 ): value is KnowledgeSourceObservationStartupError {
   return typeof value === "object" && value !== null && observationStartupErrors.has(value);
 }
 
-/** Aggregate result safe to pass to the later authoritative crawl phase. */
 export interface KnowledgeSourceObservationStartupResult {
   kind: "reconciled";
   replayedBoundCount: number;
@@ -127,19 +114,16 @@ interface RecoveryWorkSnapshot {
   observation?: BoundSourceInputObservation;
 }
 
-/** Creates the platform-standard cancellation used for stale startup generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Compares text by code unit so recovery order never depends on host locale. */
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
 }
 
-/** Reads required enumerable own data fields once without invoking accessors. */
 function snapshotRequiredDataProperties(
   value: unknown,
   keys: readonly string[]
@@ -158,7 +142,6 @@ function snapshotRequiredDataProperties(
   return Object.freeze(snapshot);
 }
 
-/** Resolves one callable data method without evaluating injected accessors. */
 function snapshotDataMethod(
   value: unknown,
   key: string
@@ -186,7 +169,6 @@ function snapshotDataMethod(
   return undefined;
 }
 
-/** Captures a dense bounded array without trusting iterator or accessor behavior. */
 function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -213,17 +195,14 @@ function snapshotDenseArray(value: unknown): readonly unknown[] | undefined {
   return Object.freeze(snapshot);
 }
 
-/** Requires one non-empty opaque identity without exposing it in failures. */
 function isOpaqueIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Requires one positive safe durable revision. */
 function isInputRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
-/** Copies and validates one allocator capability returned as pending work. */
 function snapshotAllocation(value: unknown): RecoveryWorkSnapshot | undefined {
   const allocation = snapshotRequiredDataProperties(value, [
     "bundleId",
@@ -250,7 +229,6 @@ function snapshotAllocation(value: unknown): RecoveryWorkSnapshot | undefined {
   });
 }
 
-/** Copies and validates one exact bound observation returned as pending work. */
 function snapshotBoundObservation(value: unknown): RecoveryWorkSnapshot | undefined {
   const observation = snapshotRequiredDataProperties(value, [
     "bundleId",
@@ -293,7 +271,6 @@ function snapshotBoundObservation(value: unknown): RecoveryWorkSnapshot | undefi
   });
 }
 
-/** Copies and validates one pending recovery-work envelope. */
 function snapshotRecoveryWork(value: unknown): RecoveryWorkSnapshot | undefined {
   const envelope = snapshotRequiredDataProperties(value, ["kind"]);
   if (!envelope) {
@@ -310,7 +287,6 @@ function snapshotRecoveryWork(value: unknown): RecoveryWorkSnapshot | undefined 
   return undefined;
 }
 
-/** Captures and validates all startup dependencies without retaining mutable methods. */
 function captureDependencies(
   dependencies: KnowledgeSourceObservationStartupReconcilerDependencies
 ): CapturedDependencies {
@@ -387,7 +363,6 @@ function captureDependencies(
   }
 }
 
-/** Returns an injected error name without invoking accessors. */
 function readErrorName(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -407,13 +382,11 @@ function readErrorName(error: unknown): string | undefined {
   return undefined;
 }
 
-/** Recognizes safe source drift signals emitted by the exact Vault reader. */
 function isSourceDriftError(error: unknown): boolean {
   const name = readErrorName(error);
   return name === "SourceArtifactHashMismatchError" || name === "SourceArtifactUnavailableError";
 }
 
-/** Verifies an exact-reader success and classifies safe current-byte drift. */
 function verifyExpectedArtifact(
   value: unknown,
   sourcePath: string,
@@ -443,7 +416,6 @@ function verifyExpectedArtifact(
   return "matched";
 }
 
-/** Validates one durable settlement against the exact replayed observation. */
 function verifySettlement(
   value: unknown,
   observation: BoundSourceInputObservation
@@ -516,18 +488,10 @@ function verifySettlement(
   });
 }
 
-/** Produces a collision-safe key for duplicate recovery work detection. */
 function createRecoveryIdentityKey(work: RecoveryWorkSnapshot): string {
   return `${work.bundleId.length}:${work.bundleId}${work.sourceId.length}:${work.sourceId}:${work.inputRevision}`;
 }
 
-/**
- * Recovers only byte-reproved bound source observations before the authoritative crawl.
- *
- * Allocated captures and current-byte drift remain pending deliberately: the later
- * crawl must allocate a new event revision instead of binding guessed bytes to an
- * old capability. The class has no Queue runner, model, Review, or Wiki capability.
- */
 export class KnowledgeSourceObservationStartupReconciler {
   private readonly dependencies: CapturedDependencies;
   private generation = 0;
@@ -535,17 +499,10 @@ export class KnowledgeSourceObservationStartupReconciler {
   private running = false;
   private operationController?: AbortController;
 
-  /** Creates one fail-closed startup-observation lifecycle. */
   constructor(dependencies: KnowledgeSourceObservationStartupReconcilerDependencies) {
     this.dependencies = captureDependencies(dependencies);
   }
 
-  /**
-   * Replays exact bound observations in deterministic Bundle/source/revision order.
-   *
-   * @param signal - Caller-owned startup generation cancellation
-   * @returns Aggregate replay and crawl-defer counts without durable identities
-   */
   async reconcile(signal: AbortSignal): Promise<KnowledgeSourceObservationStartupResult> {
     if (this.closed || this.running || signal.aborted) {
       throw createAbortError();
@@ -621,7 +578,6 @@ export class KnowledgeSourceObservationStartupReconciler {
     }
   }
 
-  /** Permanently invalidates this lifecycle and aborts its exact-byte read signal. */
   close(): void {
     if (this.closed) {
       return;
@@ -631,7 +587,6 @@ export class KnowledgeSourceObservationStartupReconciler {
     this.operationController?.abort();
   }
 
-  /** Loads, validates, and orders every Bundle's pending observation work. */
   private async loadRecoveryWork(
     generation: number,
     signal: AbortSignal
@@ -678,7 +633,6 @@ export class KnowledgeSourceObservationStartupReconciler {
     return Object.freeze(work);
   }
 
-  /** Re-proves current exact bytes while classifying only known source drift as deferred. */
   private async revalidate(
     sourcePath: string,
     expectedContentHash: string,
@@ -704,7 +658,6 @@ export class KnowledgeSourceObservationStartupReconciler {
     return verifyExpectedArtifact(artifact, sourcePath, expectedContentHash);
   }
 
-  /** Retries an uncertain commit using one frozen byte-identical request. */
   private async commit(
     observation: BoundSourceInputObservation,
     generation: number,
@@ -738,7 +691,6 @@ export class KnowledgeSourceObservationStartupReconciler {
     throw new KnowledgeSourceObservationStartupError("observation_commit_failed");
   }
 
-  /** Rejects stale lifecycle authority on both sides of every awaited port call. */
   private assertCurrent(generation: number, signal: AbortSignal): void {
     if (this.closed || this.generation !== generation || signal.aborted) {
       throw createAbortError();

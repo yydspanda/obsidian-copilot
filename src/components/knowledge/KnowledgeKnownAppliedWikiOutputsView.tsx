@@ -24,14 +24,12 @@ import {
   type KnowledgeKnownAppliedWikiOutputsSession,
 } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
-/** Defensive UI bounds independent from the Runtime and coordinator limits. */
 export const KNOWLEDGE_KNOWN_OUTPUTS_VIEW_LIMITS = Object.freeze({
   maxItemsPerPage: KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.pageSize,
   maxPreviewCharacters: 65_536,
   maxPreviewLines: 2_000,
 });
 
-/** Props for the bounded known-output browser. */
 export interface KnowledgeKnownAppliedWikiOutputsViewProps {
   readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   readonly history: KnowledgeKnownAppliedWikiOutputsPort;
@@ -100,7 +98,6 @@ interface ProposalFlight {
   readonly outputRef: string;
 }
 
-/** Counts exact LF-delimited rows up to a strict inclusive limit. */
 function hasAtMostLines(value: string, limit: number): boolean {
   let lines = 1;
   for (let index = 0; index < value.length; index += 1) {
@@ -112,7 +109,6 @@ function hasAtMostLines(value: string, limit: number): boolean {
   return true;
 }
 
-/** Reports whether one exact string is safe for a bounded plain-text render. */
 export function isKnownAppliedWikiPreviewWithinBudget(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -121,7 +117,6 @@ export function isKnownAppliedWikiPreviewWithinBudget(value: unknown): value is 
   );
 }
 
-/** Reports whether one exact pair is safe without invoking a diff algorithm. */
 export function isKnownAppliedWikiComparisonWithinBudget(
   knownContent: unknown,
   currentContent: unknown
@@ -134,13 +129,11 @@ export function isKnownAppliedWikiComparisonWithinBudget(
   );
 }
 
-/** Formats an Apply timestamp without using locale-dependent output. */
 function formatAppliedAt(timestamp: number): string {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? "Unknown time" : date.toISOString();
 }
 
-/** Formats the exact current-file relationship without implying restoration authority. */
 function formatCurrentState(state: KnowledgeKnownAppliedWikiCurrentState): string {
   switch (state) {
     case "applied":
@@ -152,7 +145,6 @@ function formatCurrentState(state: KnowledgeKnownAppliedWikiCurrentState): strin
   }
 }
 
-/** Formats one output's display relation without inventing version numbers. */
 function formatOutputRelation(relation: KnowledgeKnownAppliedWikiOutputRelation): string {
   switch (relation) {
     case "current_applied":
@@ -164,12 +156,10 @@ function formatOutputRelation(relation: KnowledgeKnownAppliedWikiOutputRelation)
   }
 }
 
-/** Formats one verified Apply provenance without exposing private ledger identity. */
 function formatOriginKind(kind: KnowledgeKnownAppliedWikiOutputOriginSummary["kind"]): string {
   return kind === "source_apply" ? "Source Apply" : "Forward revision Apply";
 }
 
-/** Formats why a present proposal action is unavailable for one exact row. */
 function formatProposalCapability(
   capability: Exclude<KnowledgeKnownAppliedWikiOutputProposalCapability, "available">
 ): string {
@@ -185,7 +175,6 @@ function formatProposalCapability(
   }
 }
 
-/** Maps a closed read result to a stable UI message. */
 function formatReadFailure(kind: "stale" | "unavailable" | "too_large"): string {
   switch (kind) {
     case "stale":
@@ -197,7 +186,6 @@ function formatReadFailure(kind: "stale" | "unavailable" | "too_large"): string 
   }
 }
 
-/** Maps a closed non-published proposal result to one bounded UI message. */
 function formatProposalFailure(
   result: Exclude<KnowledgeForwardRevisionProposalActionResult, { kind: "published" }>
 ): string {
@@ -220,7 +208,6 @@ function formatProposalFailure(
   }
 }
 
-/** Reports whether one pending mutation belongs to the exact visible selection. */
 function isPendingProposal(
   state: ProposalState,
   action: KnowledgeForwardRevisionProposalActionPort | undefined,
@@ -235,15 +222,12 @@ function isPendingProposal(
   );
 }
 
-/** Reports whether a caught error represents deliberate cancellation. */
 const isAbortError = isKnowledgeAbortError;
 
-/** Checks the runtime container shape without widening its declared element type. */
 function isArrayContainer(value: unknown): boolean {
   return Array.isArray(value);
 }
 
-/** Validates one bounded canonical provenance aggregate before rendering it. */
 function hasSafeOrigins(summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary>): boolean {
   const origins = summary.origins;
   if (!isArrayContainer(origins) || origins.length < 1 || origins.length > 2) return false;
@@ -269,7 +253,6 @@ function hasSafeOrigins(summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary
   );
 }
 
-/** Reports exact equality for provenance already accepted by the bounded UI checks. */
 function originsEqual(
   left: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[],
   right: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[]
@@ -289,7 +272,6 @@ function originsEqual(
   );
 }
 
-/** Validates the bounded first page before it becomes renderable state. */
 function isSafeInitialSession(session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>): boolean {
   const items = session.items;
   if (
@@ -343,12 +325,6 @@ function isSafeInitialSession(session: Readonly<KnowledgeKnownAppliedWikiOutputs
   );
 }
 
-/**
- * Rejects malformed or cycling metadata pages before adding them to rendered state.
- *
- * Production delegates already authenticate these invariants. This second bound
- * prevents an accidentally weakened adapter from growing an unbounded UI stack.
- */
 function isSafeNextPage(
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
   pages: readonly PageFrame[],
@@ -396,7 +372,6 @@ function isSafeNextPage(
   );
 }
 
-/** Renders exact plain text without parsing Markdown or HTML. */
 function ExactPlainText({ children }: { readonly children: string }): React.ReactElement {
   return (
     <pre className="tw-m-0 tw-max-h-80 tw-overflow-auto tw-whitespace-pre-wrap tw-break-words tw-rounded-lg tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-3 tw-font-mono tw-text-xs">
@@ -405,7 +380,6 @@ function ExactPlainText({ children }: { readonly children: string }): React.Reac
   );
 }
 
-/** Renders one defensive, paginated known-output browsing session. */
 export function KnowledgeKnownAppliedWikiOutputsView({
   request,
   history,
@@ -523,7 +497,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     }
   }, [visibleChildState.kind]);
 
-  /** Replaces the visible list with the next opaque page. */
   const openNextPage = (): void => {
     if (pageIndex + 1 < pages.length) {
       setPageIndex((current) => current + 1);
@@ -568,7 +541,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
       });
   };
 
-  /** Returns to the preceding already-verified page without another read. */
   const openPreviousPage = (): void => {
     if (pageIndex <= 0 || pageLoading) return;
     abortRef.current?.abort();
@@ -577,7 +549,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     setPageError(undefined);
   };
 
-  /** Loads a bounded exact output selected from the visible page. */
   const openDetail = (outputRef: string): void => {
     const summary = frame?.page.items.find((item) => item.outputRef === outputRef);
     if (!session || pageLoading || !summary) return;
@@ -633,7 +604,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
       });
   };
 
-  /** Loads a bounded exact current-file comparison for the selected output. */
   const openComparison = (selection: Readonly<DetailSelection>): void => {
     if (
       !session ||
@@ -707,7 +677,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
       });
   };
 
-  /** Cancels a child read and returns to the current bounded list page. */
   const returnToList = (): void => {
     abortRef.current?.abort();
     proposalGeneration.current += 1;
@@ -718,7 +687,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     setChildState({ kind: "list" });
   };
 
-  /** Cancels every local generation before returning to the parent inspector. */
   const returnToInspector = (): void => {
     generation.current += 1;
     abortRef.current?.abort();
@@ -728,7 +696,6 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     onBack();
   };
 
-  /** Publishes one opaque eligible selection without passing its rendered body. */
   const proposeOutput = (selection: Readonly<DetailSelection>): void => {
     if (
       !session ||
@@ -780,6 +747,7 @@ export function KnowledgeKnownAppliedWikiOutputsView({
               onPublished?.(result.reviewRef);
             } catch {
               // Durable publication remains successful when current presentation navigation fails.
+              // https://github.com/yydspanda/obsidian-copilot/issues/24
             }
           }
           return;

@@ -10,7 +10,6 @@ import { validateSourceManifest } from "@/knowledge/model/validation";
 
 const REQUEST_TOKEN = "a".repeat(64);
 
-/** Creates one strict active source fixture. */
 function createSource(): SourceManifestEntry {
   return {
     sourceId: "source-1",
@@ -20,7 +19,6 @@ function createSource(): SourceManifestEntry {
   };
 }
 
-/** Creates one strict active Manifest fixture. */
 function createManifest(source = createSource()): SourceManifest {
   return {
     version: 1,

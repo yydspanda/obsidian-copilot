@@ -1,24 +1,20 @@
 import { createSourceContentHash } from "@/knowledge/model/fingerprint";
 import { sha256 } from "@/utils/hash";
 
-/** Current deterministic format for one user-reviewed Chat knowledge draft. */
 export const KNOWLEDGE_CHAT_DRAFT_CAPTURE_VERSION = 1 as const;
 
-/** Bounded user-authored fields accepted before a Chat draft is persisted. */
 export const KNOWLEDGE_CHAT_DRAFT_LIMITS = Object.freeze({
   maxTitleCharacters: 200,
   maxBodyCharacters: 1_000_000,
   maxSourceBytes: 2_000_000,
 });
 
-/** Editable fields submitted from one completed assistant response. */
 export interface KnowledgeChatDraftRequest {
   readonly title: string;
   readonly body: string;
   readonly reviewConfirmed: true;
 }
 
-/** Internal deterministic Markdown capture created from an exact UI request. */
 export interface KnowledgeChatDraftCapture {
   readonly version: typeof KNOWLEDGE_CHAT_DRAFT_CAPTURE_VERSION;
   readonly title: string;
@@ -28,16 +24,13 @@ export interface KnowledgeChatDraftCapture {
   readonly captureDigest: string;
 }
 
-/** Sanitized validation failure that does not retain draft content. */
 export class KnowledgeChatDraftCaptureError extends TypeError {
-  /** Creates one value-free capture error. */
   constructor() {
     super("The Knowledge draft is invalid");
     this.name = "KnowledgeChatDraftCaptureError";
   }
 }
 
-/** Reads one enumerable own data property without evaluating an accessor. */
 function readDataProperty(value: object, key: string): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -50,7 +43,6 @@ function readDataProperty(value: object, key: string): unknown {
   }
 }
 
-/** Captures one exact plain request record before any text processing. */
 function captureRequest(value: unknown): Readonly<KnowledgeChatDraftRequest> {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -81,7 +73,6 @@ function captureRequest(value: unknown): Readonly<KnowledgeChatDraftRequest> {
   }
 }
 
-/** Validates one bounded single-line title without silently normalizing it. */
 function captureTitle(value: string): string {
   if (
     value.length === 0 ||
@@ -94,7 +85,6 @@ function captureTitle(value: string): string {
   return value;
 }
 
-/** Validates one non-empty Markdown body while preserving the user's exact text. */
 function captureBody(value: string): string {
   if (
     value.length === 0 ||
@@ -107,17 +97,10 @@ function captureBody(value: string): string {
   return value;
 }
 
-/** Renders the exact Markdown source that will enter the normal Knowledge pipeline. */
 function renderSource(title: string, body: string): string {
   return `# ${title}\n\n${body}${body.endsWith("\n") ? "" : "\n"}`;
 }
 
-/**
- * Creates one deterministic, bounded Markdown capture from user-reviewed Chat text.
- *
- * The result contains no inferred citation, hidden prompt, conversation history, or
- * Vault path. The production coordinator chooses the only authorized destination.
- */
 export function createKnowledgeChatDraftCapture(value: unknown): KnowledgeChatDraftCapture {
   const request = captureRequest(value);
   const title = captureTitle(request.title);

@@ -117,13 +117,11 @@ ${SOURCE_TEXT}
 const originalRandomUuidDescriptor = Object.getOwnPropertyDescriptor(window.crypto, "randomUUID");
 let transactionSequence = 0;
 
-/** Exact in-memory Wiki mutation boundary used by reviewed-apply tests. */
 class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
   readonly files = new Map<string, string>();
   compareAndSwapCalls = 0;
 
-  /** Creates a logical store with an optional real-parent precondition. */
   constructor(requiresExistingParentForCreate = false) {
     this.mutationCapabilities = requiresExistingParentForCreate
       ? Object.freeze({
@@ -133,13 +131,11 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
       : ALL_KNOWLEDGE_FILE_MUTATIONS;
   }
 
-  /** Observes one exact Wiki path. */
   async observe(path: string): Promise<KnowledgeFileObservation> {
     const content = this.files.get(path);
     return content === undefined ? { kind: "missing" } : { kind: "file", content };
   }
 
-  /** Applies one exact compare-and-swap mutation. */
   async compareAndSwap(
     path: string,
     before: TransactionFileState,
@@ -157,7 +153,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
     return { kind: "applied" };
   }
 
-  /** Compares a current observation with one journal-owned file state. */
   private matches(observation: KnowledgeFileObservation, state: TransactionFileState): boolean {
     if (state.kind === "missing") return observation.kind === "missing";
     return (
@@ -168,7 +163,6 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   }
 }
 
-/** Creates the project-owned Bundle used by the reviewed apply workflow. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
   return {
     projectId: "project-personal",
@@ -183,7 +177,6 @@ function createOwner(): ConfiguredProjectKnowledgeBundle {
   };
 }
 
-/** Creates the initial source registration read by planning and finalization. */
 function createManifest(): SourceManifest {
   return {
     version: 1,
@@ -200,7 +193,6 @@ function createManifest(): SourceManifest {
   };
 }
 
-/** Creates the parser identity retained by the exact workflow fingerprint. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "markdown-utf8",
@@ -210,7 +202,6 @@ function createParserProfile(): KnowledgeSourceParserProfile {
   };
 }
 
-/** Creates the complete secret-free pipeline profile for one planned source. */
 function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
@@ -242,12 +233,10 @@ function createPipelineProfile(): KnowledgeBundlePipelineProfile {
   };
 }
 
-/** Creates an exact source or schema artifact read. */
 function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSourceArtifact {
   return { sourcePath, bytes, sourceContentHash: createSourceContentHash(bytes) };
 }
 
-/** Builds an authentic execution plan that can re-prove the accepted source. */
 async function createExecutionPlan(
   manifest: SourceManifest,
   executionOwner: ReturnType<typeof createKnowledgeExecutionOwner>,
@@ -256,9 +245,8 @@ async function createExecutionPlan(
   schemaBytes: Uint8Array = SCHEMA_BYTES
 ): Promise<KnowledgeSourceExecutionPlan> {
   const parser: KnowledgeByteParser = {
-    /** Returns the exact profile bound during plan construction. */
     getProfile: () => createParserProfile(),
-    /** Produces one exact text artifact used by citation validation. */
+
     parse: async () => ({
       artifact: {
         kind: "text" as const,
@@ -288,7 +276,6 @@ async function createExecutionPlan(
   }).load([createOwner()], new AbortController().signal);
 }
 
-/** Creates one valid grounded proposal suitable for production revalidation. */
 function createProposal(
   changes: KnowledgeFileChange[] = [
     {
@@ -331,7 +318,6 @@ function createProposal(
   };
 }
 
-/** Creates one exact update proposal change around a Manifest-tracked page. */
 function createUpdateChange(
   id = "change-atlas-followup",
   path = TARGET_PATH,
@@ -350,7 +336,6 @@ function createUpdateChange(
   };
 }
 
-/** Creates one exact create proposal change around a currently absent path. */
 function createCreateChange(
   id: string,
   path: string,
@@ -368,7 +353,6 @@ function createCreateChange(
   };
 }
 
-/** Creates one exact delete proposal change around a Manifest-tracked page. */
 function createDeleteChange(): Extract<KnowledgeFileChange, { operation: "delete" }> {
   return {
     id: "change-atlas-followup",
@@ -380,7 +364,6 @@ function createDeleteChange(): Extract<KnowledgeFileChange, { operation: "delete
   };
 }
 
-/** Resolves Manifest commit mutations from the proposal's exact base projection. */
 function createManifestMutations(
   proposal: KnowledgeChangeSet,
   manifest: SourceManifest
@@ -401,7 +384,6 @@ function createManifestMutations(
   });
 }
 
-/** Creates a target resolver for exact existing files and absent or occupied fallback paths. */
 function createTargetResolver(
   kind: "missing" | "occupied",
   existingFiles: ReadonlyMap<string, string> = new Map()
@@ -444,13 +426,6 @@ interface ReviewedApplyHarness {
   jobId: string;
 }
 
-/**
- * Seeds one exact awaiting-Review queue job and production apply coordinator.
- *
- * @param targetKind - Current target observation exposed to Review
- * @param requiresExistingParentForCreate - Whether the test CAS needs a real parent directory
- * @returns Authentic pending Review and released production coordinator
- */
 async function createReviewedApplyHarness(
   targetKind: "missing" | "occupied",
   requiresExistingParentForCreate = false
@@ -551,12 +526,6 @@ async function createReviewedApplyHarness(
   };
 }
 
-/**
- * Commits an authentic first create, then seeds a second reviewed source revision.
- *
- * Runtime deliberately forbids tests from fabricating lastSuccessful state: the
- * first commit supplies its matching Manifest metadata and apply ledger.
- */
 async function createFollowupReviewedApplyHarness(
   proposal: KnowledgeChangeSet,
   existingFiles: ReadonlyMap<string, string>
@@ -623,7 +592,6 @@ async function createFollowupReviewedApplyHarness(
   const queue = new IngestQueue(
     new KnowledgeRuntimeQueueStorage(first.capabilities.runtime, executionOwner),
     {
-      /** Saves the follow-up proposal before publishing its durable Review receipt. */
       execute: async (context) => {
         const record = await reviews.saveProposal(BUNDLE_ID, {
           proposal,
@@ -699,7 +667,6 @@ async function createFollowupReviewedApplyHarness(
   };
 }
 
-/** Builds an exact all-accept command from a fresh durable Review context. */
 async function createAcceptCommand(harness: ReviewedApplyHarness) {
   const context = await loadKnowledgeStudioReviewContext({
     runtime: harness.capabilities.runtime,

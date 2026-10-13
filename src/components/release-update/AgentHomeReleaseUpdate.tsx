@@ -1,5 +1,6 @@
 import { AgentHomeReleaseUpdatePrompt } from "@/components/release-update/AgentHomeReleaseUpdatePrompt";
 import { ReleaseNotesModal } from "@/components/release-update/ReleaseNotesDialog";
+import { findReleaseVideo } from "@/components/release-update/releaseNotes";
 import { useApp } from "@/context";
 import { useLatestVersion } from "@/hooks/useLatestVersion";
 import { updateSetting, useSettingsValue } from "@/settings/model";
@@ -10,7 +11,6 @@ interface AgentHomeReleaseUpdateProps {
   visible: boolean;
 }
 
-/** Connects release detection and dismissal state to the Agent Home update prompt. */
 export function AgentHomeReleaseUpdate({
   currentVersion,
   visible,
@@ -19,9 +19,6 @@ export function AgentHomeReleaseUpdate({
   const { latestRelease, hasUpdate } = useLatestVersion(currentVersion);
   const lastDismissedVersion = useSettingsValue().lastDismissedVersion;
 
-  // Release notifications belong only on the global empty home. A dismissal
-  // suppresses that release without hiding a future version.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/317
   if (!visible || !hasUpdate || !latestRelease || lastDismissedVersion === latestRelease.version) {
     return null;
   }
@@ -29,8 +26,9 @@ export function AgentHomeReleaseUpdate({
   return (
     <AgentHomeReleaseUpdatePrompt
       onDismiss={() => updateSetting("lastDismissedVersion", latestRelease.version)}
-      onOpen={() => new ReleaseNotesModal(app, latestRelease).open()}
+      onOpen={() => new ReleaseNotesModal(app, latestRelease, currentVersion).open()}
       version={latestRelease.version}
+      video={findReleaseVideo(latestRelease.body)}
     />
   );
 }

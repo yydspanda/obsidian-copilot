@@ -92,7 +92,7 @@ describe("ObsidianVaultSourceWatcher", () => {
       it(`rejects growth between stat and read before copying or hashing the returned bytes (${ISSUE})`, async () => {
         const harness = createHarness();
         const grown = Uint8Array.of(1, 2, 3, 4, 5).buffer;
-        // ArrayBuffer properties must not override its actual internal byte length.
+
         Object.defineProperty(grown, "byteLength", { value: 1 });
         harness.readBinary.mockResolvedValue(grown);
         const hash = jest.spyOn(fingerprint, "createSourceContentHash");

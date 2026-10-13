@@ -39,11 +39,6 @@ interface TestOwner {
   vault: VaultOwner;
 }
 
-/**
- * Creates one minimal App with independently observable Vault and metadata listeners.
- *
- * @returns Exact lifecycle owner and its listener mocks
- */
 function createOwner(): TestOwner {
   const vault: VaultOwner = {
     getAllLoadedFiles: jest.fn(() => []),

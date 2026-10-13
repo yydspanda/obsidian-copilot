@@ -16,7 +16,6 @@ const MANIFEST_HASH = "c".repeat(64);
 const PAGE_CONTENT = "# Durable page\n";
 const PAGE_HASH = createFileContentHash(PAGE_CONTENT);
 
-/** Creates one exact Queue admission request. */
 function createRequest(
   overrides: Partial<IngestSourceFreshnessAdmissionRequest> = {}
 ): IngestSourceFreshnessAdmissionRequest {
@@ -30,7 +29,6 @@ function createRequest(
   };
 }
 
-/** Creates one strict Runtime-proven applied source outcome. */
 function createAppliedAuthority(
   overrides: Partial<KnowledgeRuntimeAppliedFreshnessAuthority> = {}
 ): KnowledgeRuntimeAppliedFreshnessAuthority {
@@ -69,7 +67,6 @@ function createAppliedAuthority(
   };
 }
 
-/** Creates one strict Runtime-proven zero-page no-change outcome. */
 function createNoChangesAuthority(
   overrides: Partial<KnowledgeRuntimeNoChangesFreshnessAuthority> = {}
 ): KnowledgeRuntimeNoChangesFreshnessAuthority {
@@ -98,7 +95,6 @@ function createNoChangesAuthority(
   };
 }
 
-/** Creates an admission with inspectable authority and output seams. */
 function createAdmissionFixture(
   options: {
     authorities?: readonly unknown[];

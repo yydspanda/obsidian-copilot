@@ -1,7 +1,8 @@
 import {
-  backendPickerAtomFamily,
+  chatBackendPickerAtom,
   configuredModelsAtom,
   providersAtom,
+  providerRequiresApiKey,
   resolveChatModelSelectionId,
 } from "@/modelManagement";
 import { settingsStore } from "@/settings/model";
@@ -18,15 +19,16 @@ export interface ChatBackendModelOptions {
   resolveSelectionId: (selection: string | undefined) => string | undefined;
 }
 
-/** Native-select-ready chat backend options plus legacy-key compatibility resolution. */
-export function useChatBackendModelOptions(): ChatBackendModelOptions {
-  const entries = useAtomValue(backendPickerAtomFamily("chat"), { store: settingsStore });
+export function useChatBackendModelOptions(fallbackToFirst = true): ChatBackendModelOptions {
+  const entries = useAtomValue(chatBackendPickerAtom, { store: settingsStore });
   const configuredModels = useAtomValue(configuredModelsAtom, { store: settingsStore });
   const providers = useAtomValue(providersAtom, { store: settingsStore });
   const options = useMemo(() => {
     const result: ChatBackendModelOption[] = [];
     for (const entry of entries) {
       if (entry.state !== "ok") continue;
+      // A default that cannot authenticate looks configured but fails every request. https://github.com/Brevilabs/obsidian-copilot-private/issues/616
+      if (providerRequiresApiKey(entry.provider) && !entry.provider.apiKeyKeychainId) continue;
       result.push({
         label: entry.configuredModel.info.displayName || entry.configuredModel.info.id,
         value: entry.configuredModelId,
@@ -37,12 +39,12 @@ export function useChatBackendModelOptions(): ChatBackendModelOptions {
 
   const resolveSelectionId = useCallback(
     (selection: string | undefined) => {
-      return resolveChatModelSelectionId(entries, selection, {
+      return resolveChatModelSelectionId(entries, selection, fallbackToFirst, {
         configuredModels,
         providers: Object.values(providers),
       });
     },
-    [configuredModels, entries, providers]
+    [configuredModels, entries, providers, fallbackToFirst]
   );
 
   return { options, resolveSelectionId };

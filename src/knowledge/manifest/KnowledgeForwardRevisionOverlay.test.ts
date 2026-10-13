@@ -22,7 +22,6 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
-/** Creates one exact source and its latest applied freshness. */
 function createFixture() {
   const manifest: SourceManifest = {
     version: 1,

@@ -43,7 +43,6 @@ function configuredModel(
   };
 }
 
-/** Minimal api stub exposing only what the resolver reads. */
 function makeApi(
   entries: readonly EnabledBackendEntry[],
   keyByProvider: Record<string, string | null> = {},
@@ -88,7 +87,7 @@ function makeApi(
 
 describe("resolveChatBackendModel", () => {
   describe("resolveChatBackendModel()", () => {
-    it("resolves the preferred model when it is enabled", async () => {
+    it("returns the preferred model with its stored API key when it is enabled", async () => {
       const p = provider("p1");
       const api = makeApi([okEntry("a", p), okEntry("b", p)], { p1: "key" });
 
@@ -101,7 +100,7 @@ describe("resolveChatBackendModel", () => {
       }
     });
 
-    it("falls back to the first enabled model when the preferred id is gone", async () => {
+    it("falls back to the first enabled model when the preferred id is no longer enabled", async () => {
       const p = provider("p1");
       const api = makeApi([okEntry("a", p), okEntry("b", p)], { p1: "key" });
 
@@ -111,7 +110,7 @@ describe("resolveChatBackendModel", () => {
       if (result.ok) expect(result.configuredModelId).toBe("a");
     });
 
-    it("resolves a legacy name|provider selection", async () => {
+    it("resolves a legacy name|provider selection to its configured model", async () => {
       const p = provider("p1");
       const api = makeApi([okEntry("a", p)], { p1: "key" });
 
@@ -131,7 +130,7 @@ describe("resolveChatBackendModel", () => {
       if (result.ok) expect(result.configuredModelId).toBe("a");
     });
 
-    it("returns empty when nothing is enabled", async () => {
+    it("reports empty when no chat model is enabled", async () => {
       const api = makeApi([]);
       const result = await resolveChatBackendModel(api, "anything");
       expect(result).toEqual({ ok: false, reason: "empty" });

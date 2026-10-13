@@ -28,39 +28,27 @@ import type { JsonValue } from "@/knowledge/model/types";
 
 const MAX_GENERATION_RECORDS = 10_000;
 
-// Capturing the frozen base method prevents an authentic subclass from replacing the WeakMap check.
 // eslint-disable-next-line @typescript-eslint/unbound-method -- capture the frozen base method before any subclass can replace the WeakMap check
 const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
 
-/** Hydrated settings projection consumed by one production Knowledge generation. */
 export interface KnowledgeProductionPreflightSettingsInput extends ProjectKnowledgePipelineSettingsInput {
-  /** Hydrated provider credential used only when the selected model has no credential. */
   deepseekApiKey: unknown;
 }
 
-/** One-shot production input whose sensitive capabilities are validated and then discarded. */
 export interface KnowledgeProductionPreflightComposerInput {
-  /** Aggregate, strictly configured Bundle owners from the startup barrier. */
   owners: readonly ConfiguredProjectKnowledgeBundle[];
-  /** Project records captured from the same Projects generation as the owners. */
+
   projects: readonly ProjectKnowledgePipelineProjectInput[];
-  /** Already hydrated settings; this composer never reads the keychain itself. */
+
   settings: KnowledgeProductionPreflightSettingsInput;
-  /** Static compiler, parser, prompt, provider, and output behavior. */
+
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
-  /**
-   * Optional authentic secret-free profile source shared with the plugin workflow lease.
-   *
-   * Direct Core callers may omit this field and let the composer capture one from
-   * `projects`, `settings`, and `profileOptions`. Production plugin composition
-   * supplies the exact instance retained by its generation-owned workflow lease.
-   */
+
   profileSource?: ProjectKnowledgePipelineProfileSource;
-  /** Native renderer fetch capability passed through route construction but never called. */
+
   fetchPort: KnowledgeDeepSeekFetchPort;
 }
 
-/** Stable credential-free diagnostic categories returned by production preflight. */
 export type KnowledgeProductionPreflightDiagnosticCode =
   | "closed"
   | "input_invalid"
@@ -75,7 +63,6 @@ export type KnowledgeProductionPreflightDiagnosticCode =
   | "route_credential_invalid"
   | "route_invalid";
 
-/** Secret-free status snapshot exposed to the startup and Studio adapters. */
 export type KnowledgeProductionPreflightResult =
   | Readonly<{
       kind: "ready";
@@ -91,9 +78,7 @@ interface KnowledgeProductionPreflightComposerState {
   routeOwner?: KnowledgeProductionModelRouteLeaseOwner;
 }
 
-/** Internal static failure used without retaining an input value or cause. */
 class KnowledgeProductionPreflightFailure extends TypeError {
-  /** Creates one credential-free preflight failure. */
   constructor(public readonly code: KnowledgeProductionPreflightDiagnosticCode) {
     super("The production Knowledge preflight failed");
     this.name = "KnowledgeProductionPreflightFailure";
@@ -116,7 +101,6 @@ const CLOSED_STATE: KnowledgeProductionPreflightComposerState = Object.freeze({
   result: CLOSED_RESULT,
 });
 
-/** Reads an enumerable own data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") {
@@ -132,14 +116,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/**
- * Resolves the authentic profile source used by one preflight generation.
- *
- * A supplied source is never replaced by the independently captured baseline:
- * production relies on object identity to bind preflight to its workflow lease.
- * Calling `resolve` later also re-proves the source's module-private WeakMap
- * authority, so a prototype-forged instance still fails closed.
- */
 function resolveProfileSource(
   input: KnowledgeProductionPreflightComposerInput,
   baseline: ProjectKnowledgePipelineProfileSource
@@ -158,13 +134,6 @@ function resolveProfileSource(
   return baseline;
 }
 
-/**
- * Re-proves that a shared authentic source describes this exact input snapshot.
- *
- * The shared object identity remains available to the workflow lease, while an
- * independently captured baseline prevents a valid source from another plugin
- * generation from authorizing different project, settings, or static behavior.
- */
 function assertProfileMatchesBaseline(
   profile: KnowledgeBundlePipelineProfile,
   baselineSource: ProjectKnowledgePipelineProfileSource,
@@ -183,7 +152,6 @@ function assertProfileMatchesBaseline(
   }
 }
 
-/** Resolves through the frozen base implementation so subclass overrides cannot bypass authority. */
 function resolveProfile(
   source: ProjectKnowledgePipelineProfileSource,
   owner: ConfiguredProjectKnowledgeBundle
@@ -191,7 +159,6 @@ function resolveProfile(
   return Reflect.apply(PROJECT_PROFILE_SOURCE_RESOLVE, source, [owner]);
 }
 
-/** Reads one optional model credential without evaluating accessors. */
 function readOptionalModelCredential(value: unknown): unknown {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -208,7 +175,6 @@ function readOptionalModelCredential(value: unknown): unknown {
   }
 }
 
-/** Reads the hydrated provider credential without evaluating accessors. */
 function readProviderCredential(settings: unknown): unknown {
   try {
     if (typeof settings !== "object" || settings === null) {
@@ -224,7 +190,6 @@ function readProviderCredential(settings: unknown): unknown {
   }
 }
 
-/** Captures a bounded dense array without consulting iterator hooks. */
 function snapshotDenseArray(value: unknown): readonly unknown[] {
   try {
     if (!Array.isArray(value)) {
@@ -256,7 +221,6 @@ function snapshotDenseArray(value: unknown): readonly unknown[] {
   }
 }
 
-/** Reads a canonical identity from a model record without coercion or trimming. */
 function readModelIdentity(value: unknown, key: "name" | "provider"): string {
   const candidate = readDataProperty(value, key);
   if (typeof candidate !== "string" || candidate.length === 0 || candidate.trim() !== candidate) {
@@ -265,7 +229,6 @@ function readModelIdentity(value: unknown, key: "name" | "provider"): string {
   return candidate;
 }
 
-/** Selects the exact model credential, falling back only when it is absent or empty. */
 function selectCredential(
   settings: KnowledgeProductionPreflightSettingsInput,
   profile: KnowledgeBundlePipelineProfile
@@ -296,7 +259,6 @@ function selectCredential(
   return selected;
 }
 
-/** Maps a caught construction failure to a closed public diagnostic vocabulary. */
 function classifyPreflightFailure(error: unknown): KnowledgeProductionPreflightDiagnosticCode {
   if (error instanceof KnowledgeProductionPreflightFailure) return error.code;
   const profileCode = ProjectKnowledgePipelineProfileError.inspect(error);
@@ -318,7 +280,6 @@ function classifyPreflightFailure(error: unknown): KnowledgeProductionPreflightD
   return "input_invalid";
 }
 
-/** Creates one frozen public diagnostic without retaining a caught error. */
 function createDiagnosticState(
   code: KnowledgeProductionPreflightDiagnosticCode
 ): KnowledgeProductionPreflightComposerState {
@@ -327,7 +288,6 @@ function createDiagnosticState(
   });
 }
 
-/** Eagerly composes and validates private routes without invoking a transport. */
 function composeGeneration(
   input: KnowledgeProductionPreflightComposerInput
 ): KnowledgeProductionPreflightComposerState {
@@ -401,26 +361,16 @@ function composeGeneration(
   }
 }
 
-/**
- * Owns one fail-closed production Knowledge preflight generation.
- *
- * Construction eagerly validates exact project profiles, credentials, and
- * private DeepSeek routes. It cannot perform network I/O because it never
- * receives or exposes a route invocation request.
- */
 export class KnowledgeProductionPreflightComposer {
-  /** Captures one immutable generation and performs synchronous zero-network preflight. */
   constructor(input: KnowledgeProductionPreflightComposerInput) {
     composerStates.set(this, composeGeneration(input));
     Object.freeze(this);
   }
 
-  /** Returns the generation's frozen secret-free readiness snapshot. */
   preflight(): KnowledgeProductionPreflightResult {
     return composerStates.get(this)?.result ?? INVALID_RESULT;
   }
 
-  /** Returns lifecycle close authority for the exact routes admitted by this preflight. */
   getModelRouteLeaseOwner(): KnowledgeProductionModelRouteLeaseOwner {
     const state = composerStates.get(this);
     if (state?.result.kind !== "ready" || !state.routeOwner) {
@@ -431,7 +381,6 @@ export class KnowledgeProductionPreflightComposer {
     return state.routeOwner;
   }
 
-  /** Synchronously and permanently fails this preflight generation closed. */
   close(): void {
     const state = composerStates.get(this);
     if (!state || state === CLOSED_STATE) return;

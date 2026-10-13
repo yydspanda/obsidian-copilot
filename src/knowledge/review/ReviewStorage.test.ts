@@ -19,7 +19,6 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 
-/** Creates the exact queue identity used by review fixtures. */
 function createJobClaim(jobId = "job-1"): ChangeSetReviewJobClaim {
   return {
     jobId,
@@ -31,7 +30,6 @@ function createJobClaim(jobId = "job-1"): ChangeSetReviewJobClaim {
   };
 }
 
-/** Creates one valid proposed file creation. */
 function createFileChange(id = "change-1", content = "# Page\n"): KnowledgeFileChange {
   return {
     id,
@@ -45,7 +43,6 @@ function createFileChange(id = "change-1", content = "# Page\n"): KnowledgeFileC
   };
 }
 
-/** Creates a strict proposed ChangeSet with affirmative validation. */
 function createProposal(
   id = "changeset-1",
   changes: KnowledgeFileChange[] = [createFileChange()]
@@ -63,7 +60,6 @@ function createProposal(
   };
 }
 
-/** Creates the complete Manifest read-set and mutation authority for one proposal. */
 function createManifestCommitPlan(
   proposal: KnowledgeChangeSet,
   jobClaim = createJobClaim()
@@ -102,7 +98,6 @@ function createManifestCommitPlan(
     : { ...common, version: 1, kind: "source_compile" };
 }
 
-/** Creates one pending record whose proposal digest is exact. */
 function createPendingRecord(
   proposal = createProposal(),
   jobClaim = createJobClaim(),
@@ -121,12 +116,10 @@ function createPendingRecord(
   };
 }
 
-/** Creates a complete v2 snapshot around supplied records. */
 function createSnapshot(records: ChangeSetReviewRecord[]): ChangeSetReviewSnapshot {
   return { version: 2, bundleId: "bundle-1", revision: 1, records };
 }
 
-/** Extracts stable diagnostic codes from one semantic validation result. */
 function diagnosticCodes(snapshot: ChangeSetReviewSnapshot): string[] {
   return validateChangeSetReviewSnapshot(snapshot).diagnostics.map(({ code }) => code);
 }

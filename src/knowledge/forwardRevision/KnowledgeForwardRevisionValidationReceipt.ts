@@ -30,13 +30,10 @@ import type {
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
-/** Current strict durable forward-revision validation receipt version. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_RECEIPT_VERSION = 1 as const;
 
-/** Current deterministic contract asserted by one successful forward validation. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_CONTRACT_VERSION = 1 as const;
 
-/** Defensive limits for durable validation receipt material. */
 export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_RECEIPT_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
   maxArtifactIdCharacters: 1_024,
@@ -48,7 +45,6 @@ export const KNOWLEDGE_FORWARD_REVISION_VALIDATION_RECEIPT_LIMITS = Object.freez
   maxWarnings: 10_000,
 });
 
-/** Fixed deterministic validation result required before forward acceptance. */
 export interface KnowledgeForwardRevisionValidationContractV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_VALIDATION_CONTRACT_VERSION;
   readonly kind: "forward_revision_validation_contract";
@@ -58,7 +54,6 @@ export interface KnowledgeForwardRevisionValidationContractV1 {
   readonly linksValid: true;
 }
 
-/** Exact Bundle and validator implementation profile used for one validation. */
 export interface KnowledgeForwardRevisionValidationProfileV1 {
   readonly version: 1;
   readonly kind: "forward_revision_validation_profile";
@@ -71,7 +66,6 @@ export interface KnowledgeForwardRevisionValidationProfileV1 {
   readonly validatorImplementationDigest: string;
 }
 
-/** Exact parser artifact identity actually consulted while validating afterContent. */
 export interface KnowledgeForwardRevisionValidationArtifactIdentityV1 {
   readonly version: 1;
   readonly kind: "forward_revision_validation_artifact_identity";
@@ -81,7 +75,6 @@ export interface KnowledgeForwardRevisionValidationArtifactIdentityV1 {
   readonly artifactContentHash: string;
 }
 
-/** Optional digest-only warning summary retained without diagnostic text. */
 export interface KnowledgeForwardRevisionValidationWarningSummaryV1 {
   readonly version: 1;
   readonly kind: "forward_revision_validation_warning_summary";
@@ -89,12 +82,6 @@ export interface KnowledgeForwardRevisionValidationWarningSummaryV1 {
   readonly digest: string;
 }
 
-/**
- * Durable structural record of one exact successful forward candidate validation.
- *
- * This record is not acceptance authority. A future genuine validator capability
- * plus a fresh Runtime rejoin must authorize acceptance.
- */
 export interface KnowledgeForwardRevisionValidationReceiptV1 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_VALIDATION_RECEIPT_VERSION;
   readonly kind: "forward_revision_validation_receipt";
@@ -130,14 +117,12 @@ export interface KnowledgeForwardRevisionValidationReceiptV1 {
   readonly receiptDigest: string;
 }
 
-/** Deterministic validator flags accepted by the structural receipt creator. */
 export interface KnowledgeForwardRevisionValidationSummaryInput {
   readonly okfValid: boolean;
   readonly citationsValid: boolean;
   readonly linksValid: boolean;
 }
 
-/** Complete non-authoritative input for one strict durable receipt. */
 export interface CreateKnowledgeForwardRevisionValidationReceiptInput {
   readonly proposal: unknown;
   readonly proposalDigest: string;
@@ -232,9 +217,8 @@ const RECEIPT_KEYS = [
   "validatedAt",
   "receiptDigest",
 ] as const;
-/** Fixed value-free failure for malformed durable validation receipts. */
+
 export class KnowledgeForwardRevisionValidationReceiptError extends TypeError {
-  /** Creates one sanitized failure; only module-minted instances are authentic. */
   constructor(authenticityToken?: symbol) {
     super("Forward revision validation receipt does not satisfy its strict contract");
     this.name = "KnowledgeForwardRevisionValidationReceiptError";
@@ -245,7 +229,6 @@ export class KnowledgeForwardRevisionValidationReceiptError extends TypeError {
 const RECEIPT_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionValidationReceiptError");
 const authenticReceiptErrors = new WeakSet<KnowledgeForwardRevisionValidationReceiptError>();
 
-/** Reads an exact plain record through own enumerable data descriptors only. */
 function snapshotRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -279,7 +262,6 @@ function snapshotRecord(
   }
 }
 
-/** Captures one bounded dense array without invoking indexed accessors. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
@@ -306,7 +288,6 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
   }
 }
 
-/** Reports whether text consists only of paired Unicode scalar values. */
 function isUnicodeScalarText(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -322,7 +303,6 @@ function isUnicodeScalarText(value: string): boolean {
   return true;
 }
 
-/** Reports whether identifier text contains an unsupported C0 or C1 control. */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -331,7 +311,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Reports whether one value is a bounded canonical identifier. */
 function isIdentifier(value: unknown, maximum = 256): value is string {
   return (
     typeof value === "string" &&
@@ -343,7 +322,6 @@ function isIdentifier(value: unknown, maximum = 256): value is string {
   );
 }
 
-/** Captures one exact canonical Vault-relative page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (
     typeof value !== "string" ||
@@ -362,39 +340,32 @@ function snapshotPagePath(value: unknown): string | undefined {
   }
 }
 
-/** Reports whether one value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
 
-/** Reports whether one value is a non-negative safe integer. */
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-/** Reports whether one value is a positive safe integer. */
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Compares strings by code unit without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Hashes one strict value with explicit domain separation. */
 function digestValue(namespace: string, value: unknown): string {
   return sha256(`${namespace}\n${canonicalizeJson(value as JsonValue)}`);
 }
 
-/** Throws one authentic frozen sanitized receipt failure. */
 function invalidReceipt(): never {
   const error = new KnowledgeForwardRevisionValidationReceiptError(RECEIPT_ERROR_TOKEN);
   Object.freeze(error);
   throw error;
 }
 
-/** Reports whether one caught receipt failure was minted inside this module. */
 function isAuthenticReceiptError(
   value: unknown
 ): value is KnowledgeForwardRevisionValidationReceiptError {
@@ -405,7 +376,6 @@ function isAuthenticReceiptError(
   );
 }
 
-/** Captures the fixed all-true deterministic validation contract. */
 function snapshotValidationContract(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationContractV1> {
@@ -431,7 +401,6 @@ function snapshotValidationContract(
   });
 }
 
-/** Converts strict all-true validator flags into the durable fixed contract. */
 function createValidationContract(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationContractV1> {
@@ -454,7 +423,6 @@ function createValidationContract(
   });
 }
 
-/** Strictly snapshots one exact Bundle/validator profile. */
 function snapshotValidationProfile(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationProfileV1> {
@@ -486,14 +454,12 @@ function snapshotValidationProfile(
   });
 }
 
-/** Computes the canonical digest of one strict validation profile. */
 function createValidationProfileDigest(
   value: Readonly<KnowledgeForwardRevisionValidationProfileV1>
 ): string {
   return digestValue("knowledge-forward-revision-validation-profile-v1", value);
 }
 
-/** Counts every retained historical locator string against the aggregate budget. */
 function countHistoricalCitationCharacters(value: Readonly<ClaimCitation>): number {
   const locator = value.locator;
   return (
@@ -512,7 +478,6 @@ function countHistoricalCitationCharacters(value: Readonly<ClaimCitation>): numb
   );
 }
 
-/** Reports whether retained citation text uses only supported exact text controls. */
 function isSupportedCitationText(value: string): boolean {
   if (
     value.length > KNOWLEDGE_FORWARD_REVISION_VALIDATION_RECEIPT_LIMITS.maxLocatorTextCharacters ||
@@ -532,7 +497,6 @@ function isSupportedCitationText(value: string): boolean {
   return true;
 }
 
-/** Rejects unsupported controls and oversized free text in one shared citation snapshot. */
 function assertHistoricalCitationText(value: Readonly<ClaimCitation>): void {
   const locator = value.locator;
   const text = [
@@ -544,7 +508,6 @@ function assertHistoricalCitationText(value: Readonly<ClaimCitation>): void {
   if (text.some((item) => !isSupportedCitationText(item))) invalidReceipt();
 }
 
-/** Snapshots the shared ordered accepted-Review citation set and checks its budget. */
 function snapshotHistoricalCitationSet(
   value: unknown,
   expectedPrimarySourceId: string
@@ -578,12 +541,10 @@ function snapshotHistoricalCitationSet(
   return Object.freeze(citations);
 }
 
-/** Counts all detached historical locator material. */
 function countHistoricalCitationSetCharacters(value: readonly Readonly<ClaimCitation>[]): number {
   return value.reduce((total, locator) => total + countHistoricalCitationCharacters(locator), 0);
 }
 
-/** Strictly snapshots one parser artifact identity in the validation read-set. */
 function snapshotValidationArtifact(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1> {
@@ -614,7 +575,6 @@ function snapshotValidationArtifact(
   });
 }
 
-/** Creates a canonical collision-free key for one validation artifact. */
 function createValidationArtifactKey(
   value: Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>
 ): string {
@@ -626,7 +586,6 @@ function createValidationArtifactKey(
   ] as JsonValue);
 }
 
-/** Counts every retained validation artifact string against the aggregate budget. */
 function countValidationArtifactCharacters(
   value: Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>
 ): number {
@@ -638,7 +597,6 @@ function countValidationArtifactCharacters(
   );
 }
 
-/** Strictly snapshots a nonempty canonical unique validation read-set. */
 function snapshotValidationReadSet(
   value: unknown,
   initialCharacters = 0
@@ -673,7 +631,6 @@ function snapshotValidationReadSet(
   return Object.freeze(result);
 }
 
-/** Sorts and strictly snapshots validation read-set creator input. */
 function createValidationReadSet(
   value: unknown,
   initialCharacters = 0
@@ -703,14 +660,12 @@ function createValidationReadSet(
   return snapshotValidationReadSet(items, initialCharacters);
 }
 
-/** Computes the canonical digest of one strict validation observation set. */
 function createValidationObservationSetDigest(
   value: readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[]
 ): string {
   return digestValue("knowledge-forward-revision-validation-observation-set-v1", value);
 }
 
-/** Binds the full Manifest, Vault, and source prestate to every consulted parser artifact. */
 function digestSourceArtifactObservationBinding(
   acceptanceAuthority: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>,
   readSet: readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[]
@@ -721,13 +676,6 @@ function digestSourceArtifactObservationBinding(
   });
 }
 
-/**
- * Creates the structural correlation digest for a source tuple and parser read-set.
- *
- * This digest does not prove that any parser observation occurred. Only a future
- * genuine validator coordinator can attest provenance, and Runtime must rejoin
- * that capability to the same receipt before acceptance.
- */
 export function createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest(
   acceptanceAuthorityValue: unknown,
   validationReadSetValue: unknown
@@ -743,7 +691,6 @@ export function createKnowledgeForwardRevisionSourceArtifactObservationBindingDi
   }
 }
 
-/** Strictly snapshots an optional digest-only warning summary. */
 function snapshotWarningSummary(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationWarningSummaryV1> | null {
@@ -767,12 +714,6 @@ function snapshotWarningSummary(
   });
 }
 
-/**
- * Applies structural source correlation only; this does not prove evidence provenance.
- *
- * The future genuine validator coordinator must project historical locators from
- * the exact accepted Review and parser observations from its trusted read-set.
- */
 function assertEvidenceForProposal(
   historical: readonly Readonly<ClaimCitation>[],
   readSet: readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[],
@@ -797,7 +738,6 @@ function assertEvidenceForProposal(
   }
 }
 
-/** Resolves and verifies the exact acceptance body selected by one strict command. */
 function snapshotCandidateContent(
   command: Readonly<KnowledgeForwardRevisionReviewCommandV1>,
   proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
@@ -829,10 +769,6 @@ function snapshotCandidateContent(
   });
 }
 
-/**
- * Projects the semantic prestate that must remain stable between validation
- * and the acceptance CAS, excluding only the duplicated Runtime envelope.
- */
 function projectStableAcceptanceAuthority(
   value: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>
 ): JsonValue {
@@ -878,7 +814,6 @@ function projectStableAcceptanceAuthority(
   });
 }
 
-/** Constructs the exact receipt payload whose digest excludes id and digest fields. */
 function createReceiptPayload(value: {
   runtimeId: string;
   bundleId: string;
@@ -916,17 +851,14 @@ function createReceiptPayload(value: {
   });
 }
 
-/** Computes the payload-excluding-self receipt digest. */
 function digestReceiptPayload(value: ReturnType<typeof createReceiptPayload>): string {
   return digestValue("knowledge-forward-revision-validation-receipt-v1", value);
 }
 
-/** Derives the opaque receipt id from the exact receipt digest. */
 function deriveReceiptId(receiptDigest: string): string {
   return `forward-revision-validation-receipt-${receiptDigest}`;
 }
 
-/** Strictly snapshots one non-authoritative durable validation receipt. */
 export function snapshotKnowledgeForwardRevisionValidationReceipt(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionValidationReceiptV1> {
@@ -1048,13 +980,6 @@ export function snapshotKnowledgeForwardRevisionValidationReceipt(
   }
 }
 
-/**
- * Creates one strict durable receipt that remains non-authoritative by itself.
- *
- * Caller-supplied validation flags and evidence are only structurally checked.
- * This creator does not prove that validation or parser observation occurred;
- * a future genuine validator capability and fresh Runtime rejoin are required.
- */
 export function createKnowledgeForwardRevisionValidationReceipt(
   value: CreateKnowledgeForwardRevisionValidationReceiptInput
 ): Readonly<KnowledgeForwardRevisionValidationReceiptV1> {
@@ -1162,7 +1087,6 @@ export function createKnowledgeForwardRevisionValidationReceipt(
   }
 }
 
-/** Rejoins one structural receipt to its full exact proposal, command, and candidate body. */
 export function snapshotKnowledgeForwardRevisionValidationReceiptForCandidate(
   receiptValue: unknown,
   proposalValue: unknown,
@@ -1222,13 +1146,6 @@ export function snapshotKnowledgeForwardRevisionValidationReceiptForCandidate(
   }
 }
 
-/**
- * Rejoins a persisted receipt to the exact accepted body and authority without
- * requiring the original command body to be duplicated in terminal storage.
- *
- * The receipt's strict command id and digest remain durable identity fields;
- * replay boundaries must separately correlate an incoming command to them.
- */
 export function snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
   receiptValue: unknown,
   proposalValue: unknown,
@@ -1296,12 +1213,10 @@ export function snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCand
   }
 }
 
-/** Computes the canonical payload-excluding-self digest of one strict receipt. */
 export function createKnowledgeForwardRevisionValidationReceiptDigest(value: unknown): string {
   return snapshotKnowledgeForwardRevisionValidationReceipt(value).receiptDigest;
 }
 
-/** Parses one unknown receipt into a detached value or one safe diagnostic. */
 export function parseKnowledgeForwardRevisionValidationReceipt(
   value: unknown
 ): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionValidationReceiptV1>> {
@@ -1322,7 +1237,6 @@ export function parseKnowledgeForwardRevisionValidationReceipt(
   }
 }
 
-/** Validates one unknown receipt without retaining rejected data. */
 export function validateKnowledgeForwardRevisionValidationReceipt(
   value: unknown
 ): KnowledgeValidationResult {
@@ -1332,7 +1246,6 @@ export function validateKnowledgeForwardRevisionValidationReceipt(
     : { valid: false, diagnostics: parsed.issues.map(cloneDiagnostic) };
 }
 
-/** Detaches one fixed diagnostic returned by the receipt parser. */
 function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnostic {
   return { ...value };
 }

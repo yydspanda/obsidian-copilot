@@ -7,7 +7,6 @@ import {
   type KnowledgeStudioSessionState,
 } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 
-/** Copies the exact public state fields captured by one synchronous listener. */
 function copyState(state: KnowledgeStudioSessionState): KnowledgeStudioSessionState {
   if (state.status === "refreshing") {
     return {

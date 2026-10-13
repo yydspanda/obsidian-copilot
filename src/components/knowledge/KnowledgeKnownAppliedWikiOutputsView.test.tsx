@@ -29,12 +29,10 @@ const SECOND_OUTPUT_REF = `known-wiki-output-${"c".repeat(64)}`;
 const FIRST_CURSOR = `known-wiki-cursor-${"d".repeat(64)}`;
 const REVIEW_REF = `forward-studio-review-${"e".repeat(64)}`;
 
-/** Creates one deterministic opaque output ref for paging fixtures. */
 function outputRef(index: number): string {
   return `known-wiki-output-${index.toString(16).padStart(64, "0")}`;
 }
 
-/** Creates one immutable source-Apply provenance aggregate. */
 function createOrigins(
   appliedAt: number,
   verifiedApplyCount = 1
@@ -49,7 +47,6 @@ function createOrigins(
   ]);
 }
 
-/** Creates one immutable output summary at an explicit global position. */
 function createSummary(index: number, current = false) {
   return Object.freeze({
     outputRef: outputRef(index),
@@ -66,7 +63,6 @@ interface Deferred<T> {
   readonly resolve: (value: T) => void;
 }
 
-/** Creates a manually resolved promise for generation tests. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -75,7 +71,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Creates one bounded authentic-shape UI session. */
 function createSession(
   overrides: Partial<KnowledgeKnownAppliedWikiOutputsSession> = {}
 ): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
@@ -112,7 +107,6 @@ function createSession(
   });
 }
 
-/** Creates a known-output port recording every opaque call. */
 function createHistory(
   overrides: Partial<KnowledgeKnownAppliedWikiOutputsPort> = {}
 ): KnowledgeKnownAppliedWikiOutputsPort {
@@ -153,7 +147,6 @@ function createHistory(
   };
 }
 
-/** Creates detail reads whose metadata remains bound to either fixture summary. */
 function createProposalEligibleHistory(
   session: Readonly<KnowledgeKnownAppliedWikiOutputsSession> = createSession()
 ): KnowledgeKnownAppliedWikiOutputsPort {
@@ -188,14 +181,12 @@ function createProposalEligibleHistory(
   });
 }
 
-/** Creates one action mock that exposes only the three-field opaque invocation. */
 function createProposalAction(
   proposeKnownOutput: KnowledgeForwardRevisionProposalActionPort["proposeKnownOutput"]
 ): KnowledgeForwardRevisionProposalActionPort {
   return { proposeKnownOutput: jest.fn(proposeKnownOutput) };
 }
 
-/** Flushes pending promise continuations and React updates. */
 async function flushPromises(): Promise<void> {
   await act(async () => {
     await Promise.resolve();

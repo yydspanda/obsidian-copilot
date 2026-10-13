@@ -1,62 +1,16 @@
-/**
- * Redacts private data from diagnostic log text before it leaves the machine in
- * a bug-report bundle. A deterministic pattern pass, not a model: a frame log
- * can be tens of megabytes, so this must be fast and synchronous.
- *
- * It targets what actually leaks into these logs — home-directory usernames in
- * absolute paths (the same exposure as hiding vault-relative paths in the UI),
- * email addresses, and common secret shapes — and leaves everything else intact
- * so the log stays useful. Best-effort by design: a novel secret format can slip
- * through, so the report flow still has the user review the bundle before
- * attaching. Replacements are visible markers so a reader knows data was removed.
- */
-
 interface RedactionRule {
   pattern: RegExp;
-  /**
-   * Replacement text, or a function returning it. A function lets a rule match
-   * a broad candidate and then decide, which is how the email rule stays linear
-   * (see `runHoldsAddress`). A function rule is applied by `replaceEachRun`
-   * rather than by `String.prototype.replace`, for the memory reason given there.
-   */
-  replacement: string | ((match: string) => string);
+  replacement: string;
 }
 
-/**
- * Whether a run of address-legal characters contains an email address.
- *
- * Scanned rather than pattern-matched, deliberately. A regex with a quantifier
- * on both sides of the `@` retries from every position in the run and rescans
- * it each time, which is quadratic — and a report attachment hands this whole
- * log tails, where a pasted token or a minified line is one unbroken run of
- * tens of thousands of characters. Measured on 256 KB: 30 s for the pattern
- * this replaced, against 1 ms here. Bounding the quantifiers instead was tried
- * and is worse than slow: an address longer than the bound keeps its overflow
- * as plain text, so the address survives in part.
- *
- * Deliberately loose about what counts. The caller replaces the entire run, so
- * a false positive costs a redaction marker where the text was harmless, while
- * a false negative puts a real address in a bundle that leaves the machine.
- */
 const isLetter = (ch: string) => (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
 
-/** Characters that can trail an address without belonging to it. */
 const TAIL_CHARS = ".-@_%+";
 
 function runHoldsAddress(run: string): boolean {
-  // The separating `@` is the first one with something other than another `@`
-  // in front of it, so a run that opens with one — `@handle@host.tld`, the
-  // shape a fediverse address takes — is still read as an address rather than
-  // rejected for having nothing before its first `@`.
   let at = run.indexOf("@");
   while (at !== -1 && (at === 0 || run[at - 1] === "@")) at = run.indexOf("@", at + 1);
   if (at < 1) return false;
-  // ANY dot after the `@` that is followed by two or more letters makes this an
-  // address, not just the last one. Looking only at the last dot let a run like
-  // `a@b.com@c.d` pass as "no address" on the strength of its final one-letter
-  // ending, leaving the perfectly valid `a@b.com` in front of it untouched.
-  // Each character is visited at most twice, so this stays linear on a run that
-  // is an entire minified log line.
   for (let i = at + 2; i < run.length; i++) {
     if (run[i] !== ".") continue;
     let end = i + 1;
@@ -66,137 +20,78 @@ function runHoldsAddress(run: string): boolean {
   return false;
 }
 
-/**
- * Replace `run` with the email marker when it holds an address, keeping any
- * trailing punctuation the run swallowed. Without that, redacting a sentence
- * ending in an address would take the full stop with it.
- *
- * The tail is found by walking back from the end rather than by a `…$` regex.
- * That regex is anchored only at its end, so on a run whose last character is
- * not tail punctuation it retries from every interior position and rescans the
- * remainder each time — quadratic, and measurably so: 4.2 s for a 100k run.
- */
 export function redactAddressRun(run: string): string {
   let end = run.length;
   while (end > 0 && TAIL_CHARS.includes(run[end - 1])) end--;
   return runHoldsAddress(run.slice(0, end)) ? `<email>${run.slice(end)}` : run;
 }
 
-/**
- * `text.replace(pattern, replacement)` for a function replacement, with the same
- * output, built so an unchanged run leaves nothing behind. A report redacts a log
- * whole — up to 64 MiB — and the run pattern matches nearly every token in it, so
- * what `replace` retains per match becomes the dominant transient allocation:
- * V8 collects every match of a global pattern before it calls the replacement
- * once, then keeps a piece for each gap and each result until the join. Measured
- * on a 64 MiB JSON log, that peaks over 1 GiB of RSS in the renderer. Here a
- * match lives only until the replacement has judged it, and a run that comes
- * back unchanged extends the pending gap instead of becoming a piece, so the
- * pieces held at once number the redactions, not the tokens — and a log with
- * nothing to redact is returned as is, with no copy at all.
- * (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)
- *
- * @param pattern A global pattern that cannot match the empty string, or the
- *   scan would not advance.
- * @param replacement Returns the run itself, by identity, to leave it untouched.
- */
-function replaceEachRun(
-  text: string,
-  pattern: RegExp,
-  replacement: (match: string) => string
-): string {
+// Scan by single-character separators: a quantified token regex can exhaust V8's regexp stack on a multi-MiB token.
+// https://github.com/Brevilabs/obsidian-copilot-private/issues/479
+function redactAddressRuns(text: string): string {
+  const separators = /[^A-Za-z0-9._%+@-]/g;
   const pieces: string[] = [];
   let gapStart = 0;
-  pattern.lastIndex = 0;
-  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
-    const replaced = replacement(match[0]);
-    if (replaced === match[0]) continue;
-    pieces.push(text.slice(gapStart, match.index), replaced);
-    gapStart = pattern.lastIndex;
+  let runStart = 0;
+  for (;;) {
+    const separator = separators.exec(text);
+    const runEnd = separator?.index ?? text.length;
+    const run = text.slice(runStart, runEnd);
+    const replaced = redactAddressRun(run);
+    if (replaced !== run) {
+      pieces.push(text.slice(gapStart, runStart), replaced);
+      gapStart = runEnd;
+    }
+    if (separator === null) break;
+    runStart = runEnd + 1;
   }
   if (pieces.length === 0) return text;
   pieces.push(text.slice(gapStart));
   return pieces.join("");
 }
 
-// Order matters only in that a path/email match should not be re-touched by a
-// later rule; the markers below contain none of the trigger characters, so the
-// rules are effectively independent.
-const RULES: RedactionRule[] = [
-  // Home-directory usernames in absolute paths (Unix + Windows). The path shape
-  // stays so the log still reads; only the identifying segment is removed.
+// Scan to a single-character delimiter: matching the credential with `+` can exhaust V8's regexp stack.
+// https://github.com/Brevilabs/obsidian-copilot-private/issues/479
+function redactBasicCredentials(text: string): string {
+  const headers = /authorization"?\s*[:=]\s*"?basic[ \t]+/gi;
+  const delimiters = /[^A-Za-z0-9+/]/g;
+  const pieces: string[] = [];
+  let gapStart = 0;
+  for (let header = headers.exec(text); header !== null; header = headers.exec(text)) {
+    const tokenStart = headers.lastIndex;
+    delimiters.lastIndex = tokenStart;
+    let tokenEnd = delimiters.exec(text)?.index ?? text.length;
+    if (tokenEnd === tokenStart) continue;
+    if (text[tokenEnd] === "=") tokenEnd++;
+    if (text[tokenEnd] === "=") tokenEnd++;
+    pieces.push(text.slice(gapStart, tokenStart), "<redacted>");
+    gapStart = tokenEnd;
+    headers.lastIndex = tokenEnd;
+  }
+  if (pieces.length === 0) return text;
+  pieces.push(text.slice(gapStart));
+  return pieces.join("");
+}
+
+const RULES: (RedactionRule | ((text: string) => string))[] = [
   { pattern: /(\/(?:Users|home)\/)[^/\s"'\\:]+/g, replacement: "$1<user>" },
   { pattern: /([A-Za-z]:\\Users\\)[^\\\s"']+/gi, replacement: "$1<user>" },
 
-  // Email addresses. The pattern deliberately describes a *run* of address-legal
-  // characters rather than an address: `runHoldsAddress` then decides, and the
-  // whole run is replaced when it says yes
-  // (https://github.com/Brevilabs/obsidian-copilot-private/issues/202).
-  //
-  // Splitting it this way is what makes both properties reachable at once. A
-  // single expression has to put a quantifier on each side of the `@`, and that
-  // is either quadratic on a long run or, once bounded to avoid it, leaves the
-  // part that did not fit. Matching the run is linear because the class has no
-  // ambiguity to backtrack through, and replacing the run whole is what stops a
-  // second address glued to the first — `a@b.com.c@d.com`, or an `@handle@host`
-  // — from surviving as a leftover.
-  // A required first character plus a simple run avoids the per-character stack
-  // growth of V8's unoptimized `+` loop on multi-megabyte addresses or tokens.
-  // https://github.com/yydspanda/obsidian-copilot/issues/12
-  { pattern: /[A-Za-z0-9._%+@-][A-Za-z0-9._%+@-]*/g, replacement: redactAddressRun },
+  redactAddressRuns,
 
-  // A fixed minimum followed by a simple run preserves the full secret match
-  // without V8's open-ended counted loop exhausting the regexp stack on a
-  // multi-megabyte credential. This also applies to bearer and field values.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
-  // Provider API keys with a recognizable prefix.
+  // Avoid V8's counted open-ended loop exhausting the stack on multi-megabyte credentials.
+  // https://github.com/yydspanda/obsidian-copilot/issues/12
   { pattern: /\bsk-[A-Za-z0-9_-]{12}[A-Za-z0-9_-]*/g, replacement: "<secret>" },
   { pattern: /\bAIza[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g, replacement: "<secret>" },
   { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "<secret>" },
   { pattern: /\bgh[pousr]_[A-Za-z0-9]{20}[A-Za-z0-9]*/g, replacement: "<secret>" },
   { pattern: /\bxox[baprs]-[A-Za-z0-9-]{10}[A-Za-z0-9-]*/g, replacement: "<secret>" },
 
-  // Bearer tokens.
   { pattern: /(bearer\s+)[A-Za-z0-9._-]{12}[A-Za-z0-9._-]*/gi, replacement: "$1<token>" },
 
-  // Basic credentials, which the field rule below cannot reach: its value
-  // pattern starts after the `:`, where it finds the five-character scheme word
-  // rather than the credential. What follows the word is base64 of
-  // `user:password`, so leaving it is leaving both. Anchored to the header name
-  // rather than matching `basic` anywhere, which would eat the next word of any
-  // sentence using it — "the basic principle" — and leave the log less
-  // diagnostic than it found it. The quote either side of the separator is what
-  // carries the JSON spelling, which is the one the frame log actually holds:
-  // it stores SDK and ACP payloads as NDJSON, so a request's headers arrive as
-  // `"authorization": "Basic ..."` rather than as a raw header line.
-  //
-  // The credential requires just one character followed by a simple run. Once the
-  // header name and scheme are established there is nothing left to qualify —
-  // `dTpw` is four characters and decodes to `u:p` — and a counted lower bound
-  // costs more than it buys: V8 walks `{n,}` in a way that exhausts the regexp
-  // stack, which a log holding one unbroken multi-megabyte token reaches, and
-  // the throw takes the whole report down with it. The gap before it is spaces
-  // and tabs rather than any whitespace, so a header whose credential is empty
-  // ends at its own line instead of claiming the first word of the next one.
-  //
-  // No word boundary before the name: `\w` includes `_`, so `\bauthorization`
-  // would still redact `Proxy-Authorization` while failing to redact
-  // `x_authorization`. Matching a longer identifier that happens to end in the
-  // word costs a marker on a line already shaped like a credential; missing one
-  // leaves a password in a file that leaves the machine.
-  // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
-  // Separating the first character also avoids unoptimized `+` stack growth.
-  // https://github.com/yydspanda/obsidian-copilot/issues/12
-  {
-    pattern: /(authorization"?\s*[:=]\s*"?basic[ \t]+)[A-Za-z0-9+/][A-Za-z0-9+/]*={0,2}/gi,
-    replacement: "$1<redacted>",
-  },
+  redactBasicCredentials,
 
-  // Values of key/token/secret/password-ish fields, JSON or key=value form.
-  // The AWS names are spelled out because the alternation has no word boundary
-  // in front of it: `secret` does match inside `aws_secret_access_key`, but what
-  // follows the match is `_access_key`, not the separator the rule needs, so a
-  // compound field name only redacts when it is named whole.
+  // The AWS field names are spelled out because the alternation has no leading word boundary, so a compound name redacts only when named whole.
   // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
   {
     pattern:
@@ -205,13 +100,10 @@ const RULES: RedactionRule[] = [
   },
 ];
 
-/** Return `text` with private data replaced by visible markers. */
 export function redactLogText(text: string): string {
   return RULES.reduce(
     (acc, rule) =>
-      typeof rule.replacement === "string"
-        ? acc.replace(rule.pattern, rule.replacement)
-        : replaceEachRun(acc, rule.pattern, rule.replacement),
+      typeof rule === "function" ? rule(acc) : acc.replace(rule.pattern, rule.replacement),
     text
   );
 }

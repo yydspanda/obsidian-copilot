@@ -10,7 +10,6 @@ import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 import { logError } from "@/logger";
 import { isSelfHostModeValid } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
-import { extractUrlsFromText } from "@/utils/urlTagUtils";
 
 export interface MentionData {
   type: string;
@@ -34,10 +33,6 @@ export class Mention {
       Mention.instance = new Mention();
     }
     return Mention.instance;
-  }
-
-  extractUrls(text: string): string[] {
-    return extractUrlsFromText(text);
   }
 
   async processUrl(url: string): Promise<Url4llmResponse & { error?: string }> {
@@ -74,12 +69,6 @@ export class Mention {
     }
   }
 
-  /**
-   * Process a list of URLs directly (both regular and YouTube URLs).
-   *
-   * @param urls Array of URLs to process
-   * @returns Processed URL context and any errors
-   */
   async processUrlList(
     vault: Vault,
     urls: string[]
@@ -92,23 +81,18 @@ export class Mention {
     const imageUrls: string[] = [];
     const processedErrorUrls: Record<string, string> = {};
 
-    // Return empty string if no URLs to process
     if (urls.length === 0) {
       return { urlContext, imageUrls, processedErrorUrls };
     }
 
-    // Process all URLs concurrently
     const processPromises = urls.map(async (url) => {
-      // Check if it's an image URL
       if (await ImageProcessor.isImageUrl(url, vault)) {
         imageUrls.push(url);
         return { type: "image", url };
       }
 
-      // Check if it's a YouTube URL
       if (isYoutubeUrl(url)) {
         const cached = this.mentions.get(url);
-        // Retry if not cached or if the previous attempt failed
         if (!cached || cached.error) {
           const processed = await this.processYoutubeUrl(url);
           this.mentions.set(url, {
@@ -121,7 +105,6 @@ export class Mention {
         return { type: "youtube", data: this.mentions.get(url) };
       }
 
-      // Check if it's a Twitter/X URL
       if (isTwitterUrl(url)) {
         const cached = this.mentions.get(url);
         if (!cached || cached.error) {
@@ -136,7 +119,6 @@ export class Mention {
         return { type: "twitter", data: this.mentions.get(url) };
       }
 
-      // Regular URL
       const cachedUrl = this.mentions.get(url);
       if (!cachedUrl || cachedUrl.error) {
         const processed = await this.processUrl(url);
@@ -152,10 +134,8 @@ export class Mention {
 
     const processedUrls = await Promise.all(processPromises);
 
-    // Append all processed content
     processedUrls.forEach((result) => {
       if (result.type === "image") {
-        // Already added to imageUrls
         return;
       }
 

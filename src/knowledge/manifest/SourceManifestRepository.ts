@@ -30,7 +30,6 @@ import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const DEFAULT_MAX_WRITE_ATTEMPTS = 3;
 
-/** Input used to register one durable source identity. */
 export interface SourceRegistration {
   sourceId: string;
   sourcePath: string;
@@ -38,16 +37,7 @@ export interface SourceRegistration {
   extensions?: Record<string, JsonValue>;
 }
 
-/**
- * Reports persisted manifest JSON that cannot satisfy the current contract.
- */
 export class SourceManifestValidationError extends Error {
-  /**
-   * Creates a manifest validation failure without retaining raw persisted data.
-   *
-   * @param bundleId - Bundle whose manifest failed validation
-   * @param diagnostics - Stable structural or semantic validation issues
-   */
   constructor(
     public readonly bundleId: string,
     public readonly diagnostics: readonly KnowledgeDiagnostic[]
@@ -57,14 +47,7 @@ export class SourceManifestValidationError extends Error {
   }
 }
 
-/** Reports a persisted manifest version that this runtime cannot safely read. */
 export class SourceManifestIncompatibleVersionError extends Error {
-  /**
-   * Creates an incompatible manifest version failure.
-   *
-   * @param bundleId - Bundle whose manifest uses an unsupported version
-   * @param version - Unknown persisted version value
-   */
   constructor(
     public readonly bundleId: string,
     public readonly version: unknown
@@ -74,14 +57,7 @@ export class SourceManifestIncompatibleVersionError extends Error {
   }
 }
 
-/** Reports a storage key whose manifest claims to belong to a different Bundle. */
 export class SourceManifestBundleMismatchError extends Error {
-  /**
-   * Creates a Bundle identity mismatch.
-   *
-   * @param requestedBundleId - Bundle used to read storage
-   * @param storedBundleId - Bundle declared by the persisted manifest
-   */
   constructor(
     public readonly requestedBundleId: string,
     public readonly storedBundleId: string
@@ -91,15 +67,7 @@ export class SourceManifestBundleMismatchError extends Error {
   }
 }
 
-/** Reports a source path or id that would collide with an existing identity. */
 export class SourceManifestIdentityConflictError extends Error {
-  /**
-   * Creates a stable source identity conflict.
-   *
-   * @param bundleId - Bundle containing the conflicting source
-   * @param sourceId - Source id requested by the operation
-   * @param sourcePath - Source path requested by the operation
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -110,14 +78,7 @@ export class SourceManifestIdentityConflictError extends Error {
   }
 }
 
-/** Reports an operation targeting a source id that is not registered. */
 export class SourceManifestSourceNotFoundError extends Error {
-  /**
-   * Creates a missing source failure.
-   *
-   * @param bundleId - Bundle expected to contain the source
-   * @param sourceId - Missing stable source identifier
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string
@@ -127,15 +88,7 @@ export class SourceManifestSourceNotFoundError extends Error {
   }
 }
 
-/** Reports a registration or rename that would reuse a retired source identity. */
 export class SourceManifestSourceRetiredError extends Error {
-  /**
-   * Creates a stable retired-identity conflict.
-   *
-   * @param bundleId - Bundle retaining the protected tombstone
-   * @param sourceId - Requested or colliding source identifier
-   * @param sourcePath - Requested canonical Vault path
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -146,14 +99,7 @@ export class SourceManifestSourceRetiredError extends Error {
   }
 }
 
-/** Reports a manifest revision that cannot be incremented without precision loss. */
 export class SourceManifestRevisionOverflowError extends Error {
-  /**
-   * Creates a safe-integer revision overflow failure.
-   *
-   * @param bundleId - Bundle whose revision reached the safe integer limit
-   * @param revision - Last safely represented revision
-   */
   constructor(
     public readonly bundleId: string,
     public readonly revision: number
@@ -163,15 +109,7 @@ export class SourceManifestRevisionOverflowError extends Error {
   }
 }
 
-/** Reports optimistic write conflicts that exceeded the bounded retry policy. */
 export class SourceManifestWriteConflictExhaustedError extends Error {
-  /**
-   * Creates an exhausted manifest write conflict.
-   *
-   * @param bundleId - Bundle whose write could not converge
-   * @param attempts - Number of attempted read-transform-write cycles
-   * @param conflict - Last observed storage conflict
-   */
   constructor(
     public readonly bundleId: string,
     public readonly attempts: number,
@@ -182,16 +120,7 @@ export class SourceManifestWriteConflictExhaustedError extends Error {
   }
 }
 
-/** Reports two distinct observations claiming the same source timestamp. */
 export class SourceManifestObservationConflictError extends Error {
-  /**
-   * Creates a same-time observation conflict that cannot be ordered safely.
-   *
-   * @param bundleId - Bundle containing the source
-   * @param sourceId - Stable source identifier
-   * @param observation - Successful or failed observation kind
-   * @param occurredAt - Timestamp shared by different observations
-   */
   constructor(
     public readonly bundleId: string,
     public readonly sourceId: string,
@@ -203,51 +132,25 @@ export class SourceManifestObservationConflictError extends Error {
   }
 }
 
-/** Parsed manifest plus the revision expected by the next storage write. */
 interface LoadedManifest {
   manifest: SourceManifest;
   expectedRevision: number | null;
 }
 
-/**
- * Checks whether an unknown value is a non-null record.
- *
- * @param value - Runtime value to inspect
- * @returns Whether fields can be read safely
- */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Creates a new, unpersisted source manifest.
- *
- * @param bundleId - Stable Bundle identifier
- * @returns Empty revision-zero manifest
- */
 function createEmptyManifest(bundleId: string): SourceManifest {
   return { version: 1, bundleId, revision: 0, entries: [] };
 }
 
-/**
- * Requires a non-whitespace identifier at the repository boundary.
- *
- * @param value - Identifier supplied by an orchestration layer
- * @param field - Identifier name used by the error message
- */
 function assertIdentifier(value: string, field: string): void {
   if (value.trim().length === 0) {
     throw new TypeError(`${field} must contain non-whitespace text`);
   }
 }
 
-/**
- * Finds a registered source or throws a typed not-found error.
- *
- * @param manifest - Current validated manifest
- * @param sourceId - Stable source identifier
- * @returns Registered source entry
- */
 function requireSource(manifest: SourceManifest, sourceId: string): SourceManifestEntry {
   const source = manifest.entries.find((entry) => entry.sourceId === sourceId);
   if (!source) {
@@ -256,13 +159,6 @@ function requireSource(manifest: SourceManifest, sourceId: string): SourceManife
   return source;
 }
 
-/**
- * Replaces one source entry without mutating a parsed manifest.
- *
- * @param manifest - Current validated manifest
- * @param nextEntry - Complete replacement entry
- * @returns Immutable manifest proposal whose revision is assigned later
- */
 function replaceSourceEntry(
   manifest: SourceManifest,
   nextEntry: SourceManifestEntry
@@ -275,13 +171,6 @@ function replaceSourceEntry(
   };
 }
 
-/**
- * Compares compile snapshots without relying on object key insertion order.
- *
- * @param left - First successful compile snapshot
- * @param right - Second successful compile snapshot
- * @returns Whether every persisted snapshot field is equal
- */
 function areCompileSnapshotsEqual(
   left: SourceCompileSnapshot,
   right: SourceCompileSnapshot
@@ -304,13 +193,6 @@ function areCompileSnapshotsEqual(
   );
 }
 
-/**
- * Compares failed compile observations field by field.
- *
- * @param left - First failed compile observation
- * @param right - Second failed compile observation
- * @returns Whether every persisted failure field is equal
- */
 function areCompileFailuresEqual(left: SourceCompileFailure, right: SourceCompileFailure): boolean {
   return (
     left.sourceContentHash === right.sourceContentHash &&
@@ -322,21 +204,9 @@ function areCompileFailuresEqual(left: SourceCompileFailure, right: SourceCompil
   );
 }
 
-/**
- * Persists and queries source identity and last committed compile state.
- *
- * Runtime Queue status intentionally lives outside this repository. Every
- * mutation uses optimistic revision checking and bounded conflict retries.
- */
 export class SourceManifestRepository {
   private readonly maxWriteAttempts: number;
 
-  /**
-   * Creates a repository over an injected persistence adapter.
-   *
-   * @param storage - Manifest JSON persistence port
-   * @param maxWriteAttempts - Maximum optimistic write attempts per mutation
-   */
   constructor(
     private readonly storage: SourceManifestStorage,
     maxWriteAttempts = DEFAULT_MAX_WRITE_ATTEMPTS
@@ -347,41 +217,18 @@ export class SourceManifestRepository {
     this.maxWriteAttempts = maxWriteAttempts;
   }
 
-  /**
-   * Loads and validates one Bundle manifest without creating storage eagerly.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Detached validated manifest or an empty revision-zero manifest
-   */
   async load(bundleId: string): Promise<SourceManifest> {
     assertIdentifier(bundleId, "bundleId");
     const loaded = await this.loadForMutation(bundleId);
     return this.cloneValidatedManifest(bundleId, loaded.manifest);
   }
 
-  /**
-   * Returns a detached source entry when it is registered.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @returns Source entry or undefined
-   */
   async getSource(bundleId: string, sourceId: string): Promise<SourceManifestEntry | undefined> {
     assertIdentifier(sourceId, "sourceId");
     const manifest = await this.load(bundleId);
     return manifest.entries.find((entry) => entry.sourceId === sourceId);
   }
 
-  /**
-   * Registers a new stable source identity idempotently.
-   *
-   * Reusing the same id and path is a no-op. Reusing either identity for a
-   * different source fails closed; path changes must use {@link renameSource}.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param registration - Stable id, canonical path, custody, and extensions
-   * @returns Detached registered source entry
-   */
   async registerSource(
     bundleId: string,
     registration: SourceRegistration
@@ -443,14 +290,6 @@ export class SourceManifestRepository {
     return requireSource(manifest, registration.sourceId);
   }
 
-  /**
-   * Changes a source path while preserving its durable sourceId and history.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @param sourcePath - New canonical Vault-relative path
-   * @returns Detached renamed source entry
-   */
   async renameSource(
     bundleId: string,
     sourceId: string,
@@ -482,14 +321,6 @@ export class SourceManifestRepository {
     return requireSource(manifest, sourceId);
   }
 
-  /**
-   * Records a successfully committed compile and clears an older failure marker.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @param snapshot - Compile state written only after transaction commit
-   * @returns Detached updated source entry
-   */
   async recordSuccessfulCompile(
     bundleId: string,
     sourceId: string,
@@ -532,14 +363,6 @@ export class SourceManifestRepository {
     return requireSource(manifest, sourceId);
   }
 
-  /**
-   * Records a failed attempt without replacing the last successful snapshot.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @param failure - Serializable failed compile observation
-   * @returns Detached updated source entry
-   */
   async recordFailedCompile(
     bundleId: string,
     sourceId: string,
@@ -574,17 +397,6 @@ export class SourceManifestRepository {
     return requireSource(manifest, sourceId);
   }
 
-  /**
-   * Removes a source identity without deleting any generated page directly.
-   *
-   * Page ownership and deletion decisions belong to a reviewed ChangeSet, not
-   * to manifest bookkeeping. Production Runtime storage rejects this generic
-   * mutation; source lifecycle changes must use its atomic retirement command.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @returns Detached manifest after removal
-   */
   async removeSource(bundleId: string, sourceId: string): Promise<SourceManifest> {
     return this.mutate(bundleId, (current) => {
       requireSource(current, sourceId);
@@ -595,16 +407,6 @@ export class SourceManifestRepository {
     });
   }
 
-  /**
-   * Evaluates whether a registered source can skip its next ingest.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param sourceId - Stable source identifier
-   * @param sourceContentHash - Current exact source byte hash
-   * @param pipelineFingerprint - Current behavior fingerprint
-   * @param outputs - Current generated output path and exact hash observations
-   * @returns Deterministic freshness decision
-   */
   async evaluateFreshness(
     bundleId: string,
     sourceId: string,
@@ -675,12 +477,6 @@ export class SourceManifestRepository {
     });
   }
 
-  /**
-   * Loads unknown storage JSON and enforces version and Bundle identity.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @returns Validated manifest and expected write revision
-   */
   private async loadForMutation(bundleId: string): Promise<LoadedManifest> {
     const raw = await this.storage.read(bundleId);
     if (raw === null) {
@@ -697,13 +493,6 @@ export class SourceManifestRepository {
     return { manifest, expectedRevision: manifest.revision };
   }
 
-  /**
-   * Applies one immutable mutation with bounded optimistic retries.
-   *
-   * @param bundleId - Stable Bundle identifier
-   * @param transform - Deterministic manifest transform; undefined means no-op
-   * @returns Detached persisted or current manifest
-   */
   private async mutate(
     bundleId: string,
     transform: (manifest: SourceManifest) => SourceManifest | undefined
@@ -742,13 +531,6 @@ export class SourceManifestRepository {
     );
   }
 
-  /**
-   * Strictly parses, semantically validates, and clones a manifest value.
-   *
-   * @param bundleId - Bundle used for safe error reporting
-   * @param value - Unknown or typed manifest value
-   * @returns Detached validated manifest
-   */
   private cloneValidatedManifest(bundleId: string, value: unknown): SourceManifest {
     const parsed = parseSourceManifest(value);
     if (!parsed.ok) {
@@ -761,12 +543,6 @@ export class SourceManifestRepository {
     return parsed.value;
   }
 
-  /**
-   * Rejects unsafe native or ambiguous Windows paths before mutation.
-   *
-   * @param bundleId - Bundle used for safe error reporting
-   * @param sourcePath - Proposed canonical Vault-relative source path
-   */
   private assertSourcePath(bundleId: string, sourcePath: string): void {
     const validation = validateVaultRelativePath(sourcePath, "sourcePath");
     if (!validation.valid) {

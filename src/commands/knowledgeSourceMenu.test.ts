@@ -9,7 +9,6 @@ interface RecordedMenuItem {
   click?: () => void;
 }
 
-/** Creates a minimal chainable Menu test seam. */
 function createMenu(): { menu: Menu; items: RecordedMenuItem[]; separators: number[] } {
   const items: RecordedMenuItem[] = [];
   const separators: number[] = [];

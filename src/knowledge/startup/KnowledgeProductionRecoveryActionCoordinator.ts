@@ -49,7 +49,6 @@ import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledg
 import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import type { KnowledgeStudioRecoverySubmissionResult } from "@/knowledge/ui/KnowledgeStudioController";
 
-/** Exact production dependencies retained by one recovery-action generation. */
 export interface KnowledgeProductionRecoveryActionCoordinatorInput {
   app: App;
   runtime: KnowledgeRuntimeStore;
@@ -58,7 +57,6 @@ export interface KnowledgeProductionRecoveryActionCoordinatorInput {
   onGenerationRefreshRequired(): void;
 }
 
-/** Hidden state retained only by an authentic recovery-action coordinator. */
 interface KnowledgeProductionRecoveryActionCoordinatorState {
   app: App;
   runtime: KnowledgeRuntimeStore;
@@ -68,7 +66,6 @@ interface KnowledgeProductionRecoveryActionCoordinatorState {
   operationTail: Promise<void>;
 }
 
-/** Exact atomic lookup result before any recovery action can mutate durable state. */
 type ExactRecoveryLookup =
   | { kind: "stale" }
   | { kind: "blocked" }
@@ -78,14 +75,12 @@ type ExactRecoveryLookup =
       reference: NoJournalApplyRecoveryReference;
     };
 
-/** Plan preparation and Queue capabilities bound to one exact workflow owner. */
 interface ContinuePreparation {
   bundle: KnowledgeBundleConfig;
   queue: IngestQueue;
   artifacts: readonly SourceArtifactObservation[];
 }
 
-/** Exact apply identity used to reject an unrelated global transaction. */
 interface ExpectedRecoveryApplyIdentity {
   bundleId: string;
   changeSetId: string;
@@ -100,12 +95,10 @@ interface ExpectedRecoveryApplyIdentity {
 
 const coordinatorStates = new WeakMap<object, KnowledgeProductionRecoveryActionCoordinatorState>();
 
-/** Throws the platform-standard cancellation category without retaining a cause. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Returns hidden state only for an authentic coordinator instance. */
 function requireCoordinatorState(
   value: unknown
 ): KnowledgeProductionRecoveryActionCoordinatorState {
@@ -121,17 +114,14 @@ function requireCoordinatorState(
   return state;
 }
 
-/** Reports whether one external command identifier is canonical. */
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
-/** Reports whether one optimistic Runtime revision is exact and representable. */
 function isRuntimeRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** Proves caller cancellation and workflow ownership before a durable boundary. */
 function assertInvocation(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   signal: AbortSignal
@@ -142,7 +132,6 @@ function assertInvocation(
   if (signal.aborted) throw createAbortError();
 }
 
-/** Reports current generation ownership to the read-only workflow loader. */
 function isGenerationCurrent(state: KnowledgeProductionRecoveryActionCoordinatorState): boolean {
   try {
     state.assertCurrent();
@@ -152,23 +141,21 @@ function isGenerationCurrent(state: KnowledgeProductionRecoveryActionCoordinator
   }
 }
 
-/** Requests a full lifecycle refresh without changing a durable action result. */
 function requestGenerationRefresh(state: KnowledgeProductionRecoveryActionCoordinatorState): void {
   try {
     state.onGenerationRefreshRequired();
   } catch {
     // Durable Runtime evidence remains recoverable when notification fails.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Returns the opaque recovery id carried by one exact classification. */
 function getClassificationRecoveryId(classification: NoJournalApplyRecoveryClassification): string {
   return classification.kind === "requires_decision"
     ? classification.candidate.recoveryId
     : classification.reference.recoveryId;
 }
 
-/** Returns the opaque reference carried by one exact classification. */
 function getClassificationReference(
   classification: NoJournalApplyRecoveryClassification
 ): NoJournalApplyRecoveryReference {
@@ -180,7 +167,6 @@ function getClassificationReference(
     : { ...classification.reference };
 }
 
-/** Loads one atomic recovery classification bound to the UI's exact Runtime revision. */
 async function loadExactRecovery(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   bundleId: string,
@@ -220,7 +206,6 @@ async function loadExactRecovery(
   };
 }
 
-/** Converts one immutable accepted record into the Queue's strict receipt. */
 function createAcceptedReceipt(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
@@ -238,7 +223,6 @@ function createAcceptedReceipt(
   };
 }
 
-/** Loads the exact accepted record named by an accepted-not-started classification. */
 async function loadAcceptedNotStartedRecord(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   bundleId: string,
@@ -258,15 +242,12 @@ async function loadAcceptedNotStartedRecord(
   return record;
 }
 
-/** Queue executor that cannot claim or execute ordinary ingest work. */
 class RecoveryExecutionUnavailableExecutor {
-  /** Rejects every accidental execution attempt without inspecting private context. */
   async execute(_context: IngestExecutionContext): Promise<IngestExecutionResult> {
     throw new Error("Recovery Queue execution is unavailable");
   }
 }
 
-/** Builds and runs one authentic workflow preparation before recovery mutation. */
 async function prepareContinue(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   bundleId: string,
@@ -296,13 +277,6 @@ async function prepareContinue(
   };
 }
 
-/**
- * Confirms an ambiguous startup-paused Queue transition from one atomic Runtime snapshot.
- *
- * IngestQueue deliberately refuses an applying replay while startup recovery owns
- * the pause. The Runtime classification is therefore the exact durable replay
- * proof after a commit-then-throw Queue storage boundary.
- */
 async function confirmRequiresDecision(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   bundleId: string,
@@ -353,7 +327,6 @@ async function confirmRequiresDecision(
   };
 }
 
-/** Begins an accepted-not-started apply or confirms its exact ambiguous commit. */
 async function beginAcceptedApply(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   queue: IngestQueue,
@@ -387,7 +360,6 @@ async function beginAcceptedApply(
   };
 }
 
-/** Reports whether a committed receipt owns the exact selected recovery action. */
 function receiptMatchesExpected(
   receipt: TransactionCommitReceipt,
   expected: ExpectedRecoveryApplyIdentity
@@ -405,7 +377,6 @@ function receiptMatchesExpected(
   );
 }
 
-/** Reports whether an active journal belongs to the selected recovery action. */
 function journalMatchesExpected(
   journal: Awaited<ReturnType<ChangeSetTransaction["loadActive"]>>,
   expected: ExpectedRecoveryApplyIdentity
@@ -424,7 +395,6 @@ function journalMatchesExpected(
   );
 }
 
-/** Runs the exact no-journal transaction and its crash-safe downstream finalization. */
 async function continueAndFinalize(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
   preparation: ContinuePreparation,
@@ -469,7 +439,6 @@ async function continueAndFinalize(
   return { kind: "completed" };
 }
 
-/** Maps one pre-mutation recovery conflict to a fail-closed UI result. */
 function mapRecoveryConflict(
   error: KnowledgeNoJournalApplyRecoveryConflictError
 ): KnowledgeStudioRecoverySubmissionResult {
@@ -481,28 +450,17 @@ function mapRecoveryConflict(
     : { kind: "blocked" };
 }
 
-/** Reports whether an error is the platform cancellation category. */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-/** Frozen transaction port proving Abandon never creates a transaction runtime. */
 const ABANDON_TRANSACTION_UNAVAILABLE = Object.freeze({
-  /** Rejects accidental transaction use from the abandonment-only path. */
   async apply(): Promise<never> {
     throw new Error("Abandon cannot apply a knowledge transaction");
   },
 });
 
-/**
- * Generation-owned production coordinator for explicit no-journal recovery actions.
- *
- * Every action first binds the opaque row to one exact atomic Runtime revision.
- * Continue performs real source reproof and Wiki transaction validation; Abandon
- * remains a Runtime-only decision that cannot access source or Wiki adapters.
- */
 export class KnowledgeProductionRecoveryActionCoordinator {
-  /** Captures one exact App, Runtime, and production workflow generation. */
   constructor(input: KnowledgeProductionRecoveryActionCoordinatorInput) {
     if (
       typeof input !== "object" ||
@@ -530,12 +488,10 @@ export class KnowledgeProductionRecoveryActionCoordinator {
     Object.freeze(this);
   }
 
-  /** Proves a coordinator was minted by this module without exposing its state. */
   static assert(value: unknown): asserts value is KnowledgeProductionRecoveryActionCoordinator {
     requireCoordinatorState(value);
   }
 
-  /** Continues one exact accepted no-journal apply through finalization. */
   continue(
     bundleId: string,
     recoveryId: string,
@@ -555,7 +511,6 @@ export class KnowledgeProductionRecoveryActionCoordinator {
     return operation;
   }
 
-  /** Abandons one exact actionable no-journal state without source or Wiki access. */
   abandon(
     bundleId: string,
     recoveryId: string,
@@ -575,7 +530,6 @@ export class KnowledgeProductionRecoveryActionCoordinator {
     return operation;
   }
 
-  /** Executes one explicit Continue while honoring cancellation only before mutation. */
   private async executeContinue(
     state: KnowledgeProductionRecoveryActionCoordinatorState,
     bundleId: string,
@@ -687,7 +641,6 @@ export class KnowledgeProductionRecoveryActionCoordinator {
     }
   }
 
-  /** Executes one Runtime-only abandonment after an exact actionable re-read. */
   private async executeAbandon(
     state: KnowledgeProductionRecoveryActionCoordinatorState,
     bundleId: string,

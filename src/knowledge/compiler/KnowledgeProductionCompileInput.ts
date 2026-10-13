@@ -10,21 +10,17 @@ import { createQuoteHash, normalizeCitationText } from "@/knowledge/model/finger
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
 import type { SourceLocator } from "@/knowledge/model/types";
 
-/** Stable failure emitted when authentic preparation cannot form bounded Compiler input. */
 export class KnowledgeProductionCompileInputError extends Error {
-  /** Creates a value-free input-derivation failure. */
   constructor() {
     super("The production Knowledge compile input is unavailable");
     this.name = "KnowledgeProductionCompileInputError";
   }
 }
 
-/** Compares strings by code unit without locale-dependent behavior. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** Orders artifacts by their two independent stable identifiers. */
 function compareArtifacts(
   left: SourceArtifactObservation,
   right: SourceArtifactObservation
@@ -34,7 +30,6 @@ function compareArtifacts(
   );
 }
 
-/** Requires model-visible material instead of manufacturing an empty citation. */
 function requireEvidenceText(value: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new KnowledgeProductionCompileInputError();
@@ -42,12 +37,10 @@ function requireEvidenceText(value: string): string {
   return value;
 }
 
-/** Creates one deterministic opaque evidence identifier. */
 function createEvidenceId(index: number): string {
   return `evidence-${String(index + 1).padStart(4, "0")}`;
 }
 
-/** Keeps the artifact hash tied to original bytes even when the excerpt is a paragraph. */
 function createTextLocator(
   artifact: Exclude<SourceArtifactObservation, { kind: "pdf" }>,
   excerpt = requireEvidenceText(artifact.text),
@@ -138,7 +131,6 @@ function createTextLocators(
   });
 }
 
-/** Derives complete, parser-grounded evidence without language-specific chunking rules. */
 function createEvidence(artifacts: readonly SourceArtifactObservation[]): CompilerEvidence[] {
   const sortedArtifacts = [...artifacts].sort(compareArtifacts);
   // Reserve existing artifact/page evidence before spending the remaining budget
@@ -187,7 +179,6 @@ function createEvidence(artifacts: readonly SourceArtifactObservation[]): Compil
   }));
 }
 
-/** Derives write-only authority for pages already tracked by the primary source. */
 function createTargetAuthorizations(
   preparation: Readonly<KnowledgeAuthorizedCompilePreparation>
 ): CompilerTargetAuthorization[] {
@@ -215,13 +206,6 @@ function createTargetAuthorizations(
   });
 }
 
-/**
- * Derives the complete Compiler DTO exclusively from an authorized preparation and Queue time.
- *
- * Context pages remain empty in the first production slice because no retrieval
- * capability has authorized additional Wiki reads. Existing target authority is
- * write-only; delete stays unavailable until production compare-and-delete exists.
- */
 export function createKnowledgeProductionCompileInput(
   preparation: Readonly<KnowledgeAuthorizedCompilePreparation>,
   createdAt: number

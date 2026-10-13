@@ -42,13 +42,6 @@ interface PlannedWriteFailure {
   beforeThrow?: () => void;
 }
 
-/**
- * Clones a JSON-compatible persisted value so tests cannot share references
- * with the fake storage accidentally.
- *
- * @param value - JSON-compatible value to detach
- * @returns Structurally equal detached value
- */
 function clonePersistedValue(value: unknown): unknown {
   if (
     value === null ||
@@ -70,14 +63,6 @@ function clonePersistedValue(value: unknown): unknown {
   throw new TypeError("Fake manifest storage accepts only JSON-compatible values");
 }
 
-/**
- * Creates a valid source entry with a Windows comparison key.
- *
- * @param sourceId - Stable source identifier
- * @param sourcePath - Canonical Vault-relative path
- * @param overrides - Optional contract fields to replace
- * @returns Valid source manifest entry
- */
 function createEntry(
   sourceId = "source-1",
   sourcePath = "Sources/Note.md",
@@ -92,13 +77,6 @@ function createEntry(
   };
 }
 
-/**
- * Creates a valid manifest suitable for seeding the in-memory adapter.
- *
- * @param bundleId - Bundle identity declared by the manifest
- * @param overrides - Optional fields to replace
- * @returns Valid source manifest
- */
 function createManifest(
   bundleId = "personal",
   overrides: Partial<SourceManifest> = {}
@@ -112,12 +90,6 @@ function createManifest(
   };
 }
 
-/**
- * Creates a valid successful compile snapshot.
- *
- * @param overrides - Optional snapshot fields to replace
- * @returns Valid committed compile state
- */
 function createSnapshot(overrides: Partial<SourceCompileSnapshot> = {}): SourceCompileSnapshot {
   return {
     sourceContentHash: HASH_A,
@@ -135,12 +107,6 @@ function createSnapshot(overrides: Partial<SourceCompileSnapshot> = {}): SourceC
   };
 }
 
-/**
- * Creates a valid failed compile observation.
- *
- * @param overrides - Optional failed-attempt fields to replace
- * @returns Serializable failed compile state
- */
 function createFailure(overrides: Partial<SourceCompileFailure> = {}): SourceCompileFailure {
   return {
     sourceContentHash: HASH_C,
@@ -155,7 +121,6 @@ function createFailure(overrides: Partial<SourceCompileFailure> = {}): SourceCom
   };
 }
 
-/** Creates a JSON-safe explicit zero-page no-change marker. */
 function createNoChangesExtension(inputRevision = 1): Record<string, JsonValue> {
   const plan = createNoChangesManifestCommitPlan({
     bundleId: "personal",
@@ -189,9 +154,6 @@ function createNoChangesExtension(inputRevision = 1): Record<string, JsonValue> 
   return { [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: marker as unknown as JsonValue };
 }
 
-/**
- * JSON-only in-memory storage that enforces the Source Manifest CAS contract.
- */
 class InMemorySourceManifestStorage implements SourceManifestStorage {
   private readonly values = new Map<string, unknown>();
   private readonly plannedWriteFailures: PlannedWriteFailure[] = [];
@@ -201,56 +163,25 @@ class InMemorySourceManifestStorage implements SourceManifestStorage {
   public successfulWrites = 0;
   public readonly writtenManifests: SourceManifest[] = [];
 
-  /**
-   * Seeds unknown persisted JSON without invoking repository validation.
-   *
-   * @param bundleId - Storage key to populate
-   * @param value - Unknown JSON value returned by subsequent reads
-   */
   seed(bundleId: string, value: unknown): void {
     this.values.set(bundleId, clonePersistedValue(value));
   }
 
-  /**
-   * Returns detached raw storage state for assertions.
-   *
-   * @param bundleId - Storage key to inspect
-   * @returns Persisted JSON or null when absent
-   */
   getStored(bundleId: string): unknown {
     const value = this.values.get(bundleId);
     return value === undefined ? null : clonePersistedValue(value);
   }
 
-  /**
-   * Plans one write failure, optionally changing storage just before it throws.
-   *
-   * @param error - Exact error thrown by the next write attempt
-   * @param beforeThrow - Optional concurrent storage mutation
-   */
   planWriteFailure(error: Error, beforeThrow?: () => void): void {
     this.plannedWriteFailures.push({ error, ...(beforeThrow ? { beforeThrow } : {}) });
   }
 
-  /**
-   * Reads a detached JSON value without creating missing storage eagerly.
-   *
-   * @param bundleId - Storage key to read
-   * @returns Detached persisted value or null
-   */
   async read(bundleId: string): Promise<unknown> {
     this.readCount += 1;
     const value = this.values.get(bundleId);
     return value === undefined ? null : clonePersistedValue(value);
   }
 
-  /**
-   * Persists a detached manifest only when the expected revision still matches.
-   *
-   * @param bundleId - Storage key to update
-   * @param manifest - Complete proposed manifest
-   * @param expectedRevision - Revision observed by the repository
-   */
   async write(
     bundleId: string,
     manifest: SourceManifest,

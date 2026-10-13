@@ -5,25 +5,20 @@ jest.mock("obsidian", () => {
   class FileSystemAdapter {
     private readonly tails = new Map<string, Promise<void>>();
 
-    /** Creates a fake desktop adapter rooted at one real temporary directory. */
     constructor(private readonly basePath: string) {}
 
-    /** Returns the fake Vault root. */
     getBasePath(): string {
       return this.basePath;
     }
 
-    /** Resolves one Vault-relative path beneath the fake root. */
     getFullPath(normalizedPath: string): string {
       return path.join(this.basePath, ...normalizedPath.split("/"));
     }
 
-    /** Reads exact UTF-8 file contents. */
     read(normalizedPath: string): Promise<string> {
       return fs.readFile(this.getFullPath(normalizedPath), "utf8");
     }
 
-    /** Serializes one fake atomic plaintext transform per file path. */
     async process(
       normalizedPath: string,
       transform: (currentContent: string) => string
@@ -74,12 +69,10 @@ type TestFileSystemAdapter = FileSystemAdapter & {
 const temporaryDirectories: string[] = [];
 const RUNTIME_PATH = "Config/plugins/copilot/runtime.json";
 
-/** Loads the native Node modules used by the filesystem-backed test edge. */
 function loadTestNodeRuntime(): ObsidianNodeRuntimeModules {
   return { fs, path, randomUUID };
 }
 
-/** Creates one fake FileSystemAdapter rooted in a fresh temporary Vault. */
 async function createAdapter(createRuntimeParent = true): Promise<TestFileSystemAdapter> {
   const basePath = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-knowledge-runtime-"));
   temporaryDirectories.push(basePath);

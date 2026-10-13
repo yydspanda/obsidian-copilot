@@ -6,14 +6,12 @@ import {
   type KnowledgeStudioPresentationHint,
 } from "@/knowledge/ui/KnowledgeStudioWindowNavigation";
 
-/** Creates a structural leaf owned by one exact renderer container. */
 function createLeaf(doc: Document, win: Window): WorkspaceLeaf {
   return {
     getContainer: () => ({ doc, win }),
   } as WorkspaceLeaf;
 }
 
-/** Creates an exact presentation hint without relying on the active renderer. */
 function createHint(doc: Document, win: Window): Readonly<KnowledgeStudioPresentationHint> {
   return Object.freeze({ doc, win });
 }

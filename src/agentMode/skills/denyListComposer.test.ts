@@ -1,11 +1,6 @@
 import { composeDenyList } from "./denyListComposer";
 import type { BackendId, Skill } from "./types";
 
-/**
- * Build a minimal Skill with only the fields composeDenyList consults.
- * Keeps the test cases dense — composer is pure, so the other fields don't
- * matter.
- */
 function skill(name: string, enabledAgents: BackendId[]): Skill {
   return {
     name,
@@ -18,12 +13,6 @@ function skill(name: string, enabledAgents: BackendId[]): Skill {
   };
 }
 
-/**
- * Mirror of each backend's `BackendDescriptor.crossDiscoveredAgents` for
- * test-only convenience — the production data lives on the descriptors
- * themselves; this is a local fixture so we don't repeat the list in every
- * assertion.
- */
 const CROSS: Record<BackendId, BackendId[]> = {
   opencode: ["claude", "codex"],
   claude: [],
@@ -34,76 +23,52 @@ const deny = (skills: Skill[], b: BackendId) => composeDenyList(skills, b, CROSS
 
 describe("denyListComposer", () => {
   describe("composeDenyList()", () => {
-    it("denies a Claude-only skill in OpenCode (cross-discovered via .claude/skills/)", () => {
-      const a = skill("a", ["claude"]);
-      expect(deny([a], "opencode")).toEqual(["a"]);
-      expect(deny([a], "claude")).toEqual([]);
-      expect(deny([a], "codex")).toEqual([]);
+    it("denies in OpenCode a skill enabled only for Claude", () => {
+      expect(deny([skill("claude-only", ["claude"])], "opencode")).toEqual(["claude-only"]);
     });
 
-    it("does not deny a skill that is enabled for OpenCode (and also Claude)", () => {
-      const b = skill("b", ["claude", "opencode"]);
-      expect(deny([b], "opencode")).toEqual([]);
-      expect(deny([b], "claude")).toEqual([]);
-      expect(deny([b], "codex")).toEqual([]);
+    it("denies in OpenCode a skill enabled only for Codex", () => {
+      expect(deny([skill("codex-only", ["codex"])], "opencode")).toEqual(["codex-only"]);
     });
 
-    it("does not deny a custom skill that is enabled for nothing", () => {
-      const c = skill("c", []);
-      expect(deny([c], "opencode")).toEqual([]);
-      expect(deny([c], "claude")).toEqual([]);
-      expect(deny([c], "codex")).toEqual([]);
+    it("does not deny in OpenCode a skill enabled for OpenCode, alone or alongside Claude", () => {
+      const all = [skill("opencode-only", ["opencode"]), skill("shared", ["claude", "opencode"])];
+      expect(deny(all, "opencode")).toEqual([]);
     });
 
-    it("denies disabled built-ins despite an empty effective agent list https://github.com/logancyang/obsidian-copilot/issues/3022", () => {
+    it("does not deny a custom skill that is enabled for no agent", () => {
+      expect(deny([skill("unassigned", [])], "opencode")).toEqual([]);
+    });
+
+    it("denies nothing for backends that have no cross-discovered agents", () => {
+      const all = [skill("a", ["claude"]), skill("b", ["codex"]), skill("c", ["opencode"])];
+      expect(deny(all, "claude")).toEqual([]);
+      expect(deny(all, "codex")).toEqual([]);
+    });
+
+    it("denies a disabled built-in despite its empty agent list https://github.com/logancyang/obsidian-copilot/issues/3022", () => {
       const disabled = { ...skill("disabled", []), builtin: true };
       expect(deny([disabled], "opencode")).toEqual(["disabled"]);
       expect(deny([disabled], "claude")).toEqual([]);
     });
 
-    it("keeps built-ins usable for their enabled backend https://github.com/logancyang/obsidian-copilot/issues/3022", () => {
+    it("keeps a built-in usable for its enabled backend https://github.com/logancyang/obsidian-copilot/issues/3022", () => {
       const enabled = { ...skill("enabled", ["opencode"]), builtin: true };
       expect(deny([enabled], "opencode")).toEqual([]);
     });
 
-    it("does not deny an OpenCode-only skill in OpenCode (not cross-discovered for itself)", () => {
-      const d = skill("d", ["opencode"]);
-      expect(deny([d], "opencode")).toEqual([]);
-      expect(deny([d], "claude")).toEqual([]);
-      expect(deny([d], "codex")).toEqual([]);
-    });
-
-    it("denies a Codex-only skill in OpenCode (cross-discovered via .agents/skills/)", () => {
-      const e = skill("e", ["codex"]);
-      expect(deny([e], "opencode")).toEqual(["e"]);
-      expect(deny([e], "claude")).toEqual([]);
-      expect(deny([e], "codex")).toEqual([]);
-    });
-
-    it("returns a sorted, de-duplicated list for mixed skills (A/B/C/D)", () => {
-      const a = skill("a", ["claude"]);
-      const b = skill("b", ["claude", "opencode"]);
-      const c = skill("c", []);
-      const d = skill("d", ["opencode"]);
-      // intentional ordering: unsorted input, ensure sorted output.
-      const all = [d, a, c, b];
-      expect(deny(all, "opencode")).toEqual(["a"]);
-      expect(deny(all, "claude")).toEqual([]);
-      expect(deny(all, "codex")).toEqual([]);
-    });
-
-    it("sorts deterministically when multiple skills are denied", () => {
-      const z = skill("z-task", ["claude"]);
-      const m = skill("m-task", ["codex"]);
-      const a = skill("a-task", ["claude"]);
-      const all = [z, m, a];
+    it("returns denied names sorted alphabetically from a mixed skill list", () => {
+      const all = [
+        skill("z-task", ["claude"]),
+        skill("kept", ["opencode"]),
+        skill("m-task", ["codex"]),
+        skill("a-task", ["claude"]),
+      ];
       expect(deny(all, "opencode")).toEqual(["a-task", "m-task", "z-task"]);
     });
 
-    it("is empty when no skills exist", () => {
+    it("returns an empty list when there are no skills", () => {
       expect(deny([], "opencode")).toEqual([]);
-      expect(deny([], "claude")).toEqual([]);
-      expect(deny([], "codex")).toEqual([]);
     });
   });
 });

@@ -30,15 +30,12 @@ const MAX_FOLDER_IMPORT_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_FOLDER_IMPORT_RELATIVE_PATH_LENGTH = 1_024;
 const MAX_WINDOWS_DESTINATION_PATH_LENGTH = 240;
 
-/** Exact result of publishing one managed source copy into the Vault. */
 export interface KnowledgeFolderImportPublishResult {
   status: "created" | "reused" | "conflict";
   contentHash?: string;
 }
 
-/** Least-authority binary destination owned by one exact source root. */
 export interface KnowledgeFolderImportFileStorePort {
-  /** Publishes exact bytes without replacing an existing destination. */
   publish(
     destinationPath: string,
     bytes: Uint8Array,
@@ -46,7 +43,6 @@ export interface KnowledgeFolderImportFileStorePort {
   ): Promise<KnowledgeFolderImportPublishResult>;
 }
 
-/** Exact production dependencies retained by one released import generation. */
 export interface KnowledgeProductionFolderImportCoordinatorInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   parserProfiles: readonly KnowledgeSourceParserProfile[];
@@ -76,17 +72,14 @@ interface FolderImportPlan {
   readonly skippedFiles: number;
 }
 
-/** Creates the standard cancellation category for stale production import work. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reports whether an error is cancellation from any supported runtime. */
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-/** Converts a systemic copy-boundary failure into one path-free import error. */
 function createStoreImportError(error: unknown): KnowledgeFolderImportError {
   if (
     error instanceof KnowledgeFolderImportFileStoreError &&
@@ -97,7 +90,6 @@ function createStoreImportError(error: unknown): KnowledgeFolderImportError {
   return new KnowledgeFolderImportError("import_failed");
 }
 
-/** Requires caller cancellation and the owning production generation together. */
 function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void): void {
   if (signal.aborted) throw createAbortError();
   try {
@@ -108,7 +100,6 @@ function assertCurrent(signal: AbortSignal, assertGenerationCurrent: () => void)
   if (signal.aborted) throw createAbortError();
 }
 
-/** Returns the exact lower-case suffix beginning with its final dot. */
 function getPathSuffix(path: string): string | undefined {
   const fileName = path.slice(path.lastIndexOf("/") + 1);
   const dotIndex = fileName.lastIndexOf(".");
@@ -116,7 +107,6 @@ function getPathSuffix(path: string): string | undefined {
   return toWindowsPathKey(fileName.slice(dotIndex));
 }
 
-/** Proves that exactly one current production parser owns the candidate suffix. */
 function hasSingleParserOwner(
   suffix: string,
   profiles: readonly KnowledgeSourceParserProfile[]
@@ -128,7 +118,6 @@ function hasSingleParserOwner(
   );
 }
 
-/** Reads one enumerable own data property without evaluating an accessor. */
 function readDataProperty(value: object, key: string): unknown {
   let descriptor: PropertyDescriptor | undefined;
   try {
@@ -142,7 +131,6 @@ function readDataProperty(value: object, key: string): unknown {
   return descriptor.value;
 }
 
-/** Reads one browser-selected relative path without retaining an external absolute path. */
 function captureWebkitRelativePath(file: KnowledgeFolderImportFile): string {
   let value: unknown;
   try {
@@ -160,7 +148,6 @@ function captureWebkitRelativePath(file: KnowledgeFolderImportFile): string {
   return value;
 }
 
-/** Reads one exact, bounded browser File size before any byte allocation. */
 function captureFileSize(file: KnowledgeFolderImportFile): number {
   let value: unknown;
   try {
@@ -177,7 +164,6 @@ function captureFileSize(file: KnowledgeFolderImportFile): number {
   return value as number;
 }
 
-/** Snapshots and validates one complete folder selection before the first file read. */
 function createFolderImportPlan(
   request: Readonly<KnowledgeFolderImportRequest>,
   sourceRoot: string,
@@ -298,7 +284,6 @@ function createFolderImportPlan(
   });
 }
 
-/** Reads and copies one selected File into parser-owned bytes. */
 async function readSelectedFile(
   selection: SelectedFolderFile,
   signal: AbortSignal,
@@ -324,18 +309,9 @@ async function readSelectedFile(
   return new Uint8Array(copied);
 }
 
-/**
- * Generation-bound production adapter for explicit Knowledge Studio folder import.
- *
- * The coordinator retains no external absolute path. It validates the entire
- * browser selection before reads, then sequentially creates managed Vault copies
- * and registers them. Partial success is durable and exact retries converge.
- */
 export class KnowledgeProductionFolderImportCoordinator implements KnowledgeFolderImportPort {
-  /** Creates one exact released-generation folder import adapter. */
   constructor(private readonly input: KnowledgeProductionFolderImportCoordinatorInput) {}
 
-  /** Copies and registers one explicit folder selection with one generation refresh. */
   async importFolder(
     request: Readonly<KnowledgeFolderImportRequest>,
     signal: AbortSignal
@@ -473,7 +449,6 @@ export class KnowledgeProductionFolderImportCoordinator implements KnowledgeFold
     });
   }
 
-  /** Requires exactly one production Bundle for implicit folder import. */
   private resolveOwner(): ConfiguredProjectKnowledgeBundle {
     if (this.input.owners.length !== 1) {
       throw new KnowledgeFolderImportError("ambiguous_bundle");
@@ -481,7 +456,6 @@ export class KnowledgeProductionFolderImportCoordinator implements KnowledgeFold
     return this.input.owners[0];
   }
 
-  /** Requires exactly one source root so import never guesses a durable destination. */
   private resolveSourceRoot(owner: ConfiguredProjectKnowledgeBundle): string {
     if (owner.config.sourceRoots.length !== 1) {
       throw new KnowledgeFolderImportError("ambiguous_source_root");

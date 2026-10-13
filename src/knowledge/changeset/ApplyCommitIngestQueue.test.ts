@@ -61,12 +61,10 @@ type CoordinationOperation =
   | "queue.get_pending"
   | "queue.finalize";
 
-/** JSON-clones one persistence value to prevent shared-reference test shortcuts. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Creates the Bundle used by the real queue integration flow. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -78,7 +76,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates the accepted ChangeSet represented by the committed journal. */
 function createChangeSet(): KnowledgeChangeSet {
   return {
     id: CHANGE_SET_ID,
@@ -104,7 +101,6 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
-/** Creates the final source projection committed after the accepted ChangeSet. */
 function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestCommitIntent {
   const manifest: SourceManifest = {
     version: 1,
@@ -137,7 +133,6 @@ function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestComm
   };
 }
 
-/** Creates a complete version-2 committed journal from the real queue claim. */
 function createCommittedJournal(
   job: Readonly<Extract<KnowledgeIngestJob, { status: "processing" }>>,
   bundle: KnowledgeBundleConfig
@@ -182,7 +177,6 @@ function createCommittedJournal(
   };
 }
 
-/** Derives the public receipt that must exactly match one committed journal. */
 function createReceipt(journal: CommittedChangeSetTransactionJournal): TransactionCommitReceipt {
   return {
     transactionId: journal.transactionId,
@@ -204,24 +198,20 @@ function createReceipt(journal: CommittedChangeSetTransactionJournal): Transacti
   };
 }
 
-/** Mutable durable state shared by the executor and transaction fake. */
 interface CommittedTransactionState {
   active: CommittedChangeSetTransactionJournal | null;
 }
 
-/** In-memory queue storage enforcing the real optimistic revision contract. */
 class MemoryQueueStorage implements QueueStorage {
   private readonly snapshots = new Map<string, IngestQueueSnapshot>();
   writeAttempts = 0;
   failAtWriteAttempt?: number;
 
-  /** Reads a detached snapshot for one Bundle. */
   async read(bundleId: string): Promise<unknown> {
     const snapshot = this.snapshots.get(bundleId);
     return snapshot ? cloneJson(snapshot) : null;
   }
 
-  /** Atomically compares and replaces one complete queue snapshot. */
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
@@ -240,17 +230,14 @@ class MemoryQueueStorage implements QueueStorage {
   }
 }
 
-/** Executor that leaves the real queue at commit-ready while publishing a durable journal. */
 class CommitReadyExecutor implements IngestExecutor {
   lastReceipt?: TransactionCommitReceipt;
 
-  /** Creates an executor over the Bundle and shared transaction state. */
   constructor(
     private readonly bundle: KnowledgeBundleConfig,
     private readonly transactionState: CommittedTransactionState
   ) {}
 
-  /** Reports applying, durably commits the fake transaction, and returns its receipt. */
   async execute(context: IngestExecutionContext): Promise<IngestExecutionResult> {
     await context.reportStage("applying");
     const journal = createCommittedJournal(context.job, this.bundle);
@@ -261,15 +248,12 @@ class CommitReadyExecutor implements IngestExecutor {
   }
 }
 
-/** Minimal durable transaction port backed by one active committed journal. */
 class MemoryTransactionPort implements ApplyCommitTransactionPort {
-  /** Creates the transaction port over shared state and an operation trace. */
   constructor(
     private readonly state: CommittedTransactionState,
     private readonly operations: CoordinationOperation[]
   ) {}
 
-  /** Reports the active journal as already committed, or reports an empty slot. */
   async recoverOnStartup(_bundle: KnowledgeBundleConfig): Promise<TransactionRecoveryResult> {
     this.operations.push("transaction.recover");
     const active = this.state.active;
@@ -278,13 +262,11 @@ class MemoryTransactionPort implements ApplyCommitTransactionPort {
       : { kind: "none" };
   }
 
-  /** Reads a detached copy of the active committed journal. */
   async loadActive(): Promise<ChangeSetTransactionJournal | null> {
     this.operations.push("transaction.load");
     return this.state.active ? cloneJson(this.state.active) : null;
   }
 
-  /** Clears only the exact active committed transaction. */
   async acknowledgeCommitted(receipt: TransactionCommitReceipt): Promise<boolean> {
     this.operations.push("transaction.ack");
     if (!this.state.active || this.state.active.transactionId !== receipt.transactionId) {
@@ -295,33 +277,27 @@ class MemoryTransactionPort implements ApplyCommitTransactionPort {
   }
 }
 
-/** Observed adapter that delegates every queue operation to the real IngestQueue. */
 class ObservedQueuePort implements ApplyCommitQueuePort {
-  /** Creates an observed queue adapter over the real runtime. */
   constructor(
     private readonly queue: IngestQueue,
     private readonly operations: CoordinationOperation[]
   ) {}
 
-  /** Traces and delegates the read-only exact apply proof. */
   async verifyApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     this.operations.push("queue.verify");
     return this.queue.verifyApplyRecovery(receipt);
   }
 
-  /** Traces and delegates durable queue completion and marker creation. */
   async resolveApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
     this.operations.push("queue.resolve");
     return this.queue.resolveApplyRecovery(receipt);
   }
 
-  /** Traces and delegates pending apply-marker reads. */
   async getPendingApplyCommit(bundleId: string): Promise<IngestApplyCommitMarker | null> {
     this.operations.push("queue.get_pending");
     return this.queue.getPendingApplyCommit(bundleId);
   }
 
-  /** Traces and delegates final queue-marker release. */
   async finalizeApplyRecovery(
     bundleId: string,
     transactionId: string
@@ -331,19 +307,16 @@ class ObservedQueuePort implements ApplyCommitQueuePort {
   }
 }
 
-/** Manifest probe that proves no queue success is visible before its durable write. */
 class ProbingManifestPort implements ApplyCommitManifestPort {
   failOnce = false;
   attempts = 0;
   durableWrites = 0;
 
-  /** Creates the probe over the real queue and operation trace. */
   constructor(
     private readonly queue: IngestQueue,
     private readonly operations: CoordinationOperation[]
   ) {}
 
-  /** Verifies pre-manifest queue state and records one idempotent logical success. */
   async recordCommitted(
     journal: CommittedChangeSetTransactionJournal,
     _receipt: TransactionCommitReceipt
@@ -373,7 +346,6 @@ class ProbingManifestPort implements ApplyCommitManifestPort {
   }
 }
 
-/** Complete integration harness stopped at the queue's commit-ready boundary. */
 interface CommitReadyHarness {
   bundle: KnowledgeBundleConfig;
   storage: MemoryQueueStorage;
@@ -386,7 +358,6 @@ interface CommitReadyHarness {
   receipt: TransactionCommitReceipt;
 }
 
-/** Enqueues and executes one source until the real queue returns commit-ready. */
 async function createCommitReadyHarness(): Promise<CommitReadyHarness> {
   const bundle = createBundle();
   const transactionState: CommittedTransactionState = { active: null };
@@ -428,7 +399,6 @@ async function createCommitReadyHarness(): Promise<CommitReadyHarness> {
   };
 }
 
-/** Requires the real queue to remain at its unacknowledged applying boundary. */
 async function expectCommitReadyQueue(harness: CommitReadyHarness): Promise<void> {
   const snapshot = await harness.queue.load(harness.bundle.id);
   expect(snapshot.control).toEqual({ status: "running" });
@@ -456,7 +426,6 @@ async function expectCommitReadyQueue(harness: CommitReadyHarness): Promise<void
 }
 
 describe("ApplyCommitCoordinator with the real IngestQueue", () => {
-  /** Proves that no queue success is persisted before manifest durability. */
   it("keeps commit-ready applying state until coordinated manifest success", async () => {
     const harness = await createCommitReadyHarness();
 
@@ -501,7 +470,6 @@ describe("ApplyCommitCoordinator with the real IngestQueue", () => {
     });
   });
 
-  /** Proves a failed manifest write cannot advance queue or transaction acknowledgement. */
   it("leaves journal and applying queue intact after manifest failure, then converges", async () => {
     const harness = await createCommitReadyHarness();
     harness.manifest.failOnce = true;

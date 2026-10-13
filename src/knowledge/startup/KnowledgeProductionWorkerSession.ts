@@ -1,26 +1,21 @@
 import type { IngestQueue, RunNextResult } from "@/knowledge/ingest/queue/IngestQueue";
 
-/** Narrow production authority needed by the first Queue worker boundary. */
 export interface KnowledgeProductionWorkerSessionInput {
-  /** Queue instance owned by the exact released Runtime generation. */
   queue: IngestQueue;
-  /** Configured Bundle identifiers in deterministic execution order. */
+
   bundleIds: readonly string[];
-  /** Reports whether conditional startup release has completed for this generation. */
+
   isReleased(): boolean;
-  /** Re-proves Runtime, observation, and preflight identity before each claim. */
+
   assertCurrent(): void;
 }
 
-/** Sanitized result of one bounded worker polling pass. */
 export type KnowledgeProductionWorkerPassResult = Readonly<{
   kind: "pass";
   results: readonly Readonly<{ bundleId: string; result: RunNextResult }>[];
 }>;
 
-/** Stable worker lifecycle failure with no Queue, job, or source payload. */
 export class KnowledgeProductionWorkerSessionError extends Error {
-  /** Creates a fail-closed worker lifecycle error. */
   constructor(public readonly code: "not_released" | "stale" | "busy" | "input_invalid") {
     super("The production Knowledge worker session is not authorized");
     this.name = "KnowledgeProductionWorkerSessionError";
@@ -38,7 +33,6 @@ interface WorkerState {
 
 const workerStates = new WeakMap<object, WorkerState>();
 
-/** Re-proves that an awaited worker pass still belongs to the current live generation. */
 function assertWorkerCurrent(state: WorkerState): void {
   if (state.closed) {
     throw new KnowledgeProductionWorkerSessionError("stale");
@@ -46,7 +40,6 @@ function assertWorkerCurrent(state: WorkerState): void {
   state.assertCurrent();
 }
 
-/** Validates a bounded deterministic Bundle identifier list without invoking accessors. */
 function snapshotBundleIds(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10_000) {
     throw new KnowledgeProductionWorkerSessionError("input_invalid");
@@ -64,9 +57,7 @@ function snapshotBundleIds(value: unknown): readonly string[] {
   return Object.freeze(sorted);
 }
 
-/** Owns one explicitly released, bounded Queue worker pass without model authority. */
 export class KnowledgeProductionWorkerSession {
-  /** Captures one exact Queue and generation authority synchronously. */
   constructor(input: KnowledgeProductionWorkerSessionInput) {
     if (!(input.queue instanceof Object) || typeof input.queue.runNext !== "function") {
       throw new KnowledgeProductionWorkerSessionError("input_invalid");
@@ -85,7 +76,6 @@ export class KnowledgeProductionWorkerSession {
     Object.freeze(this);
   }
 
-  /** Runs at most one Queue claim per configured Bundle and never schedules itself. */
   async runOnce(): Promise<KnowledgeProductionWorkerPassResult> {
     const state = workerStates.get(this);
     if (!state || state.closed) {
@@ -125,7 +115,6 @@ export class KnowledgeProductionWorkerSession {
     }
   }
 
-  /** Permanently revokes future worker passes. */
   close(): void {
     const state = workerStates.get(this);
     if (state) state.closed = true;

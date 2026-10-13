@@ -31,12 +31,10 @@ const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
 const MANIFEST_HASH = "c".repeat(64);
 
-/** Creates a JSON clone suitable for the strict test persistence adapter. */
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Atomic in-memory storage with deterministic failure injection. */
 class MemoryReviewStorage implements ReviewStorage {
   readonly values = new Map<string, ChangeSetReviewSnapshot>();
   readonly writes: Array<{
@@ -48,7 +46,6 @@ class MemoryReviewStorage implements ReviewStorage {
   readFailure?: Error;
   writeFailure?: Error;
 
-  /** Reads one detached in-memory snapshot or an injected malformed value. */
   async read(bundleId: string): Promise<unknown> {
     if (this.readFailure) {
       throw this.readFailure;
@@ -57,7 +54,6 @@ class MemoryReviewStorage implements ReviewStorage {
     return snapshot ? cloneJson(snapshot) : null;
   }
 
-  /** Atomically compares and replaces one complete in-memory snapshot. */
   async write(
     bundleId: string,
     snapshot: ChangeSetReviewSnapshot,
@@ -79,13 +75,11 @@ class MemoryReviewStorage implements ReviewStorage {
     this.writes.push({ bundleId, snapshot: cloneJson(snapshot), expectedRevision });
   }
 
-  /** Seeds strict or deliberately malformed persisted JSON for a test. */
   seed(bundleId: string, value: ChangeSetReviewSnapshot): void {
     this.values.set(bundleId, cloneJson(value));
   }
 }
 
-/** Creates the immutable queue identity paired with one proposal. */
 function createJobClaim(jobId = "job-1"): ChangeSetReviewJobClaim {
   return {
     jobId,
@@ -97,7 +91,6 @@ function createJobClaim(jobId = "job-1"): ChangeSetReviewJobClaim {
   };
 }
 
-/** Creates one valid proposed file creation. */
 function createFileChange(id = "change-1", content = "# Page\n"): KnowledgeFileChange {
   return {
     id,
@@ -111,7 +104,6 @@ function createFileChange(id = "change-1", content = "# Page\n"): KnowledgeFileC
   };
 }
 
-/** Creates a valid review-only ChangeSet. */
 function createProposal(
   id = "changeset-1",
   changes: KnowledgeFileChange[] = [createFileChange()]
@@ -129,7 +121,6 @@ function createProposal(
   };
 }
 
-/** Creates one strict complete Manifest plan for a proposed source compile. */
 function createManifestCommitPlan(
   proposal: KnowledgeChangeSet,
   jobClaim = createJobClaim()
@@ -165,7 +156,6 @@ function createManifestCommitPlan(
   };
 }
 
-/** Creates an exact proposal persistence command. */
 function createSaveInput(proposal = createProposal(), jobClaim = createJobClaim()) {
   const manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim);
   return {
@@ -177,7 +167,6 @@ function createSaveInput(proposal = createProposal(), jobClaim = createJobClaim(
   };
 }
 
-/** Creates an accepted payload over selected or rewritten proposal changes. */
 function createAccepted(
   proposal: KnowledgeChangeSet,
   changes: KnowledgeFileChange[] = proposal.changes
@@ -185,7 +174,6 @@ function createAccepted(
   return { ...proposal, changes, status: "accepted" };
 }
 
-/** Creates a valid seeded pending review snapshot. */
 function createSeedSnapshot(
   proposal = createProposal(),
   overrides: Partial<ChangeSetReviewSnapshot["records"][number]> = {}

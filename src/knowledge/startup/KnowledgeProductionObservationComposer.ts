@@ -94,27 +94,23 @@ import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowled
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
-/** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
-  /** App/Vault lifecycle owner used for exact source and schema reads. */
   app: App;
-  /** Already initialized shared atomic Runtime envelope. */
+
   runtime: KnowledgeRuntimeStore;
-  /** Same-snapshot, secret-free capability minted by production preflight. */
+
   workflowLease: KnowledgePluginProductionWorkflowLease;
-  /** One-shot exact preflight bridge for this composition. */
+
   workflowCompositionClaim: KnowledgePluginProductionWorkflowCompositionClaim;
-  /** Best-effort path-free host notification capability for source issues. */
+
   notificationSink?: VaultSourceWatcherNotificationSink;
 }
 
-/** Stable composition failures that never expose paths, settings, bytes, or causes. */
 export type KnowledgeProductionObservationDiagnosticCode =
   | "dependency_invalid"
   | "workflow_plan_unavailable"
   | "observation_session_unavailable";
 
-/** Sanitized production observation result with no Queue execution or release authority. */
 export type KnowledgeProductionObservationResult =
   | KnowledgeSourceObservationStartupCoordinatorResult
   | Readonly<{
@@ -122,7 +118,6 @@ export type KnowledgeProductionObservationResult =
       code: KnowledgeProductionObservationDiagnosticCode;
     }>;
 
-/** Sanitized repeatable health proof retained inside the same live watcher session. */
 export type KnowledgeProductionObservationReproofResult =
   | KnowledgeSourceObservationStartupReproofResult
   | Readonly<{
@@ -130,33 +125,27 @@ export type KnowledgeProductionObservationReproofResult =
       code: KnowledgeProductionObservationDiagnosticCode;
     }>;
 
-/** Exact active Manifest source identity projected without watch-plan authority. */
 export interface KnowledgeProductionRegisteredSourcePathSummary {
   readonly bundleId: string;
   readonly sourceId: string;
   readonly sourcePath: string;
 }
 
-/** Execution boundary deliberately unavailable to an observation-only Queue controller. */
 class KnowledgeObservationExecutionUnavailableError extends Error {
-  /** Creates a value-free failure for any accidental attempt to claim Queue work. */
   constructor() {
     super("The Knowledge observation generation cannot execute Queue work");
     this.name = "KnowledgeObservationExecutionUnavailableError";
   }
 }
 
-/** Queue executor that makes the startup-held Queue incapable of running work. */
 class StartupHeldObservationIngestExecutor {
   private executor?: IngestExecutor;
 
-  /** Rejects every accidental execution attempt without inspecting its context. */
   async execute(context: IngestExecutionContext) {
     if (!this.executor) throw new KnowledgeObservationExecutionUnavailableError();
     return this.executor.execute(context);
   }
 
-  /** Installs one explicit executor after the caller has proved worker readiness. */
   setExecutor(executor: IngestExecutor): void {
     if (this.executor || typeof executor?.execute !== "function") {
       throw new KnowledgeObservationExecutionUnavailableError();
@@ -165,16 +154,13 @@ class StartupHeldObservationIngestExecutor {
   }
 }
 
-/** Queue event sink that can wake only the controller installed for this generation. */
 class StartupHeldObservationEventSink implements EventSink {
   private controller?: KnowledgeProductionWorkerController;
 
-  /** Ignores pre-release events and coalesces post-release committed changes. */
   emit(): void {
     this.controller?.notifyWorkAvailable();
   }
 
-  /** Installs exactly one authentic controller after conditional release. */
   setController(controller: KnowledgeProductionWorkerController): void {
     if (this.controller || !(controller instanceof KnowledgeProductionWorkerController)) {
       throw createAbortError();
@@ -182,7 +168,6 @@ class StartupHeldObservationEventSink implements EventSink {
     this.controller = controller;
   }
 
-  /** Drops future wakeups before the Queue execution generation is closed. */
   close(): void {
     this.controller = undefined;
   }
@@ -230,12 +215,10 @@ interface KnowledgeProductionObservationInternalState {
 
 const composerStates = new WeakMap<object, KnowledgeProductionObservationInternalState>();
 
-/** Creates the platform-standard cancellation used for stale workflow generations. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Reads one required enumerable data property without evaluating an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new TypeError("Invalid production observation input");
@@ -247,7 +230,6 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Reads one optional enumerable data property without evaluating an accessor. */
 function readOptionalDataProperty(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     throw new TypeError("Invalid production observation input");
@@ -260,7 +242,6 @@ function readOptionalDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
-/** Snapshots one optional watcher notification capability without retaining accessors. */
 function snapshotNotificationSink(value: unknown): VaultSourceWatcherNotificationSink | undefined {
   if (value === undefined) return undefined;
   const emit = readDataProperty(value, "emit");
@@ -274,7 +255,6 @@ function snapshotNotificationSink(value: unknown): VaultSourceWatcherNotificatio
   });
 }
 
-/** Returns hidden mutable state only for an authentic composer instance. */
 function requireComposerState(value: unknown): KnowledgeProductionObservationInternalState {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("The production observation composer is invalid");
@@ -286,21 +266,18 @@ function requireComposerState(value: unknown): KnowledgeProductionObservationInt
   return state;
 }
 
-/** Creates one fixed frozen diagnostic without retaining a lower-level failure. */
 function createDiagnostic(
   code: KnowledgeProductionObservationDiagnosticCode
 ): Extract<KnowledgeProductionObservationResult, { kind: "diagnostic" }> {
   return Object.freeze({ kind: "diagnostic" as const, code });
 }
 
-/** Compares stable source identifiers without depending on the host locale. */
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
 }
 
-/** Projects a retained watch plan into a frozen path-only source index. */
 function snapshotRegisteredSourcePaths(
   plan: KnowledgeSourceExecutionPlan
 ): readonly Readonly<KnowledgeProductionRegisteredSourcePathSummary>[] {
@@ -324,7 +301,6 @@ function snapshotRegisteredSourcePaths(
   );
 }
 
-/** Reports whether exact composer and preflight ownership remain current. */
 function isCompositionCurrent(
   state: KnowledgeProductionObservationInternalState,
   generation: number,
@@ -341,7 +317,6 @@ function isCompositionCurrent(
   return true;
 }
 
-/** Throws when either the composer generation or its preflight lease is stale. */
 function assertCompositionCurrent(
   state: KnowledgeProductionObservationInternalState,
   generation: number,
@@ -357,7 +332,6 @@ function assertCompositionCurrent(
   }
 }
 
-/** Builds exact Runtime, owner, reader, and enqueue-only pre-observation ports. */
 function composeObservation(
   owner: KnowledgeProductionObservationComposer,
   input: KnowledgeProductionObservationComposerInput,
@@ -447,13 +421,6 @@ function composeObservation(
   return composition;
 }
 
-/**
- * Captures parser profiles and binds the workflow loader only after recovery is clear.
- *
- * Constructor-time recovery composition deliberately never calls this helper,
- * so a broken parser registry cannot prevent an existing durable journal from
- * reaching its commit-wins recovery boundary.
- */
 function createObservationWorkflowPlanLoader(
   state: KnowledgeProductionObservationInternalState,
   generation: number,
@@ -477,7 +444,6 @@ function createObservationWorkflowPlanLoader(
   });
 }
 
-/** Creates and installs the watcher/reconciler/coordinator for one authenticated plan. */
 function createObservationCoordinator(
   state: KnowledgeProductionObservationInternalState,
   generation: number,
@@ -505,7 +471,6 @@ function createObservationCoordinator(
   });
 }
 
-/** Closes a retained observation coordinator without exposing cleanup failures. */
 function closeCoordinator(state: KnowledgeProductionObservationInternalState): void {
   const coordinator = state.coordinator;
   state.coordinator = undefined;
@@ -514,18 +479,10 @@ function closeCoordinator(state: KnowledgeProductionObservationInternalState): v
     coordinator.close();
   } catch {
     // Publication authority is already revoked before cleanup is attempted.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Subscribes one Studio Bundle to coalesced Vault and source-issue reload hints.
- *
- * @param composition - Current App/Vault and workflow generation
- * @param bundleId - Configured Bundle whose Wiki targets are observed
- * @param onHint - Non-authoritative reload callback
- * @param subscribeSourceIssueHints - Generation-owned recoverable issue hint source
- * @returns Idempotent cleanup for every exact-generation hint source
- */
 function subscribeKnowledgeStudioExternalHints(
   composition: KnowledgeProductionObservationComposition,
   bundleId: string,
@@ -549,6 +506,7 @@ function subscribeKnowledgeStudioExternalHints(
       onHint();
     } catch {
       // A stale generation or presentation failure cannot affect watcher state.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   };
   const scheduleHint = (): void => {
@@ -581,12 +539,14 @@ function subscribeKnowledgeStudioExternalHints(
         vault.offref(ref);
       } catch {
         // Partial subscription authority is already discarded.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
     try {
       unsubscribeSourceIssues?.();
     } catch {
       // Partial issue subscription authority is already discarded.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     throw createAbortError();
   }
@@ -599,25 +559,19 @@ function subscribeKnowledgeStudioExternalHints(
         vault.offref(ref);
       } catch {
         // The subscription is already non-authoritative for this generation.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
     try {
       unsubscribeSourceIssues?.();
     } catch {
       // The source-issue subscription is already non-authoritative.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   };
 }
 
-/**
- * Owns one production observation generation without exposing Queue execution.
- *
- * The composer retains the listener after initial convergence so later startup
- * phases can repeatedly quiesce and re-prove health. It has no Release, model,
- * Review decision, transaction preparation, or Wiki mutation capability.
- */
 export class KnowledgeProductionObservationComposer {
-  /** Captures one exact Runtime/App/preflight generation and installs synchronous revocation. */
   constructor(input: KnowledgeProductionObservationComposerInput) {
     const state: KnowledgeProductionObservationInternalState = {
       generation: 1,
@@ -642,12 +596,6 @@ export class KnowledgeProductionObservationComposer {
     Object.freeze(this);
   }
 
-  /**
-   * Loads one double-collected workflow plan and converges durable observations.
-   *
-   * @param signal - Caller-owned startup generation signal retained for session lifetime
-   * @returns Sanitized observation convergence, blocker, or fixed diagnostic
-   */
   async start(signal: AbortSignal): Promise<KnowledgeProductionObservationResult> {
     const state = requireComposerState(this);
     if (state.closed || state.started || signal.aborted) {
@@ -706,12 +654,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Quiesces live captures and re-proves observation health after initial convergence.
-   *
-   * @param signal - Exact current startup/session signal
-   * @returns Sanitized current observation health
-   */
   async reprove(signal: AbortSignal): Promise<KnowledgeProductionObservationReproofResult> {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -735,7 +677,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Synchronously proves that the retained live watcher session is still healthy and current. */
   assertHealthy(): void {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -753,11 +694,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Returns current recoverable source issues without exposing watcher authority.
-   *
-   * @returns Coordinator-owned frozen issue snapshot for this exact generation
-   */
   getSourceIssues(): readonly KnowledgeSourceObservationRecoverableIssue[] {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -784,11 +720,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Returns exact active registered source paths for a generation-owned file-menu index.
-   *
-   * @returns Frozen path-only summaries detached from the retained watch plan
-   */
   getRegisteredSourcePaths(): readonly Readonly<KnowledgeProductionRegisteredSourcePathSummary>[] {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -808,7 +739,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Binds an exact claim/read/parser bridge to the released Queue and returns a bounded worker. */
   createPreparedWorkerSession(
     handler: KnowledgePreparedIngestHandler,
     isReleased: () => boolean
@@ -843,13 +773,6 @@ export class KnowledgeProductionObservationComposer {
     return worker;
   }
 
-  /**
-   * Installs the reviewed production Compiler→Review handler over this exact Runtime owner.
-   *
-   * The Review repository is created internally from the same Runtime and
-   * execution owner as the hidden Queue, so `main.ts` cannot splice storage
-   * from another plugin or workflow generation.
-   */
   createCompileReviewWorkerSession(
     routeLease: KnowledgeProductionModelRouteLease,
     isReleased: () => boolean
@@ -886,7 +809,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Creates the event-driven main-owned controller for the exact released generation. */
   createCompileReviewWorkerController(
     routeLease: KnowledgeProductionModelRouteLease,
     isReleased: () => boolean,
@@ -944,18 +866,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Creates the Studio adapter for this exact released worker generation.
-   *
-   * The adapter receives the hidden exact Queue Activity boundary, atomic
-   * Review rejection, and—only when the lifecycle callback is supplied—a
-   * narrow reviewed-apply port. Transaction, Wiki, Runtime, and model authority
-   * remain inside generation-owned coordinators. Every read and command
-   * re-proves this workflow lease.
-   *
-   * @param retainCommandDrain - Optional Vault-level cross-generation drain retention
-   * @param onApplyGenerationRefreshRequired - Lifecycle callback that rebuilds Manifest-bound workflow state
-   */
   createKnowledgeStudioRuntimeReadAdapter(
     modelRouteLease: KnowledgeProductionModelRouteLease,
     retainCommandDrain?: (drain: Promise<void>) => void,
@@ -1153,15 +1063,6 @@ export class KnowledgeProductionObservationComposer {
     });
   }
 
-  /**
-   * Creates the read-only applied-Wiki inspector for this released worker generation.
-   *
-   * Each Bundle receives its own bounded target visitor, while one shared citation
-   * navigator remains the coordinator's only workspace side-effect capability.
-   * Runtime, Vault bytes, workflow plans, and model authority stay private.
-   *
-   * @returns One exact-generation inspector and advisory path-row listing port
-   */
   createAppliedWikiPageInspectorCoordinator(): KnowledgeProductionAppliedWikiPageInspectorCoordinator {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1208,7 +1109,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Creates the one read-only known-output browser for this released generation. */
   createKnownAppliedWikiOutputsCoordinator(): KnowledgeProductionKnownAppliedWikiOutputsCoordinator {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1259,14 +1159,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Creates the receipt-free proposal action paired with the exact known-output generation.
-   *
-   * @param knownOutputs - Stable authentic browser boundary that issued the UI session
-   * @param knownOutputsDelegate - Exact current delegate behind that stable boundary
-   * @param retainDrain - Generation drain registrar invoked before proposal work can settle
-   * @returns One genuine generation-owned proposal action adapter
-   */
   createForwardRevisionProposalActionAdapter(
     knownOutputs: DelegatingKnowledgeKnownAppliedWikiOutputsPort,
     knownOutputsDelegate: KnowledgeKnownAppliedWikiOutputsPort,
@@ -1287,7 +1179,6 @@ export class KnowledgeProductionObservationComposer {
     }
     if (typeof retainDrain !== "function") throw createAbortError();
     try {
-      /** Reasserts that the proposal action still belongs to this live production generation. */
       const assertCurrent = (): void => {
         assertCompositionCurrent(state, state.generation, composition);
         this.assertHealthy();
@@ -1321,7 +1212,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Creates one deterministic forward-revision validator for this exact released generation. */
   createForwardRevisionValidationCoordinator(): KnowledgeProductionForwardRevisionValidationCoordinator {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1336,7 +1226,6 @@ export class KnowledgeProductionObservationComposer {
       throw createAbortError();
     }
     try {
-      /** Reasserts that this composer and its production dependencies remain current. */
       const assertCurrent = (): void => {
         assertCompositionCurrent(state, state.generation, composition);
         this.assertHealthy();
@@ -1360,7 +1249,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Creates one high-level forward decision boundary for this exact released generation. */
   createForwardRevisionDecisionCoordinator(): KnowledgeProductionForwardRevisionDecisionCoordinator {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1414,7 +1302,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Creates one fresh forward-Apply revalidator for this exact released generation. */
   createForwardRevisionApplyCoordinator(): KnowledgeProductionForwardRevisionApplyCoordinator {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1429,7 +1316,6 @@ export class KnowledgeProductionObservationComposer {
       throw createAbortError();
     }
     try {
-      /** Reasserts that this composer and its production dependencies remain current. */
       const assertCurrent = (): void => {
         assertCompositionCurrent(state, state.generation, composition);
         this.assertHealthy();
@@ -1474,13 +1360,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Creates the startup-only runner for an already-durable forward Apply journal.
-   *
-   * This factory is intentionally available before observation, worker, parser,
-   * or model startup. The returned runner retains only commit-wins Runtime and
-   * Vault recovery authority after authenticating this exact live composition.
-   */
   createForwardRevisionApplyRecoveryRunner(): KnowledgeProductionForwardRevisionApplyTransactionRunner {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -1526,12 +1405,6 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /**
-   * Subscribes to synchronous generation closure without exposing internal state.
-   *
-   * @param listener - Best-effort callback used to revoke downstream capabilities
-   * @returns Idempotent unsubscription callback
-   */
   subscribeClose(listener: () => void): () => void {
     const state = requireComposerState(this);
     if (typeof listener !== "function") throw createAbortError();
@@ -1540,6 +1413,7 @@ export class KnowledgeProductionObservationComposer {
         listener();
       } catch {
         // Closure already won; downstream notification is best-effort.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
       return () => undefined;
     }
@@ -1552,7 +1426,6 @@ export class KnowledgeProductionObservationComposer {
     };
   }
 
-  /** Synchronously closes listeners and invalidates all future plan/capture continuations. */
   close(): void {
     const state = composerStates.get(this);
     if (!state || state.closed) return;
@@ -1578,26 +1451,31 @@ export class KnowledgeProductionObservationComposer {
       composition?.eventSink.close();
     } catch {
       // Queue event publication is already detached from the closed generation.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     try {
       workerController?.close();
     } catch {
       // Controller authority is already revoked by the generation state.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     try {
       worker?.close();
     } catch {
       // The generation is already revoked; worker cleanup cannot revive it.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     try {
       composition?.freshnessAdmission.close();
     } catch {
       // Freshness output reads are already revoked by generation closure.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     try {
       composition?.queue.close();
     } catch {
       // Queue close is best-effort after publication authority is revoked.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     const unsubscribe = state.unsubscribeLease;
     state.unsubscribeLease = undefined;
@@ -1605,6 +1483,7 @@ export class KnowledgeProductionObservationComposer {
       unsubscribe?.();
     } catch {
       // The local generation is already revoked; unsubscribe cannot revive it.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
     closeCoordinator(state);
     const listeners = [...state.closeListeners];
@@ -1614,6 +1493,7 @@ export class KnowledgeProductionObservationComposer {
         listener();
       } catch {
         // Downstream cleanup cannot interrupt or revive the closed generation.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
   }

@@ -32,7 +32,6 @@ import type {
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 
-/** Creates one exact accepted identity for Review-to-Runtime correlation tests. */
 function createAcceptedIdentity(
   options: {
     changeSetId?: string;
@@ -65,7 +64,6 @@ const RECOVERY_ID = createNoJournalApplyRecoveryReference(
   createAcceptedIdentity()
 ).recoveryId;
 
-/** Creates one stable Review result containing exactly the supplied accepted identities. */
 function createReviewResult(
   identities: readonly AcceptedReviewStartupIdentity[],
   reviewRevision = 0
@@ -80,7 +78,6 @@ function createReviewResult(
   };
 }
 
-/** Creates the valid current Bundle required before journal roll-forward. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -92,7 +89,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates a revision-zero Queue with no durable work. */
 function createEmptyQueue(): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -108,7 +104,6 @@ function createEmptyQueue(): IngestQueueSnapshot {
   };
 }
 
-/** Creates a valid interrupted direct apply used to test Queue-only blockers. */
 function createRecoveryRequiredQueue(): IngestQueueSnapshot {
   const job: KnowledgeIngestJob = {
     id: "job-1",
@@ -156,7 +151,6 @@ function createRecoveryRequiredQueue(): IngestQueueSnapshot {
   };
 }
 
-/** Creates one exact no-journal user-decision classification. */
 function createDecisionClassification(
   identity: AcceptedReviewStartupIdentity = createAcceptedIdentity()
 ): NoJournalApplyRecoveryClassification {
@@ -178,7 +172,6 @@ function createDecisionClassification(
   };
 }
 
-/** Creates one loaded atomic snapshot result. */
 function createLoadedSnapshot(
   classifications: readonly NoJournalApplyRecoveryClassification[] = [],
   options: {
@@ -201,26 +194,21 @@ function createLoadedSnapshot(
   };
 }
 
-/** Scripted Queue startup port with observable call ordering. */
 class ScriptedQueuePort implements KnowledgeStartupQueuePort {
-  /** Creates a Queue port returning one fixed strict snapshot. */
   constructor(
     private readonly calls: string[],
     private readonly snapshot: IngestQueueSnapshot = createEmptyQueue()
   ) {}
 
-  /** Records and returns the startup recovery snapshot. */
   async recoverOnStartup(bundleId: string): Promise<IngestQueueSnapshot> {
     this.calls.push(`queue:${bundleId}`);
     return this.snapshot;
   }
 }
 
-/** Scripted apply coordinator supporting exact results or injected failures. */
 class ScriptedApplyCommitPort implements KnowledgeStartupApplyCommitPort {
   private index = 0;
 
-  /** Creates an apply port from an ordered script. */
   constructor(
     private readonly calls: string[],
     private readonly script: readonly (ApplyCommitReconciliationResult | Error)[] = [
@@ -228,7 +216,6 @@ class ScriptedApplyCommitPort implements KnowledgeStartupApplyCommitPort {
     ]
   ) {}
 
-  /** Records the call and consumes the next scripted outcome. */
   async reconcile(bundle: KnowledgeBundleConfig): Promise<ApplyCommitReconciliationResult> {
     this.calls.push(`apply:${bundle.id}`);
     const outcome = this.script[Math.min(this.index, this.script.length - 1)];
@@ -238,11 +225,9 @@ class ScriptedApplyCommitPort implements KnowledgeStartupApplyCommitPort {
   }
 }
 
-/** Scripted Review reconciler supporting outer revision churn tests. */
 class ScriptedReviewPort implements KnowledgeStartupReviewPort {
   private index = 0;
 
-  /** Creates a Review port from stable or changing results. */
   constructor(
     private readonly calls: string[],
     private readonly script: readonly ReviewQueueStartupReconciliationResult[] = [
@@ -250,7 +235,6 @@ class ScriptedReviewPort implements KnowledgeStartupReviewPort {
     ]
   ) {}
 
-  /** Records the call and consumes the next reconciliation result. */
   async reconcile(bundleId: string): Promise<ReviewQueueStartupReconciliationResult> {
     this.calls.push(`reviews:${bundleId}`);
     const result = this.script[Math.min(this.index, this.script.length - 1)];
@@ -259,11 +243,9 @@ class ScriptedReviewPort implements KnowledgeStartupReviewPort {
   }
 }
 
-/** Scripted atomic accepted-recovery snapshot port. */
 class ScriptedAcceptedPort implements NoJournalApplyRecoverySnapshotPort {
   private index = 0;
 
-  /** Creates an accepted snapshot port from ordered atomic observations. */
   constructor(
     private readonly calls: string[],
     private readonly script: readonly NoJournalApplyRecoverySnapshotLoadResult[] = [
@@ -271,7 +253,6 @@ class ScriptedAcceptedPort implements NoJournalApplyRecoverySnapshotPort {
     ]
   ) {}
 
-  /** Records the expected revision and consumes the next atomic observation. */
   async loadSnapshot(
     bundleId: string,
     expectedReviewRevision: number
@@ -283,7 +264,6 @@ class ScriptedAcceptedPort implements NoJournalApplyRecoverySnapshotPort {
   }
 }
 
-/** Creates a gate whose individual scripted ports can be overridden. */
 function createGate(
   calls: string[],
   options: {

@@ -18,29 +18,25 @@ import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_STAGE_ATTEMPTS = 2;
 const MAX_PENDING_SOURCE_ISSUE_HINT_BUNDLES = 10_000;
-// Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
+
 // eslint-disable-next-line @typescript-eslint/unbound-method -- capture the intrinsic getter for a non-spoofable receiver check
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength"
 )?.get;
 
-/** Narrow durable hand-off capability available to the Vault watcher. */
 export interface VaultSourceObservationHandoffPort {
-  /** Allocates a durable revision before any asynchronous source read. */
   allocate(request: AllocateSourceInputRevisionRequest): Promise<SourceInputRevisionAllocation>;
-  /** Binds exact bytes and submits only through the durable Queue hand-off. */
+
   commit(request: BindSourceInputObservationRequest): Promise<CommitSourceInputObservationResult>;
 }
 
-/** Exact source bytes and their raw SHA-256 observation. */
 export interface ExactSourceArtifact {
   sourcePath: string;
   bytes: Uint8Array;
   sourceContentHash: string;
 }
 
-/** Supported Vault causes that may produce a source observation. */
 export type VaultSourceCaptureCause =
   | "initial_scan"
   | "create"
@@ -50,10 +46,8 @@ export type VaultSourceCaptureCause =
   | "generated_output_delete"
   | "generated_output_rename";
 
-/** Capture pipeline stage used by sanitized watcher failures. */
 export type VaultSourceCaptureStage = "prepare" | "allocate" | "read" | "commit";
 
-/** Best-effort watcher notification that never owns durable state. */
 export type VaultSourceWatcherNotification =
   | {
       kind: "capture_settled";
@@ -90,7 +84,6 @@ export type VaultSourceWatcherNotification =
       sourceId: string;
     };
 
-/** Authoritative sanitized source state classified as fatal or recoverable by startup. */
 export type VaultSourceWatcherStartupBlocker =
   | {
       kind: "capture_failed";
@@ -116,19 +109,15 @@ export type VaultSourceWatcherStartupBlocker =
       sourceId: string;
     };
 
-/** Source issue that can be cleared only by a successful exact-path recapture. */
 export type VaultSourceWatcherRecoverableIssue = Extract<
   VaultSourceWatcherStartupBlocker,
   { kind: "source_missing" | "source_change_unsupported" }
 >;
 
-/** Non-authoritative sink used by future Activity and diagnostic adapters. */
 export interface VaultSourceWatcherNotificationSink {
-  /** Receives one sanitized post-observation hint. */
   emit(notification: VaultSourceWatcherNotification): void;
 }
 
-/** Retry and deterministic test seams for one watcher lifecycle. */
 export interface ObsidianVaultSourceWatcherOptions {
   captureIdFactory?: () => string;
   artifactReader?: ObsidianExactSourceArtifactReader;
@@ -138,43 +127,34 @@ export interface ObsidianVaultSourceWatcherOptions {
   maxCommitAttempts?: number;
 }
 
-/** Reports a missing Bundle handoff or a reader owned by another App/Vault. */
 export class VaultSourceWatchPlanError extends TypeError {
-  /** Creates a sanitized watcher-dependency error. */
   constructor() {
     super("The knowledge source watcher dependencies are invalid");
     this.name = "VaultSourceWatchPlanError";
   }
 }
 
-/** Reports use of a watcher after its exact App/Vault lifecycle closed. */
 export class VaultSourceWatcherClosedError extends Error {
-  /** Creates a stable closed-lifecycle error. */
   constructor() {
     super("The knowledge source watcher lifecycle is closed");
     this.name = "VaultSourceWatcherClosedError";
   }
 }
 
-/** Reports a missing or non-file source path at the binary adapter edge. */
 export class SourceArtifactUnavailableError extends Error {
-  /** Creates a sanitized unavailable-artifact error. */
   constructor() {
     super("The source artifact is unavailable");
     this.name = "SourceArtifactUnavailableError";
   }
 }
 
-/** Reports a malformed success payload returned by the Vault data adapter. */
 export class SourceArtifactAdapterPayloadError extends Error {
-  /** Creates a sanitized adapter-payload error. */
   constructor() {
     super("The source artifact adapter returned an invalid payload");
     this.name = "SourceArtifactAdapterPayloadError";
   }
 }
 
-/** Reports a source beyond the parser byte budget without retaining its path or contents. */
 export class SourceArtifactSizeLimitError extends Error {
   constructor() {
     super("The source artifact exceeds the byte limit");
@@ -182,18 +162,14 @@ export class SourceArtifactSizeLimitError extends Error {
   }
 }
 
-/** Reports source bytes that no longer match the durable Queue job identity. */
 export class SourceArtifactHashMismatchError extends Error {
-  /** Creates a sanitized content-address mismatch error. */
   constructor() {
     super("The source artifact no longer matches the expected content hash");
     this.name = "SourceArtifactHashMismatchError";
   }
 }
 
-/** Reports a success payload that violates an injected durable-port contract. */
 export class VaultSourceObservationContractError extends Error {
-  /** Creates a sanitized fail-closed observation-contract error. */
   constructor() {
     super("A knowledge source observation port returned an invalid success payload");
     this.name = "VaultSourceObservationContractError";
@@ -228,34 +204,18 @@ interface SourceIssueHintSubscription {
   readonly listener: () => void;
 }
 
-/**
- * Creates an AbortError without depending on a particular renderer Window.
- *
- * @returns Stable platform-style cancellation error
- */
 function createAbortError(): Error {
   const error = new Error("The operation was aborted");
   error.name = "AbortError";
   return error;
 }
 
-/**
- * Stops one exact-byte read before or after an uninterruptible adapter call.
- *
- * @param signal - Optional caller-owned cancellation signal
- */
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw createAbortError();
   }
 }
 
-/**
- * Validates one positive safe retry bound.
- *
- * @param value - Configured stage attempt count
- * @returns The validated attempt count
- */
 function requireAttemptCount(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError("Watcher stage attempts must be positive safe integers");
@@ -263,12 +223,6 @@ function requireAttemptCount(value: number): number {
   return value;
 }
 
-/**
- * Tests whether an unknown adapter payload is an ArrayBuffer in any realm.
- *
- * @param value - Unknown adapter result
- * @returns Whether the value has the ArrayBuffer internal slot
- */
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
   if (typeof value !== "object" || value === null || !ARRAY_BUFFER_BYTE_LENGTH_GETTER) {
     return false;
@@ -281,50 +235,30 @@ function isArrayBuffer(value: unknown): value is ArrayBuffer {
   }
 }
 
-/**
- * Validates a capture identity returned by an injected factory.
- *
- * @param value - Unknown-at-runtime capture identity
- */
 function assertCaptureIdentifier(value: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new VaultSourceObservationContractError();
   }
 }
 
-/**
- * Produces the stable key for one Bundle/source pair.
- *
- * @param source - Registered source identity
- * @returns Collision key independent of source path
- */
 function createBundleSourceKey(
   source: Pick<WatchedKnowledgeSource, "bundleId" | "sourceId">
 ): string {
   return `${source.bundleId.length}:${source.bundleId}${source.sourceId}`;
 }
 
-/** Compares stable identifiers without depending on the host locale. */
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
 }
 
-/** Tests whether one source blocker can be healed by exact-path recreation. */
 function isRecoverableSourceIssue(
   blocker: Readonly<VaultSourceWatcherStartupBlocker>
 ): blocker is Readonly<VaultSourceWatcherRecoverableIssue> {
   return blocker.kind === "source_missing" || blocker.kind === "source_change_unsupported";
 }
 
-/**
- * Reads required own data properties without invoking injected accessors.
- *
- * @param value - Unknown success payload
- * @param keys - Required own data-property names
- * @returns Detached one-read field snapshot, or undefined for malformed input
- */
 function snapshotRequiredDataProperties(
   value: unknown,
   keys: readonly string[]
@@ -343,13 +277,6 @@ function snapshotRequiredDataProperties(
   return Object.freeze(snapshot);
 }
 
-/**
- * Resolves one callable data method once without invoking accessors.
- *
- * @param value - Unknown hand-off capability
- * @param key - Required method name
- * @returns Captured function and receiver, or undefined when malformed
- */
 function snapshotDataMethod(
   value: unknown,
   key: "allocate" | "commit"
@@ -377,12 +304,6 @@ function snapshotDataMethod(
   return undefined;
 }
 
-/**
- * Captures validated per-Bundle hand-off methods at watcher installation time.
- *
- * @param handoffs - Untrusted-at-runtime Bundle capability map
- * @returns Detached map whose functions cannot be swapped after installation
- */
 function snapshotHandoffPorts(
   handoffs: ReadonlyMap<string, VaultSourceObservationHandoffPort>
 ): ReadonlyMap<string, VaultSourceObservationHandoffPort> {
@@ -420,13 +341,6 @@ function snapshotHandoffPorts(
   }
 }
 
-/**
- * Revalidates an exact-byte reader success before trusting its claimed hash.
- *
- * @param artifact - Unknown-at-runtime reader success
- * @param capturedPath - Exact path captured synchronously from the Vault event
- * @returns Detached, locally hashed source artifact
- */
 function verifySourceArtifact(
   artifact: ExactSourceArtifact,
   capturedPath: string
@@ -455,13 +369,6 @@ function verifySourceArtifact(
   return Object.freeze({ sourcePath: capturedPath, bytes, sourceContentHash });
 }
 
-/**
- * Revalidates a durable allocation against the exact capture request.
- *
- * @param allocation - Unknown-at-runtime allocator success
- * @param work - Immutable source capture identity
- * @returns Validated allocation capability
- */
 function verifyAllocation(
   allocation: SourceInputRevisionAllocation,
   work: SourceCaptureWork
@@ -494,15 +401,6 @@ function verifyAllocation(
   });
 }
 
-/**
- * Revalidates a durable hand-off settlement against the exact bound payload.
- *
- * @param settlement - Unknown-at-runtime hand-off success
- * @param work - Immutable source capture identity
- * @param allocation - Exact allocation capability used by the hand-off
- * @param sourceContentHash - Locally verified raw-byte hash
- * @returns Validated durable settlement
- */
 function verifySettlement(
   settlement: CommitSourceInputObservationResult,
   work: SourceCaptureWork,
@@ -584,25 +482,12 @@ function verifySettlement(
   });
 }
 
-/**
- * Exact-byte reader shared by watcher capture and the future executor adapter.
- *
- * It binds permanently to the App's current Vault adapter. Compiler execution
- * should call {@link readExpected} and pass the returned bytes directly to the
- * parser, avoiding a second path read or an unproven cache hit.
- */
 export class ObsidianExactSourceArtifactReader {
   private readonly app: App;
   private readonly vault: Vault;
   private readonly adapter: Vault["adapter"];
   private readonly maxBytes: number;
 
-  /**
-   * Captures one exact App/Vault owner and its source byte budget.
-   *
-   * @param app - App whose Vault supplies all source reads
-   * @param maxBytes - Inclusive raw-byte budget, defaulting to the production parsers' ceiling
-   */
   constructor(app: App, maxBytes = MAX_KNOWLEDGE_SOURCE_BYTES) {
     // Invalid budgets must not silently disable the read boundary.
     // https://github.com/yydspanda/obsidian-copilot/issues/11
@@ -615,18 +500,10 @@ export class ObsidianExactSourceArtifactReader {
     this.maxBytes = maxBytes;
   }
 
-  /** Returns whether this reader belongs to the supplied exact App/Vault/adapter. */
   owns(app: App): boolean {
     return this.app === app && this.vault === app.vault && this.adapter === app.vault.adapter;
   }
 
-  /**
-   * Reads exact binary bytes and computes their unnormalized SHA-256 identity.
-   *
-   * @param sourcePath - Canonical Vault-relative path captured synchronously
-   * @param signal - Optional lifecycle cancellation signal
-   * @returns Detached bytes and their exact source hash
-   */
   async read(sourcePath: string, signal?: AbortSignal): Promise<ExactSourceArtifact> {
     const parsed = parseVaultPath(sourcePath);
     if (!parsed.ok) {
@@ -677,14 +554,6 @@ export class ObsidianExactSourceArtifactReader {
     };
   }
 
-  /**
-   * Re-reads one job source and rejects stale bytes before parser/model work.
-   *
-   * @param sourcePath - Current Manifest path for the durable source id
-   * @param expectedContentHash - Exact raw-byte hash carried by the Queue job
-   * @param signal - Optional executor cancellation signal
-   * @returns The same verified bytes that the parser must consume
-   */
   async readExpected(
     sourcePath: string,
     expectedContentHash: string,
@@ -701,15 +570,6 @@ export class ObsidianExactSourceArtifactReader {
   }
 }
 
-/**
- * Watches an immutable set of already-registered Vault sources.
- *
- * This adapter deliberately does not discover source identities, mutate a
- * Manifest, write Wiki pages, run startup recovery, or claim Queue work. In
- * addition to source events, committed Manifest outputs are read-only drift
- * signals: their events can only re-observe their original source owners.
- * Rename and delete quarantine the source until a successful exact-path recapture.
- */
 export class ObsidianVaultSourceWatcher {
   private readonly app: App;
   private readonly vault: Vault;
@@ -737,14 +597,6 @@ export class ObsidianVaultSourceWatcher {
   private sourceIssueHintGeneration = 0;
   private sourceIssueHintFlushScheduled = false;
 
-  /**
-   * Creates one exact App/Vault watcher over an immutable registered-source plan.
-   *
-   * @param app - Exact plugin lifecycle owner
-   * @param plan - Opaque plan built from validated Bundle and Manifest authority
-   * @param handoffs - Per-Bundle durable hand-off capabilities
-   * @param options - Retry, reader, id, and notification seams
-   */
   constructor(
     app: App,
     plan: KnowledgeSourceWatchPlan,
@@ -777,18 +629,12 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
-  /** Returns whether this watcher still belongs to the supplied exact App. */
   owns(app: App): boolean {
     return (
       !this.closed && this.app === app && this.vault === app.vault && this.artifactReader.owns(app)
     );
   }
 
-  /**
-   * Registers exact Vault listeners before performing the initial full scan.
-   *
-   * Registration is idempotent for one active lifecycle.
-   */
   start(): void {
     if (this.started && this.crawlActivated) {
       return;
@@ -802,13 +648,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Registers exact Vault listeners without beginning the initial crawl.
-   *
-   * Production startup uses this split boundary to recover durable allocated
-   * and bound observations after listener ownership is established but before
-   * the explicit full scan. Repeated calls are idempotent for one lifecycle.
-   */
   startListening(): void {
     this.assertOpen();
     if (this.started) {
@@ -828,15 +667,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Invalidates old source authority synchronously and installs a new immutable plan.
-   *
-   * Existing asynchronous captures may finish their current adapter operation,
-   * including an already-started commit. Generation checks prevent their next
-   * read/commit stage and suppress stale notifications after that call returns.
-   *
-   * @param plan - Complete opaque replacement watch plan
-   */
   replaceWatchPlan(plan: KnowledgeSourceWatchPlan): void {
     this.assertOpen();
     KnowledgeSourceWatchPlan.assert(plan);
@@ -864,11 +694,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Schedules every currently loaded file that appears in the exact watch plan.
-   *
-   * @returns Number of per-Bundle source captures scheduled
-   */
   scan(): number {
     this.assertActive();
     const lifecycleGeneration = this.lifecycleGeneration;
@@ -992,14 +817,6 @@ export class ObsidianVaultSourceWatcher {
     return scheduled;
   }
 
-  /**
-   * Returns the authoritative blockers accumulated by this exact plan generation.
-   *
-   * Unlike the best-effort notification sink, this snapshot cannot be dropped
-   * by an observer and is the readiness input for production startup.
-   *
-   * @returns Deterministically ordered, content-free blocker snapshot
-   */
   getStartupBlockers(): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
     this.assertOpen();
     return Object.freeze(
@@ -1012,16 +829,6 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
-  /**
-   * Subscribes one Bundle to coalesced recoverable issue-set changes.
-   *
-   * Callbacks are value-free reload hints. They do not expose blocker state and
-   * cannot affect watcher capture, quarantine, or durable hand-off progress.
-   *
-   * @param bundleId - Exact Bundle identity present in the current watch plan
-   * @param listener - Best-effort reload callback
-   * @returns Idempotent subscription cleanup
-   */
   subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void {
     this.assertActive();
     if (
@@ -1047,25 +854,12 @@ export class ObsidianVaultSourceWatcher {
     };
   }
 
-  /**
-   * Waits until captures already scheduled by this watcher have settled.
-   *
-   * Vault events may add more work while waiting, so the method repeats until
-   * the pending set is empty at an observation boundary.
-   */
   async waitForIdle(): Promise<void> {
     while (this.pendingCaptures.size > 0) {
       await Promise.all([...this.pendingCaptures]);
     }
   }
 
-  /**
-   * Synchronously invalidates authority and removes only this lifecycle's EventRefs.
-   *
-   * In-flight adapter calls cannot be cancelled, including an already-started
-   * commit. After returning they may not start a later read/commit stage or
-   * publish a stale notification.
-   */
   close(): void {
     if (this.closed) {
       return;
@@ -1080,38 +874,27 @@ export class ObsidianVaultSourceWatcher {
     this.releaseEventRefs();
   }
 
-  /** Handles a Vault create event without awaiting inside the callback. */
   private readonly handleCreate = (file: TAbstractFile): void => {
     this.releaseRecoverableQuarantineForCreate(file);
     this.scheduleFile(file, "create");
     this.scheduleGeneratedOutputFile(file, "generated_output_create");
   };
 
-  /** Handles a Vault modify event without awaiting inside the callback. */
   private readonly handleModify = (file: TAbstractFile): void => {
     this.scheduleFile(file, "modify");
     this.scheduleGeneratedOutputFile(file, "generated_output_modify");
   };
 
-  /** Re-observes output owners and reports source deletion without manufacturing empty bytes. */
   private readonly handleDelete = (file: TAbstractFile): void => {
     this.scheduleGeneratedOutputPaths([file.path], "generated_output_delete");
     this.reportUnsupportedChange("delete", [file.path]);
   };
 
-  /** Re-observes output owners and reports source rename without changing source identity. */
   private readonly handleRename = (file: TAbstractFile, oldPath: string): void => {
     this.scheduleGeneratedOutputPaths([oldPath, file.path], "generated_output_rename");
     this.reportUnsupportedChange("rename", [oldPath, file.path]);
   };
 
-  /**
-   * Captures synchronous event authority and schedules one task per matching Bundle.
-   *
-   * @param file - Vault file supplied by the event or initial scan
-   * @param cause - Observation cause retained for diagnostics
-   * @returns Number of matching source tasks
-   */
   private scheduleFile(file: TAbstractFile, cause: VaultSourceCaptureCause): number {
     if (!this.started || this.closed || !(file instanceof TFile)) {
       return 0;
@@ -1149,16 +932,6 @@ export class ObsidianVaultSourceWatcher {
     return scheduled;
   }
 
-  /**
-   * Creates one source-authority capture without granting authority to its trigger path.
-   *
-   * @param source - Immutable source owner from the active plan
-   * @param capturedPath - Exact original source path to read
-   * @param cause - Event cause retained only for sanitized diagnostics
-   * @param lifecycleGeneration - Synchronously captured watcher lifecycle
-   * @param watchPlanGeneration - Synchronously captured plan generation
-   * @returns One when a capture task was scheduled, otherwise zero
-   */
   private scheduleSourceCapture(
     source: ImmutableWatchedKnowledgeSource,
     capturedPath: string,
@@ -1229,16 +1002,6 @@ export class ObsidianVaultSourceWatcher {
     return 1;
   }
 
-  /**
-   * Treats one exact committed output file event as a read-only source-drift signal.
-   *
-   * The output file is never read. Every task is bound to an original Manifest
-   * source path selected by the validated reverse index.
-   *
-   * @param file - Vault event target
-   * @param cause - Generated-output observation cause
-   * @returns Number of original-source captures scheduled
-   */
   private scheduleGeneratedOutputFile(file: TAbstractFile, cause: VaultSourceCaptureCause): number {
     if (!this.started || this.closed || !(file instanceof TFile)) {
       return 0;
@@ -1296,17 +1059,6 @@ export class ObsidianVaultSourceWatcher {
     return scheduled;
   }
 
-  /**
-   * Re-observes original sources affected by a generated-output delete or rename.
-   *
-   * Folder events include every committed output below the event path. Owners
-   * are de-duplicated so one Vault event produces at most one fresh observation
-   * per source even when that source owns several affected pages.
-   *
-   * @param paths - Old/current destructive event paths
-   * @param cause - Generated-output delete or rename cause
-   * @returns Number of original-source captures scheduled
-   */
   private scheduleGeneratedOutputPaths(
     paths: readonly string[],
     cause: VaultSourceCaptureCause
@@ -1409,18 +1161,6 @@ export class ObsidianVaultSourceWatcher {
     return scheduled;
   }
 
-  /**
-   * Checks the current Vault for a case alias or Windows-key collision.
-   *
-   * An absent loaded file is accepted because create callbacks can precede a
-   * refreshed snapshot and destructive events normally remove or move the page.
-   * Adapter failure maps to a collision blocker so drift never gains authority.
-   *
-   * @param output - Committed generated-output projection
-   * @param lifecycleGeneration - Captured watcher lifecycle
-   * @param watchPlanGeneration - Captured plan generation
-   * @returns Valid, stale, or one fail-closed path reason
-   */
   private inspectLiveGeneratedOutputPath(
     output: ImmutableWatchedKnowledgeGeneratedOutput,
     lifecycleGeneration: number,
@@ -1456,14 +1196,6 @@ export class ObsidianVaultSourceWatcher {
     return "valid";
   }
 
-  /**
-   * Quarantines every owner of an invalid generated-output path projection.
-   *
-   * @param owners - Exact Manifest source owners
-   * @param reason - Case alias or Windows-key collision
-   * @param lifecycleGeneration - Captured watcher lifecycle
-   * @param watchPlanGeneration - Captured plan generation
-   */
   private blockGeneratedOutputOwners(
     owners: readonly ImmutableWatchedKnowledgeSource[],
     reason: "case_mismatch" | "windows_collision",
@@ -1475,14 +1207,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Records one path blocker only while its exact source and plan remain current.
-   *
-   * @param source - Immutable source authority to quarantine
-   * @param reason - Stable path validation reason
-   * @param lifecycleGeneration - Captured watcher lifecycle
-   * @param watchPlanGeneration - Captured plan generation
-   */
   private blockSourceForPathReason(
     source: ImmutableWatchedKnowledgeSource,
     reason: "case_mismatch" | "windows_collision",
@@ -1516,11 +1240,6 @@ export class ObsidianVaultSourceWatcher {
     });
   }
 
-  /**
-   * Runs allocate → exact-byte read/hash → hand-off commit for one captured event.
-   *
-   * @param work - Fully synchronous immutable event capture
-   */
   private async executeCapture(work: SourceCaptureWork): Promise<void> {
     let stage: VaultSourceCaptureStage = "allocate";
     try {
@@ -1567,12 +1286,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Allocates with bounded exact-capture replay.
-   *
-   * @param work - Immutable capture identity and authority
-   * @returns Durable allocation, or undefined after authority invalidation
-   */
   private async allocate(
     work: SourceCaptureWork
   ): Promise<SourceInputRevisionAllocation | undefined> {
@@ -1597,12 +1310,6 @@ export class ObsidianVaultSourceWatcher {
     throw lastError;
   }
 
-  /**
-   * Reads captured-path bytes with bounded retry after durable allocation.
-   *
-   * @param work - Immutable capture identity and path
-   * @returns Exact source artifact, or undefined after authority invalidation
-   */
   private async read(work: SourceCaptureWork): Promise<ExactSourceArtifact | undefined> {
     let lastError: unknown;
     for (let attempt = 0; attempt < this.maxReadAttempts; attempt += 1) {
@@ -1636,14 +1343,6 @@ export class ObsidianVaultSourceWatcher {
     throw lastError;
   }
 
-  /**
-   * Replays only the exact bound payload when acknowledgement is uncertain.
-   *
-   * @param work - Immutable capture and pipeline identity
-   * @param allocation - Durable allocation returned for this capture
-   * @param sourceContentHash - Hash computed from the exact captured bytes
-   * @returns Durable settlement, or undefined after authority invalidation
-   */
   private async commit(
     work: SourceCaptureWork,
     allocation: SourceInputRevisionAllocation,
@@ -1670,12 +1369,6 @@ export class ObsidianVaultSourceWatcher {
     throw lastError;
   }
 
-  /**
-   * Finds exact or descendant planned sources affected by a destructive event.
-   *
-   * @param change - Unsupported source lifecycle change
-   * @param paths - Old and/or current event paths
-   */
   private reportUnsupportedChange(change: "delete" | "rename", paths: readonly string[]): void {
     if (!this.started || this.closed) {
       return;
@@ -1721,15 +1414,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Releases only a recoverable quarantine for an exact registered file creation.
-   *
-   * The issue remains authoritative until the resulting capture commits. A new
-   * destructive event increments source authority again and invalidates the
-   * recovery attempt before it can clear that issue.
-   *
-   * @param file - Vault create target
-   */
   private releaseRecoverableQuarantineForCreate(file: TAbstractFile): void {
     if (!this.started || this.closed || !(file instanceof TFile)) {
       return;
@@ -1761,11 +1445,6 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /**
-   * Clears recoverable issues after one current exact-path capture commits.
-   *
-   * @param source - Successfully captured registered source
-   */
   private clearRecoverableSourceIssues(source: ImmutableWatchedKnowledgeSource): void {
     let changed = false;
     for (const [blockerKey, blocker] of this.startupBlockers) {
@@ -1784,12 +1463,6 @@ export class ObsidianVaultSourceWatcher {
     if (changed) this.scheduleSourceIssueHint(source.bundleId);
   }
 
-  /**
-   * Returns blockers belonging to one exact Bundle/source authority.
-   *
-   * @param source - Registered source identity
-   * @returns Current blocker values without exposing the mutable Map
-   */
   private getBlockersForSource(
     source: Pick<WatchedKnowledgeSource, "bundleId" | "sourceId">
   ): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
@@ -1798,13 +1471,6 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
-  /**
-   * Checks exact lifecycle and watch-plan identity without selecting a source.
-   *
-   * @param lifecycleGeneration - Captured watcher lifecycle
-   * @param watchPlanGeneration - Captured watch-plan generation
-   * @returns Whether current synchronous routing may continue
-   */
   private isPlanGenerationCurrent(
     lifecycleGeneration: number,
     watchPlanGeneration: number
@@ -1817,12 +1483,6 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
-  /**
-   * Checks exact lifecycle and plan authority around every asynchronous boundary.
-   *
-   * @param authority - Captured lifecycle and plan generations
-   * @returns Whether the work may start its next operation
-   */
   private isAuthorityCurrent(authority: CaptureAuthority): boolean {
     return (
       !this.closed &&
@@ -1833,15 +1493,6 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
-  /**
-   * Quarantines one source and retains an authoritative in-memory readiness blocker.
-   *
-   * A second reason may be recorded for diagnostics, but source authority is
-   * invalidated only on the first transition into quarantine.
-   *
-   * @param source - Current immutable source authority
-   * @param blocker - Sanitized reason this generation cannot become ready
-   */
   private blockSource(
     source: ImmutableWatchedKnowledgeSource,
     blocker: VaultSourceWatcherStartupBlocker
@@ -1868,14 +1519,12 @@ export class ObsidianVaultSourceWatcher {
     if (issueChanged) this.scheduleSourceIssueHint(blocker.bundleId);
   }
 
-  /** Rejects mutation after permanent lifecycle closure. */
   private assertOpen(): void {
     if (this.closed) {
       throw new VaultSourceWatcherClosedError();
     }
   }
 
-  /** Rejects an explicit scan before listeners own the lifecycle. */
   private assertActive(): void {
     this.assertOpen();
     if (!this.started) {
@@ -1883,18 +1532,17 @@ export class ObsidianVaultSourceWatcher {
     }
   }
 
-  /** Removes only the EventRefs created by this exact Vault owner. */
   private releaseEventRefs(): void {
     for (const ref of this.eventRefs.splice(0)) {
       try {
         this.vault.offref(ref);
       } catch {
         // Cleanup is best effort after authority has already been invalidated.
+        // https://github.com/yydspanda/obsidian-copilot/issues/24
       }
     }
   }
 
-  /** Restores the pre-start state after listener registration or initial scan fails. */
   private rollbackStart(): void {
     this.lifecycleGeneration += 1;
     this.started = false;
@@ -1907,7 +1555,6 @@ export class ObsidianVaultSourceWatcher {
     this.releaseEventRefs();
   }
 
-  /** Queues at most one pending recoverable-issue hint for a Bundle. */
   private scheduleSourceIssueHint(bundleId: string): void {
     if (
       this.closed ||
@@ -1925,7 +1572,6 @@ export class ObsidianVaultSourceWatcher {
     queueMicrotask(() => this.flushSourceIssueHints(generation));
   }
 
-  /** Delivers one detached callback per changed Bundle for the current hint generation. */
   private flushSourceIssueHints(generation: number): void {
     if (generation !== this.sourceIssueHintGeneration || this.closed || !this.started) {
       return;
@@ -1942,28 +1588,24 @@ export class ObsidianVaultSourceWatcher {
           subscription.listener();
         } catch {
           // Issue hints are advisory and cannot interrupt watcher progress.
+          // https://github.com/yydspanda/obsidian-copilot/issues/24
         }
       }
     }
   }
 
-  /** Invalidates queued issue hints without affecting current source authority. */
   private invalidatePendingSourceIssueHints(): void {
     this.sourceIssueHintGeneration += 1;
     this.sourceIssueHintFlushScheduled = false;
     this.pendingSourceIssueHintBundles.clear();
   }
 
-  /**
-   * Emits one non-authoritative notification without letting observers affect capture.
-   *
-   * @param notification - Sanitized watcher hint
-   */
   private emit(notification: VaultSourceWatcherNotification): void {
     try {
       this.notificationSink?.emit(Object.freeze(notification));
     } catch {
       // Notifications never own durable state or watcher progress.
+      // https://github.com/yydspanda/obsidian-copilot/issues/24
     }
   }
 }

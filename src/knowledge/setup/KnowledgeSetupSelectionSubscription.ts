@@ -1,7 +1,5 @@
-/** One synchronous selection-event subscription boundary. */
 export type KnowledgeSetupSelectionSubscribe = (listener: () => void) => () => void;
 
-/** Passive dependencies used to follow the effective ordinary Chat selection. */
 export interface KnowledgeSetupSelectionSubscriptionDependencies {
   subscribeModelKey: KnowledgeSetupSelectionSubscribe;
   subscribeChainType: KnowledgeSetupSelectionSubscribe;
@@ -9,35 +7,24 @@ export interface KnowledgeSetupSelectionSubscriptionDependencies {
   refresh(): void;
 }
 
-/** Safely invokes one presentation-only callback. */
 function invokeSafely(callback: () => void): void {
   try {
     callback();
   } catch {
     // Readiness presentation cannot interrupt an authoritative selection change.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/** Safely releases one upstream selection subscription. */
 function unsubscribeSafely(unsubscribe: () => void): void {
   try {
     unsubscribe();
   } catch {
     // One faulty subscriber owner cannot prevent the remaining cleanup.
+    // https://github.com/yydspanda/obsidian-copilot/issues/24
   }
 }
 
-/**
- * Follows all inputs that determine the effective ordinary Chat model.
- *
- * The returned cleanup closes a local generation before releasing upstream
- * listeners, so even an imperfect emitter cannot publish stale readiness after
- * plugin unload. Partial subscription failure rolls back every prior listener
- * and remains non-authoritative to normal Chat and Knowledge startup.
- *
- * @param dependencies - Three selection event sources and a local refresh callback
- * @returns Idempotent cleanup for this presentation-only subscription generation
- */
 export function subscribeKnowledgeSetupSelectionChanges(
   dependencies: KnowledgeSetupSelectionSubscriptionDependencies
 ): () => void {

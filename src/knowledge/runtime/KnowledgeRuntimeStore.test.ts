@@ -1,6 +1,6 @@
 jest.mock("obsidian", () => {
   const mock = jest.requireActual<Record<string, unknown>>("../../../__mocks__/obsidian.js");
-  /** Minimal desktop adapter brand required by the genuine update-only recovery store. */
+
   class FileSystemAdapter {
     getBasePath(): string {
       return "/memory-vault";
@@ -257,13 +257,11 @@ const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 let captureSequence = 0;
 
-/** Creates one distinct retry identity for a source-observation allocation. */
 function createCaptureRequest(bundleId = "personal", sourceId = "source-1") {
   captureSequence += 1;
   return { bundleId, sourceId, captureId: `capture-${captureSequence}` };
 }
 
-/** In-memory atomic file that serializes synchronous transforms for unit tests. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
@@ -275,14 +273,12 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private beforeNextTransform?: () => void;
   private afterNextCommit?: () => void;
 
-  /** Creates the initial content only when the memory file is absent. */
   async initialize(initialContent: string): Promise<void> {
     if (this.content === undefined) {
       this.content = initialContent;
     }
   }
 
-  /** Reads the exact current memory file. */
   async read(): Promise<string> {
     this.readCallCount += 1;
     if (this.content === undefined) {
@@ -291,12 +287,10 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
     return this.content;
   }
 
-  /** Returns how many complete plaintext reads crossed this atomic boundary. */
   getReadCallCount(): number {
     return this.readCallCount;
   }
 
-  /** Serializes and commits one synchronous plaintext transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
     const previous = this.tail;
     let release: () => void = () => undefined;
@@ -341,51 +335,42 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
     }
   }
 
-  /** Replaces the file outside the atomic contract to simulate persisted corruption. */
   replaceContent(content: string): void {
     this.content = content;
   }
 
-  /** Makes the next successful process call return text it did not commit. */
   misreportNextCommittedText(): void {
     this.misreportNextWrite = true;
   }
 
-  /** Makes the next process boundary invoke its supposedly synchronous transform twice. */
   repeatTransformOnNextWrite(): void {
     this.repeatNextTransform = true;
   }
 
-  /** Makes the next process boundary resolve without invoking its transform. */
   skipTransformOnNextWrite(): void {
     this.skipNextTransform = true;
   }
 
-  /** Runs one synchronous test hook immediately before the next atomic transform. */
   runBeforeNextTransform(callback: () => void): void {
     this.beforeNextTransform = callback;
   }
 
-  /** Runs one synchronous test hook after the next commit and before its acknowledgement. */
   runAfterNextCommit(callback: () => void): void {
     this.afterNextCommit = callback;
   }
 
-  /** Commits the next transformed bytes and then rejects the caller. */
   throwAfterCommitOnNextWrite(): void {
     this.throwAfterCommitOnNthWrite(1);
   }
 
   private throwAfterCommitArmed = false;
 
-  /** Commits and rejects the selected future process boundary. */
   throwAfterCommitOnNthWrite(writeNumber: number): void {
     this.throwAfterCommitCountdown = writeNumber;
     this.throwAfterCommitArmed = true;
   }
 }
 
-/** Creates one empty valid queue snapshot at a caller-selected revision. */
 function createQueueSnapshot(revision: number, bundleId = "personal"): IngestQueueSnapshot {
   return {
     version: INGEST_QUEUE_VERSION,
@@ -401,7 +386,6 @@ function createQueueSnapshot(revision: number, bundleId = "personal"): IngestQue
   };
 }
 
-/** Creates one empty valid review snapshot at a caller-selected revision. */
 function createReviewSnapshot(revision: number, bundleId = "personal") {
   return {
     version: 2 as const,
@@ -411,7 +395,6 @@ function createReviewSnapshot(revision: number, bundleId = "personal") {
   };
 }
 
-/** Creates one empty valid Source Manifest at a caller-selected revision. */
 function createManifest(revision: number, bundleId = "personal"): SourceManifest {
   return {
     version: 1,
@@ -421,7 +404,6 @@ function createManifest(revision: number, bundleId = "personal"): SourceManifest
   };
 }
 
-/** Creates one idle outer-runtime-v1 snapshot eligible for automatic migration. */
 function createLegacyRuntimeSnapshot(): Record<string, unknown> {
   return {
     version: 1,
@@ -442,7 +424,6 @@ function createLegacyRuntimeSnapshot(): Record<string, unknown> {
   };
 }
 
-/** Creates one outer runtime whose current fingerprint has only shape-level completion. */
 function createMarkerlessCompletionRuntimeSnapshot(
   version: 3 | typeof KNOWLEDGE_RUNTIME_STORE_VERSION,
   control: IngestQueueSnapshot["control"] = { status: "running" }
@@ -526,7 +507,6 @@ function createMarkerlessCompletionRuntimeSnapshot(
   };
 }
 
-/** Creates one valid Queue-v3 snapshot carrying unresolved review work. */
 function createLegacyAwaitingReviewQueue(): IngestQueueSnapshot {
   return {
     ...createQueueSnapshot(4),
@@ -569,7 +549,6 @@ function createLegacyAwaitingReviewQueue(): IngestQueueSnapshot {
   };
 }
 
-/** Creates one valid Queue-v3 snapshot carrying an active apply claim. */
 function createLegacyApplyingQueue(): IngestQueueSnapshot {
   return {
     ...createQueueSnapshot(4),
@@ -618,7 +597,6 @@ function createLegacyApplyingQueue(): IngestQueueSnapshot {
   };
 }
 
-/** Creates the Bundle boundary embedded in the transaction fixture. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -630,7 +608,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates one valid source citation for applied-provenance tests. */
 function createSourceCitation(
   sourceId = "source-1",
   artifactContentHash = HASH_A,
@@ -654,7 +631,6 @@ function createSourceCitation(
   };
 }
 
-/** Creates one text-parser-backed quote citation for genuine production validation. */
 function createSourceQuoteCitation(
   sourceId: string,
   artifactContentHash: string,
@@ -676,7 +652,6 @@ function createSourceQuoteCitation(
   };
 }
 
-/** Creates one accepted create-only ChangeSet for transaction storage tests. */
 function createAcceptedChangeSet(
   transactionId = "transaction-1",
   citations: KnowledgeChangeSet["citations"] = [],
@@ -706,7 +681,6 @@ function createAcceptedChangeSet(
   };
 }
 
-/** Creates a valid prepared journal at revision zero. */
 function createPreparedJournal(
   transactionId = "transaction-1",
   citations: KnowledgeChangeSet["citations"] = [],
@@ -772,7 +746,6 @@ function createPreparedJournal(
   };
 }
 
-/** Creates one Manifest containing a registered source ready for its first commit. */
 function createRegisteredManifest(
   revision = 1,
   sourceOverrides: Partial<SourceManifest["entries"][number]> = {}
@@ -793,7 +766,6 @@ function createRegisteredManifest(
   };
 }
 
-/** Creates one strict zero-page no-change plan over an exact Manifest read-set. */
 function createRuntimeNoChangesPlan(
   manifest: SourceManifest,
   inputRevision = 1,
@@ -824,14 +796,6 @@ function createRuntimeNoChangesPlan(
   });
 }
 
-/**
- * Reconstructs the proposal-time plan authorized by one synthetic ChangeSet.
- *
- * @param manifest - Exact Manifest read-set before the source compile
- * @param changeSet - Proposed or accepted source compile payload
- * @param inputRevision - Durable source observation revision
- * @returns Strict plan whose digest can bind Review and transaction fixtures
- */
 function createManifestCommitPlanFixture(
   manifest: SourceManifest,
   changeSet: KnowledgeChangeSet,
@@ -886,7 +850,6 @@ function createManifestCommitPlanFixture(
   };
 }
 
-/** Creates exact committed journal and receipt proof against one Manifest read-set. */
 function createCommittedApplyProof(
   manifest: SourceManifest,
   transactionId = "transaction-apply",
@@ -967,7 +930,6 @@ function createCommittedApplyProof(
   return { journal, receipt: createTransactionCommitReceipt(journal) };
 }
 
-/** Creates a second exact Apply that replaces one historical generated page. */
 function createForwardCurrentUpdateProof(
   manifest: SourceManifest,
   pagePath: string,
@@ -1092,7 +1054,6 @@ function createForwardCurrentUpdateProof(
   return { journal, receipt: createTransactionCommitReceipt(journal) };
 }
 
-/** Creates one ordinary Source Apply that deletes the exact effective Forward target. */
 function createForwardCurrentDeleteProof(
   manifest: SourceManifest,
   pagePath: string,
@@ -1225,7 +1186,6 @@ function createForwardCurrentDeleteProof(
   return { journal, receipt: createTransactionCommitReceipt(journal) };
 }
 
-/** Reconstructs a strict Runtime-v8 ledger and Manifest head from one v9 forward commit. */
 function createRuntimeV8ForwardHead(
   manifest: SourceManifest,
   ledger: KnowledgeRuntimeStoreSnapshot["forwardRevisionApplyCommits"][number]
@@ -1333,7 +1293,6 @@ function createRuntimeV8ForwardHead(
   });
 }
 
-/** Creates one prepared revision-zero journal against an exact Manifest read-set. */
 function createPreparedApplyJournal(
   manifest: SourceManifest,
   transactionId: string,
@@ -1354,7 +1313,6 @@ function createPreparedApplyJournal(
   };
 }
 
-/** Creates a valid two-target prepared journal for progress-transition tests. */
 function createTwoTargetPreparedApplyJournal(
   manifest: SourceManifest,
   transactionId: string
@@ -1424,7 +1382,6 @@ function createTwoTargetPreparedApplyJournal(
   };
 }
 
-/** Creates one strict historical ledger proof for source-extension fixtures. */
 function createHistoricalLedgerRecord(
   transactionId: string,
   sourceId: string,
@@ -1458,7 +1415,6 @@ function createHistoricalLedgerRecord(
   };
 }
 
-/** Creates two exact historical co-owners of one content-addressed shared page. */
 function createSharedPageManifest(): SourceManifest {
   const beforeHash = createFileContentHash("# Shared before\n");
   return {
@@ -1516,7 +1472,6 @@ function createSharedPageManifest(): SourceManifest {
   };
 }
 
-/** Creates exact historical ledger entries required by the shared-page fixture. */
 function createSharedPageHistoricalLedgers(): KnowledgeApplyCommitLedgerRecord[] {
   return [
     createHistoricalLedgerRecord(
@@ -1545,7 +1500,6 @@ function createSharedPageHistoricalLedgers(): KnowledgeApplyCommitLedgerRecord[]
   ].sort((left, right) => left.transactionId.localeCompare(right.transactionId));
 }
 
-/** Creates a two-source shared-page update with an exact final primary projection. */
 function createSharedUpdateProof(manifest: SourceManifest): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
   receipt: TransactionCommitReceipt;
@@ -1642,13 +1596,6 @@ function createSharedUpdateProof(manifest: SourceManifest): {
   return { journal, receipt: createTransactionCommitReceipt(journal) };
 }
 
-/**
- * Creates exact Queue, Review, and allocator slots for one transaction proof.
- *
- * @param manifest - Manifest used to reconstruct the immutable review plan
- * @param journal - Transaction whose apply authority must remain durable
- * @returns Shared-runtime slots accepted by the final atomic proof
- */
 function createApplyAuthoritySlots(
   manifest: SourceManifest,
   journal: ChangeSetTransactionJournal
@@ -1770,7 +1717,6 @@ function createApplyAuthoritySlots(
   };
 }
 
-/** Retains prior immutable Review records while installing a later Source Apply claim. */
 function retainApplyReviewHistory(
   state: KnowledgeRuntimeStoreSnapshot,
   authority: Pick<KnowledgeRuntimeStoreSnapshot, "queues" | "reviews" | "inputRevisions">
@@ -1806,14 +1752,6 @@ function retainApplyReviewHistory(
   };
 }
 
-/**
- * Creates the Queue hand-off retained after Manifest success and before journal acknowledgement.
- *
- * @param journal - Exact committed transaction journal
- * @param receipt - Exact commit receipt derived from the journal
- * @param markerOverrides - Optional marker fields used by corruption tests
- * @returns Strict completed Queue snapshot with one pending acknowledgement marker
- */
 function createPendingApplyCommitQueue(
   journal: ChangeSetTransactionJournal & { phase: "committed" },
   receipt: TransactionCommitReceipt,
@@ -1868,14 +1806,6 @@ function createPendingApplyCommitQueue(
   };
 }
 
-/**
- * Creates a runtime-v2 envelope whose active transaction still depends on
- * version-3 reviewed Queue authority that cannot prove its Manifest intent.
- *
- * @param manifest - Exact transaction Manifest read-set
- * @param journal - Prepared or applying active transaction
- * @returns Strict outer envelope containing a legacy Queue-v3 slot
- */
 function createLegacyReviewedActiveState(
   manifest: SourceManifest,
   journal: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
@@ -1908,7 +1838,6 @@ function createLegacyReviewedActiveState(
   };
 }
 
-/** Creates one runtime whose active slot contains the supplied committed proof. */
 async function createApplyHarness(
   manifest: SourceManifest,
   proof = createCommittedApplyProof(manifest)
@@ -1939,7 +1868,6 @@ async function createApplyHarness(
   };
 }
 
-/** Reconstructs exact forward-publication evidence from a two-Apply Runtime history. */
 function createForwardPublicationEvidence(
   state: KnowledgeRuntimeStoreSnapshot,
   selectedContent = "# transaction-forward-historical\n",
@@ -2062,7 +1990,6 @@ function createForwardPublicationEvidence(
   };
 }
 
-/** Creates the exact R3b observation query for the historical forward output. */
 function createForwardAuthorityQuery(state: KnowledgeRuntimeStoreSnapshot) {
   const evidence = createForwardPublicationEvidence(state);
   const intent = evidence.intent as ReturnType<typeof createKnowledgeForwardRevisionIntent>;
@@ -2080,7 +2007,6 @@ function createForwardAuthorityQuery(state: KnowledgeRuntimeStoreSnapshot) {
   });
 }
 
-/** Projects the strict known-output index from one test Runtime envelope. */
 function projectKnowledgeKnownAppliedWikiOutputIndexForTest(state: KnowledgeRuntimeStoreSnapshot) {
   const evidence = createForwardPublicationEvidence(state);
   const intent = evidence.intent as ReturnType<typeof createKnowledgeForwardRevisionIntent>;
@@ -2110,7 +2036,6 @@ function projectKnowledgeKnownAppliedWikiOutputIndexForTest(state: KnowledgeRunt
   });
 }
 
-/** Issues one genuine owner-bound execution lifecycle for a proposal Runtime test. */
 function createForwardProposalExecutionFixture() {
   const pairing = createKnowledgeProductionWorkflowExecutionPairing();
   const preflightBinding = consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
@@ -2125,7 +2050,6 @@ function createForwardProposalExecutionFixture() {
   });
 }
 
-/** Creates the genuine proposal facade paired to one already-bound Runtime. */
 function createForwardProposalPort(
   runtime: KnowledgeRuntimeStore,
   execution: Readonly<{
@@ -2148,7 +2072,6 @@ function createForwardProposalPort(
   });
 }
 
-/** Creates clean exact historical/current Apply authority for forward publication tests. */
 async function createForwardPublicationHarness(
   clock: () => number = () => 1,
   createPublicationPort: (
@@ -2260,7 +2183,6 @@ async function createForwardPublicationHarness(
   };
 }
 
-/** Creates one authentic preflight lease and consumes its exact composition owner. */
 async function createForwardDecisionExecutionLease(
   executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim,
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
@@ -2347,7 +2269,6 @@ confidence: 0.9
 Grounded evidence for source-1
 `;
 
-/** Builds a genuine paired preflight/Runtime/Vault/validator/decision production chain. */
 async function createForwardDecisionCoordinatorFixture(
   maxTextCharacters?: number,
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources,
@@ -2412,7 +2333,6 @@ async function createForwardDecisionCoordinatorFixture(
   } = { mode: "none" };
   const AdapterConstructor = FileSystemAdapter as unknown as new () => DataAdapter;
   const adapter = Object.assign(new AdapterConstructor(), {
-    /** Returns stable exact size metadata for one in-memory Vault file. */
     stat: async (path: string) => {
       const content = files.get(path);
       return content === undefined
@@ -2424,7 +2344,7 @@ async function createForwardDecisionCoordinatorFixture(
             size: new TextEncoder().encode(content).byteLength,
           };
     },
-    /** Returns exact text for the genuine target resolver. */
+
     read: async (path: string) => {
       const content = files.get(path);
       if (content === undefined) throw new Error("Missing in-memory Vault file");
@@ -2435,7 +2355,7 @@ async function createForwardDecisionCoordinatorFixture(
     adapter,
     getAllLoadedFiles: () => loaded,
     getAbstractFileByPath: (path: string) => loaded.find((file) => file.path === path) ?? null,
-    /** Applies one in-memory exact file transform like Obsidian Vault.process. */
+
     process: async (file: TFile, transform: (current: string) => string) => {
       const beforeProcess = wikiProcessFault.beforeNextProcess;
       wikiProcessFault.beforeNextProcess = undefined;
@@ -2530,7 +2450,6 @@ async function createForwardDecisionCoordinatorFixture(
   };
 }
 
-/** Rebuilds the read-only workflow plan after one later source observation commits. */
 async function createRefreshedForwardDecisionCoordinator(
   fixture: Pick<
     Awaited<ReturnType<typeof createForwardDecisionCoordinatorFixture>>,
@@ -2571,7 +2490,6 @@ async function createRefreshedForwardDecisionCoordinator(
   });
 }
 
-/** Builds one accepted decision plus genuine pre-journal and recovery Apply boundaries. */
 async function createForwardApplyCoordinatorFixture(
   maxTextCharacters?: number,
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources,
@@ -2627,7 +2545,6 @@ async function createForwardApplyCoordinatorFixture(
     fixture.vault,
     fixture.executionOwner,
     {
-      /** Forward Apply is update-only, so exclusive creation is unreachable. */
       create: async () => {
         throw new Error("Unexpected forward Apply create");
       },
@@ -2661,7 +2578,6 @@ async function createForwardApplyCoordinatorFixture(
   };
 }
 
-/** Builds one durable prepared journal plus its genuine post-journal recovery runner. */
 async function createPreparedForwardApplyCoordinatorFixture(
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
 ) {
@@ -2674,7 +2590,6 @@ async function createPreparedForwardApplyCoordinatorFixture(
   return { ...fixture, journal };
 }
 
-/** Reads the sole accepted-ready Forward row and reduces it to the public Apply query. */
 async function readAcceptedForwardApplyQuery(
   runtime: KnowledgeRuntimeStore,
   bundleId = "personal"
@@ -2697,7 +2612,6 @@ async function readAcceptedForwardApplyQuery(
   });
 }
 
-/** Creates an exact explicit-recovery expectation from one parsed Runtime snapshot. */
 function createForwardRecoveryExpectation(state: KnowledgeRuntimeStoreSnapshot) {
   const journal = state.activeForwardRevisionApply;
   if (!journal || journal.phase !== "recovery_required") {
@@ -2706,13 +2620,6 @@ function createForwardRecoveryExpectation(state: KnowledgeRuntimeStoreSnapshot) 
   return createKnowledgeForwardRevisionApplyRecoveryExpectation(journal);
 }
 
-/**
- * Rebuilds one genuine prepared Forward lifecycle just below its predecessor time floor.
- *
- * Every proposal, validation, acceptance, revalidation, claim, and journal digest is
- * re-minted by its strict leaf creator. The returned state can therefore be rejected
- * only by Runtime's cross-state predecessor-lineage semantics.
- */
 function rebuildPreparedForwardApplyBelowLineageFloor(
   state: KnowledgeRuntimeStoreSnapshot,
   lineageAppliedAtFloor: number
@@ -2854,7 +2761,6 @@ function rebuildPreparedForwardApplyBelowLineageFloor(
   return Object.freeze({ state: lowState, prepared });
 }
 
-/** Captures one expected promise rejection for authentic error-category assertions. */
 async function captureForwardDecisionRejection(promise: Promise<unknown>): Promise<unknown> {
   try {
     await promise;
@@ -2864,14 +2770,12 @@ async function captureForwardDecisionRejection(promise: Promise<unknown>): Promi
   throw new Error("Expected forward decision rejection");
 }
 
-/** Creates a minimal production Vault observer for one exact current Wiki page. */
 function createForwardCurrentTargetVisitor(
   pagePath: string,
   currentContent: string,
   sessions: unknown[]
 ): ObsidianKnowledgeCompilerTargetVisitPort {
   return {
-    /** Reports the requested page with its exact current bytes. */
     async visit(requests, signal, options, visitor): Promise<void> {
       if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
       if (requests.length !== 1 || requests[0].path !== pagePath || options.maxFileBytes < 1) {
@@ -2891,7 +2795,6 @@ function createForwardCurrentTargetVisitor(
   };
 }
 
-/** Commits one exact latest no-changes outcome over the forward target source. */
 async function commitForwardNoChanges(
   harness: Pick<Awaited<ReturnType<typeof createForwardPublicationHarness>>, "file" | "runtime">,
   sourceContentHash: string
@@ -2921,7 +2824,6 @@ async function commitForwardNoChanges(
   const queue = new IngestQueue(
     new KnowledgeRuntimeQueueStorage(harness.runtime),
     {
-      /** Returns the exact no-changes plan for the test observation. */
       execute: async () => ({
         kind: "no_changes",
         changeSetId: plan.noChangesId,
@@ -2938,7 +2840,6 @@ async function commitForwardNoChanges(
   });
 }
 
-/** Creates one structurally strict standalone forward publication wrapper fixture. */
 function createForwardPublishedFixture(
   bundleId: string,
   pagePath: string,
@@ -3023,7 +2924,6 @@ function createForwardPublishedFixture(
   });
 }
 
-/** Appends one leaf-valid same-page pending successor to a detached Runtime snapshot. */
 function appendSamePageForwardSuccessor(
   state: KnowledgeRuntimeStoreSnapshot,
   pagePath: string
@@ -3059,7 +2959,6 @@ function appendSamePageForwardSuccessor(
   return next;
 }
 
-/** Creates an initialized store and all persistence facades. */
 async function createHarness(): Promise<{
   file: MemoryAtomicRuntimeFile;
   runtime: KnowledgeRuntimeStore;
@@ -3089,7 +2988,6 @@ async function createHarness(): Promise<{
   };
 }
 
-/** Creates one exact pending Review and Queue pair for atomic Reject tests. */
 async function createReviewRejectHarness(): Promise<{
   file: MemoryAtomicRuntimeFile;
   runtime: KnowledgeRuntimeStore;
@@ -3209,7 +3107,6 @@ async function createReviewRejectHarness(): Promise<{
   };
 }
 
-/** Reads the current exact optimistic token for one startup release attempt. */
 async function createStartupReleaseRequest(
   harness: { file: MemoryAtomicRuntimeFile },
   bundleId = "personal"
@@ -3229,7 +3126,6 @@ async function createStartupReleaseRequest(
   };
 }
 
-/** Creates one empty Queue held behind the startup recovery gate. */
 function createStartupPausedQueue(revision: number, bundleId = "personal"): IngestQueueSnapshot {
   return {
     ...createQueueSnapshot(revision, bundleId),
@@ -3237,13 +3133,6 @@ function createStartupPausedQueue(revision: number, bundleId = "personal"): Inge
   };
 }
 
-/**
- * Persists the exact reviewed Queue/Review/allocator authority for a prepared journal.
- *
- * @param harness - Initialized shared-runtime test facades
- * @param manifest - Manifest used by the journal's immutable review plan
- * @param journal - Prepared journal that will reserve the global transaction slot
- */
 async function persistPreparedApplyAuthority(
   harness: Awaited<ReturnType<typeof createHarness>>,
   manifest: SourceManifest,
@@ -3294,12 +3183,6 @@ async function persistPreparedApplyAuthority(
   await harness.review.write(journal.bundleId, review, currentReview?.revision ?? null);
 }
 
-/**
- * Reconstructs the startup-safe identity retained by one accepted Review record.
- *
- * @param review - Strict review snapshot containing exactly one accepted record
- * @returns Detached identity suitable for no-journal classification
- */
 function createAcceptedStartupIdentity(
   review: ChangeSetReviewSnapshot
 ): AcceptedReviewStartupIdentity {
@@ -3320,12 +3203,6 @@ function createAcceptedStartupIdentity(
   };
 }
 
-/**
- * Creates exact accepted Queue, Review, Manifest, and allocator state without a journal.
- *
- * @param transactionId - Fixture namespace used by the accepted ChangeSet
- * @returns Initialized runtime facades plus the durable startup identity and source proof
- */
 async function createNoJournalRecoveryHarness(transactionId = "transaction-no-journal") {
   const harness = await createHarness();
   const manifest = createRegisteredManifest();
@@ -3348,7 +3225,6 @@ async function createNoJournalRecoveryHarness(transactionId = "transaction-no-jo
   };
 }
 
-/** Converts the applying fixture back to its durable accepted-before-start boundary. */
 function markAcceptedApplyNotStarted(state: KnowledgeRuntimeStoreSnapshot): void {
   const queue = state.queues[0].value as IngestQueueSnapshot;
   const applying = queue.jobs[0];
@@ -3388,12 +3264,6 @@ function markAcceptedApplyNotStarted(state: KnowledgeRuntimeStoreSnapshot): void
   queue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
 }
 
-/**
- * Converts the exact applying Queue attempt into startup-recovered failed state.
- *
- * @param state - Runtime snapshot carrying one applying no-journal attempt
- * @param recoveredAt - Monotonic startup recovery timestamp
- */
 function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recoveredAt: number): void {
   const queue = state.queues[0].value as IngestQueueSnapshot;
   const applying = queue.jobs[0];
@@ -3423,10 +3293,6 @@ function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recovere
   state.revision += 1;
 }
 
-/**
- * Adds strict v3 observation records for a Queue watermark assembled by an
- * authority-focused fixture instead of the production hand-off facade.
- */
 function recordFixtureWatermarkAsConsumed(
   state: KnowledgeRuntimeStoreSnapshot,
   bundleId = "personal"
@@ -4644,7 +4510,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(runtime),
       {
-        /** Produces the proof that the legacy completion did not retain. */
         execute: async () => ({
           kind: "no_changes",
           changeSetId: plan.noChangesId,
@@ -5410,7 +5275,6 @@ describe("KnowledgeRuntimeStore", () => {
     const claim = { ...currentQueue.applyClaim };
     const applying = currentQueue.jobs[0];
     const executor: IngestExecutor = {
-      /** Produces no changes; enqueue does not invoke this executor. */
       execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
     };
     const queue = new IngestQueue(harness.queue, executor, {
@@ -5864,7 +5728,6 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(runningBefore);
 
     const executor: IngestExecutor = {
-      /** Produces no changes; beginning an accepted apply does not invoke this executor. */
       execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
     };
     const runtimeQueue = new IngestQueue(harness.queue, executor, { clock: () => 300 });
@@ -6336,12 +6199,12 @@ describe("KnowledgeRuntimeStore", () => {
       let mutations = 0;
       const fileStore: KnowledgeFileStore = {
         mutationCapabilities: ALL_KNOWLEDGE_FILE_MUTATIONS,
-        /** Records any forbidden recovery observation. */
+
         async observe() {
           observations += 1;
           return { kind: "missing" } as const;
         },
-        /** Records any forbidden recovery mutation. */
+
         async compareAndSwap() {
           mutations += 1;
           return { kind: "applied" } as const;
@@ -6402,12 +6265,12 @@ describe("KnowledgeRuntimeStore", () => {
       let mutations = 0;
       const fileStore: KnowledgeFileStore = {
         mutationCapabilities: ALL_KNOWLEDGE_FILE_MUTATIONS,
-        /** Records any forbidden recovery observation. */
+
         async observe() {
           observations += 1;
           return { kind: "missing" } as const;
         },
-        /** Records any forbidden recovery mutation. */
+
         async compareAndSwap() {
           mutations += 1;
           return { kind: "applied" } as const;
@@ -6753,7 +6616,6 @@ describe("KnowledgeRuntimeStore", () => {
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
     const executor: IngestExecutor = {
-      /** Produces no work; recovery never invokes this executor. */
       async execute() {
         return { kind: "no_changes", changeSetId: "changeset-unused" };
       },
@@ -6840,7 +6702,6 @@ describe("KnowledgeRuntimeStore", () => {
     const runtimeQueue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(harness.runtime),
       {
-        /** Recovery does not execute new source work. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 250, jobIdFactory: () => "job-unused" }
@@ -8043,7 +7904,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Returns one production-shaped no-change result with exact Manifest authority. */
         execute: async () => {
           executions += 1;
           return {
@@ -8201,7 +8061,6 @@ describe("KnowledgeRuntimeStore", () => {
     const recoveryQueue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(harness.runtime),
       {
-        /** Recovery does not execute new source work. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 250, jobIdFactory: () => "job-unused-after-apply" }
@@ -8327,7 +8186,6 @@ describe("KnowledgeRuntimeStore", () => {
     const noChangesQueue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(harness.runtime),
       {
-        /** Returns an exact no-change plan over the post-Apply Manifest read-set. */
         execute: async () => ({
           kind: "no_changes",
           changeSetId: plan.noChangesId,
@@ -8485,7 +8343,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Holds the exact first result while a newer source observation schedules a rerun. */
         execute: async () => {
           signalStarted?.();
           await executionGate;
@@ -8576,7 +8433,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Omits the production Manifest plan and also avoids its reserved id namespace. */
         execute: async () => ({
           kind: "no_changes",
           changeSetId: "untrusted-queue-only-no-changes",
@@ -8616,7 +8472,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Advances unrelated Manifest metadata after compile captured its exact read-set. */
         execute: async () => {
           const source = manifest.entries[0];
           await harness.manifest.write(
@@ -8680,7 +8535,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Arms an acknowledgement loss immediately before the atomic final write. */
         execute: async () => {
           harness.file.throwAfterCommitOnNextWrite();
           return {
@@ -8716,7 +8570,6 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(committed);
     let replayExecutions = 0;
     const replayQueue = new IngestQueue(new KnowledgeRuntimeQueueStorage(reconstructed), {
-      /** Must remain unreachable because the committed attempt is already terminal. */
       execute: async () => {
         replayExecutions += 1;
         return { kind: "no_changes", changeSetId: "unexpected-replay" };
@@ -8746,7 +8599,6 @@ describe("KnowledgeRuntimeStore", () => {
     const noChangesQueue = new IngestQueue(
       harness.queue,
       {
-        /** Commits one exact marker that an older Runtime will later retain. */
         execute: async () => ({
           kind: "no_changes",
           changeSetId: noChangesPlan.noChangesId,
@@ -8780,7 +8632,6 @@ describe("KnowledgeRuntimeStore", () => {
     const pendingQueue = new IngestQueue(
       harness.queue,
       {
-        /** The executor is not invoked while this fixture creates Apply authority. */
         execute: async () => ({ kind: "no_changes", changeSetId: "unused" }),
       },
       { jobIdFactory: () => `job-${applyTransactionId}` }
@@ -8843,7 +8694,6 @@ describe("KnowledgeRuntimeStore", () => {
     }
 
     const executor: IngestExecutor = {
-      /** Produces no changes; the rejected first enqueue never invokes this executor. */
       execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
     };
     const queue = new IngestQueue(harness.queue, executor, {
@@ -8990,7 +8840,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises source hand-off. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-atomic-consume" }
@@ -9045,7 +8894,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Captures one real same-envelope execution proof. */
         execute: async (context) => {
           const job = context.job;
           const request: KnowledgeIngestExecutionProofRequest = {
@@ -9129,7 +8977,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Injects valid terminal history sharing the active observation tuple. */
         execute: async (context) => {
           const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
           const queueSlot = state.queues.find((slot) => slot.bundleId === "personal");
@@ -9283,7 +9130,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises source ordering. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-bound-before-newer" }
@@ -9314,7 +9160,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises source hand-off. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-post-commit" }
@@ -9345,7 +9190,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises the watcher hand-off facade. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-handoff-facade" }
@@ -9380,7 +9224,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises source hand-off. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-bind-retry" }
@@ -9416,7 +9259,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only exercises source hand-off. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => `job-${++jobSequence}` }
@@ -9458,7 +9300,6 @@ describe("KnowledgeRuntimeStore", () => {
       new KnowledgeRuntimeInputRevisionAllocator(reconstructed),
       new KnowledgeRuntimeInputObservationBinder(reconstructed),
       {
-        /** Fails if a terminal replay incorrectly reaches Queue. */
         enqueue: async () => {
           queueCalls += 1;
           throw new Error("Terminal replay must not call Queue");
@@ -9516,7 +9357,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(reconstructed),
       {
-        /** Produces no changes; this test only exercises restart recovery. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-restart-recovery" }
@@ -9550,7 +9390,6 @@ describe("KnowledgeRuntimeStore", () => {
     let outputCurrent = false;
     let executions = 0;
     const freshnessAdmission: IngestSourceFreshnessAdmissionPort = {
-      /** Returns identity-bound output freshness controlled by this cross-layer fixture. */
       async evaluate(request) {
         return Object.freeze({
           ...request,
@@ -9564,7 +9403,6 @@ describe("KnowledgeRuntimeStore", () => {
       },
     };
     const executor: IngestExecutor = {
-      /** Simulates a model that cannot produce targets for the missing output. */
       async execute() {
         executions += 1;
         return {
@@ -9840,7 +9678,6 @@ describe("KnowledgeRuntimeStore", () => {
   it("lets Queue reject an older read that completes after a newer captured event", async () => {
     const harness = await createHarness();
     const executor: IngestExecutor = {
-      /** Produces no changes when this ordering-only queue is later executed. */
       execute: async () => ({ kind: "no_changes", changeSetId: "changeset-ordering" }),
     };
     let jobSequence = 0;
@@ -9995,7 +9832,6 @@ describe("KnowledgeRuntimeStore", () => {
     const queue = new IngestQueue(
       harness.queue,
       {
-        /** Produces no changes; this test only assembles valid consumed history. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 100, jobIdFactory: () => "job-journal-semantics" }
@@ -11021,7 +10857,6 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(() => createForwardProposalPort(tamperedRuntime, tamperedExecution)).toThrow(TypeError);
 
     class UntrustedRuntimeSubclass extends KnowledgeRuntimeStore {
-      /** Installs a forged own atomic boundary that an authentic port must never accept. */
       constructor(
         file: AtomicRuntimeFile,
         productionExecutionClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim
@@ -11070,7 +10905,6 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     ).toThrow(TypeError);
 
     class SubclassPort extends KnowledgeRuntimeForwardRevisionProposalPublicationPort {
-      /** Deliberately forged dynamic override. */
       override async publish() {
         return {} as never;
       }
@@ -11489,7 +11323,6 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
   it("accepts exactly 256 active rows and fails closed instead of truncating row 257", () => {
     const state = createEmptyKnowledgeRuntimeStoreSnapshot("runtime-forward-studio-limit");
 
-    /** Builds one strict pending-only Review at the requested product boundary. */
     const createPendingReview = (count: number) => {
       const records = Array.from({ length: count }, (_, index) =>
         createForwardPublishedFixture(
@@ -11819,7 +11652,6 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
     ).resolves.toMatchObject({ outcome: "published" });
 
     class ForgedPortSubclass extends KnowledgeRuntimeForwardRevisionProposalPublicationPort {
-      /** Deliberately replaces the trusted proposal-authority read. */
       override async readForwardRevisionProposalAuthority() {
         return null;
       }
@@ -11967,7 +11799,6 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
 });
 
 describe("KnowledgeRuntimeStore forward revision validation authority", () => {
-  /** Creates one validation facade through an authentic Queue execution-proof lifecycle. */
   function createValidationPort(runtime: KnowledgeRuntimeStore): {
     port: KnowledgeRuntimeForwardRevisionValidationPort;
     proofPort: KnowledgeRuntimeIngestExecutionProofPort;
@@ -11980,7 +11811,6 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     };
   }
 
-  /** Publishes one pending proposal and derives its exact validation query. */
   async function publishForValidation(
     harness: Awaited<ReturnType<typeof createForwardPublicationHarness>>,
     evidence: KnowledgeForwardRevisionProposalPublicationEvidence = harness.evidence
@@ -12220,7 +12050,6 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
 });
 
 describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
-  /** Publishes and returns the sole strict pending proposal for one decision test. */
   async function createPendingDecisionFixture() {
     const pairing = createKnowledgeProductionWorkflowExecutionPairing();
     const decision = await createForwardDecisionExecutionLease(pairing.preflightClaim);
@@ -12685,7 +12514,6 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       fixture.vault,
       fixture.executionOwner,
       {
-        /** Forward Apply is update-only, so exclusive creation is unreachable. */
         create: async () => {
           throw new Error("Unexpected forward Apply create");
         },
@@ -13566,13 +13394,12 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     if (!baseParser) throw new Error("Expected one production parser");
     const profileProbe = { calls: 0, fail: false };
     const controlledParser: KnowledgeByteParser = Object.freeze({
-      /** Returns the production profile until restart arms the broken registry. */
       getProfile: () => {
         profileProbe.calls += 1;
         if (profileProbe.fail) throw new Error("test-only parser profile failure");
         return baseParser.getProfile();
       },
-      /** Delegates exact source parsing to the production parser. */
+
       parse: (...args: Parameters<KnowledgeByteParser["parse"]>) => baseParser.parse(...args),
     });
     const controlledResources: KnowledgeProductionPipelineResources = Object.freeze({
@@ -14780,7 +14607,6 @@ describe("KnowledgeRuntimeStore source retirement", () => {
     const recoveryQueue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(harness.runtime),
       {
-        /** Recovery does not execute new source work. */
         execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
       },
       { clock: () => 250, jobIdFactory: () => "job-unused-after-retirement" }

@@ -8,7 +8,6 @@ import type {
   KnowledgeReviewEvidenceSummary,
 } from "@/knowledge/review/KnowledgeReviewEvidence";
 
-/** Props for the bounded, proposal-level Review evidence surface. */
 export interface KnowledgeReviewEvidencePanelProps {
   headingId: string;
   evidence: readonly Readonly<KnowledgeReviewEvidenceSummary>[];
@@ -19,7 +18,6 @@ export interface KnowledgeReviewEvidencePanelProps {
   onOpenEvidence?(this: void, evidenceRef: string): void | Promise<void>;
 }
 
-/** Returns a user-facing label for one citation relationship. */
 function formatEvidenceRelation(relation: KnowledgeReviewEvidenceSummary["relation"]): string {
   switch (relation) {
     case "supports":
@@ -31,7 +29,6 @@ function formatEvidenceRelation(relation: KnowledgeReviewEvidenceSummary["relati
   }
 }
 
-/** Returns a compact user-facing source location without exposing an actionable path. */
 function formatEvidenceLocation(location: KnowledgeReviewEvidenceLocationSummary): string {
   switch (location.kind) {
     case "markdown_lines": {
@@ -52,7 +49,6 @@ function formatEvidenceLocation(location: KnowledgeReviewEvidenceLocationSummary
   }
 }
 
-/** Renders one immutable evidence excerpt using plain React text only. */
 function EvidenceExcerpt({
   evidence,
   index,
@@ -114,12 +110,6 @@ function EvidenceExcerpt({
   );
 }
 
-/**
- * Renders bounded proposal evidence without claiming block-level proof.
- *
- * Evidence controls emit only the current opaque evidence reference. The
- * controller owns snapshot binding and source navigation authority.
- */
 export function KnowledgeReviewEvidencePanel({
   headingId,
   evidence,

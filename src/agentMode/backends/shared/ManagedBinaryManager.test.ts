@@ -2,7 +2,7 @@ import {
   ManagedBinaryManager,
   type BinarySettings,
   type InstalledBinary,
-  type ManagedBinaryInstallOptions,
+  type ManagedBinaryPipelineOptions,
 } from "@/agentMode/backends/shared/ManagedBinaryManager";
 import {
   ManagedInstallAbortError,
@@ -14,15 +14,18 @@ import * as path from "node:path";
 
 jest.mock("@/logger", () => ({ logInfo: jest.fn(), logWarn: jest.fn(), logError: jest.fn() }));
 
-class TestBinaryManager extends ManagedBinaryManager<number> {
+class TestBinaryManager extends ManagedBinaryManager {
   settings: BinarySettings = {};
   validate = jest.fn(async (binaryPath: string) => ({ version: "1.2.3", path: binaryPath }));
-  pipeline = jest.fn(
-    async (options: ManagedBinaryInstallOptions<number> & { signal: AbortSignal }) => {
-      options.onProgress?.(50);
-      return { version: "1.2.3", path: "/managed/binary" };
-    }
-  );
+  pipeline = jest.fn(async (options: ManagedBinaryPipelineOptions<object>) => {
+    options.progress.extracting();
+    this.selectInstalledBinary({
+      binaryVersion: "1.2.3",
+      binaryPath: "/managed/binary",
+      binarySource: "managed",
+    });
+    return { version: "1.2.3", path: "/managed/binary" };
+  });
 
   constructor(private dataDir: string) {
     super("Test agent");
@@ -40,7 +43,7 @@ class TestBinaryManager extends ManagedBinaryManager<number> {
     return this.validate(binaryPath);
   }
   protected installPipeline(
-    options: ManagedBinaryInstallOptions<number> & { signal: AbortSignal }
+    options: ManagedBinaryPipelineOptions<object>
   ): Promise<InstalledBinary> {
     return this.pipeline(options);
   }
@@ -60,6 +63,104 @@ describe("ManagedBinaryManager", () => {
     });
     afterEach(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
+    describe("autoUpgrade()", () => {
+      const issue = "https://github.com/Brevilabs/obsidian-copilot-private/issues/530";
+      beforeEach(() => {
+        manager.settings = {
+          binaryPath: customPath,
+          binaryVersion: "1.0.0",
+          binarySource: "managed",
+        };
+      });
+      it(`https://github.com/Brevilabs/obsidian-copilot-private/issues/535 rejects a shipped pin below the minimum before downloading`, async () => {
+        await expect(manager.autoUpgrade("1.0.0", "2.0.0", jest.fn())).rejects.toThrow("requires");
+        expect(manager.pipeline).not.toHaveBeenCalled();
+      });
+      it.each([undefined, "0.9.0"])(
+        `https://github.com/Brevilabs/obsidian-copilot-private/issues/535 retries legacy or previous-minimum cooldown %s`,
+        async (minimumVersion) => {
+          fs.mkdirSync(manager.getDataDir(), { recursive: true });
+          fs.writeFileSync(
+            path.join(manager.getDataDir(), "auto-upgrade-failure.json"),
+            JSON.stringify({ pin: "2.0.0", minimumVersion, failedAt: Date.now() })
+          );
+          await manager.autoUpgrade("2.0.0", "1.1.0", jest.fn());
+          expect(manager.pipeline).toHaveBeenCalledTimes(1);
+        }
+      );
+      it.each(["2.0.0", "0.9.0"])(
+        `${issue} follows a changed pin in either direction and emits one success`,
+        async (pin) => {
+          const notify = jest.fn();
+          await manager.autoUpgrade(pin, "0.8.0", notify);
+          expect(manager.pipeline).toHaveBeenCalledTimes(1);
+          expect(notify).toHaveBeenCalledTimes(1);
+          expect(notify.mock.calls[0][0]).toContain("updated");
+        }
+      );
+      it.each(["equal", "custom", "absent"])(
+        `${issue} skips %s without a notice`,
+        async (reason) => {
+          if (reason === "custom") manager.settings.binarySource = "custom";
+          if (reason === "absent") manager.settings = {};
+          const notify = jest.fn();
+          await manager.autoUpgrade(reason === "equal" ? "1.0.0" : "2.0.0", "1.0.0", notify);
+          expect(manager.pipeline).not.toHaveBeenCalled();
+          expect(notify).not.toHaveBeenCalled();
+        }
+      );
+      it(`${issue} does not replace a custom selection written during download`, async () => {
+        const pipeline = manager.pipeline.getMockImplementation()!;
+        manager.pipeline.mockImplementation(async (options) => {
+          manager.settings = {
+            binaryPath: customPath,
+            binaryVersion: "9.0.0",
+            binarySource: "custom",
+          };
+          return pipeline(options);
+        });
+        await manager.autoUpgrade("2.0.0", "1.0.0", jest.fn());
+        expect(manager.settings).toEqual({
+          binaryPath: customPath,
+          binaryVersion: "9.0.0",
+          binarySource: "custom",
+        });
+      });
+      it(`${issue} skips a second simultaneous load instead of duplicating its download`, async () => {
+        let finish!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        const pipeline = manager.pipeline.getMockImplementation()!;
+        manager.pipeline.mockImplementation(async (options) => {
+          await pending;
+          return pipeline(options);
+        });
+        const notify = jest.fn();
+        const first = manager.autoUpgrade("2.0.0", "1.0.0", notify);
+        await manager.autoUpgrade("2.0.0", "1.0.0", notify);
+        finish();
+        await first;
+        expect(manager.pipeline).toHaveBeenCalledTimes(1);
+        expect(notify).toHaveBeenCalledTimes(1);
+      });
+      it(`${issue} persists offline cooldown across manager lifecycles while preserving the selected binary`, async () => {
+        const original = { ...manager.settings };
+        manager.pipeline.mockRejectedValue(new Error("offline"));
+        const notify = jest.fn();
+        await manager.autoUpgrade("2.0.0", "1.0.0", notify);
+        expect(manager.settings).toEqual(original);
+        expect(notify).toHaveBeenCalledTimes(1);
+        const reopened = new TestBinaryManager(manager.getDataDir());
+        reopened.settings = original;
+        await reopened.autoUpgrade("2.0.0", "1.0.0", notify);
+        expect(reopened.pipeline).not.toHaveBeenCalled();
+        const now = jest.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1000 + 1);
+        await reopened.autoUpgrade("2.0.0", "1.0.0", notify);
+        expect(reopened.pipeline).toHaveBeenCalledTimes(1);
+        now.mockRestore();
+      });
+    });
     describe("getRuntimeState()", () => {
       it("keeps the idle snapshot stable between reads", () => {
         expect(manager.getRuntimeState()).toEqual({ kind: "idle" });
@@ -77,6 +178,35 @@ describe("ManagedBinaryManager", () => {
         expect(listener).toHaveBeenCalledTimes(2);
       });
     });
+    describe("getActionState()", () => {
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 exposes installation progress and retryable failures", () => {
+        const state = jest.spyOn(manager, "getRuntimeState");
+        state.mockReturnValue({
+          kind: "installing",
+          progress: { label: "Downloading", percent: 30 },
+        });
+        expect(manager.getActionState()).toEqual({
+          kind: "running",
+          label: "Downloading",
+          percent: 30,
+        });
+        state.mockReturnValue({ kind: "error", message: "download failed", operation: "install" });
+        expect(manager.getActionState()).toEqual({ kind: "error", message: "download failed" });
+        state.mockRestore();
+      });
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 disables competing actions during path validation and hides unrelated failures", () => {
+        const state = jest.spyOn(manager, "getRuntimeState");
+        for (const kind of ["busy", "detecting"] as const) {
+          state.mockReturnValue({ kind });
+          expect(manager.getActionState()).toEqual({ kind: "running", label: "Configuring…" });
+        }
+        state.mockReturnValue({ kind: "error", message: "bad path", operation: "configure" });
+        expect(manager.getActionState()).toEqual({ kind: "idle" });
+        expect(manager.getActionState()).toBe(manager.getActionState());
+        state.mockRestore();
+      });
+    });
+
     describe("install()", () => {
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 publishes backend progress, returns the installation, and ignores progress after completion", async () => {
         const progress = jest.fn();
@@ -86,15 +216,29 @@ describe("ManagedBinaryManager", () => {
           version: "1.2.3",
           path: "/managed/binary",
         });
-        expect(progress).toHaveBeenCalledWith(50);
+        const extracting = { label: "Extracting Test agent…", percent: 80 };
+        expect(progress).toHaveBeenCalledWith(extracting);
         const idle = manager.getRuntimeState();
-        manager.pipeline.mock.calls[0][0].onProgress?.(75);
+        manager.pipeline.mock.calls[0][0].progress.activating();
         expect(manager.getRuntimeState()).toBe(idle);
         expect(snapshots).toEqual([
           { kind: "installing", progress: null },
-          { kind: "installing", progress: 50 },
+          { kind: "installing", progress: extracting },
           { kind: "idle" },
         ]);
+      });
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/578 stops elapsed-time updates when the install settles", async () => {
+        jest.useFakeTimers();
+        try {
+          await manager.install();
+          const listener = jest.fn();
+          manager.subscribeRuntimeState(listener);
+          await jest.advanceTimersByTimeAsync(60_000);
+          expect(listener).not.toHaveBeenCalled();
+          expect(manager.getRuntimeState()).toEqual({ kind: "idle" });
+        } finally {
+          jest.useRealTimers();
+        }
       });
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 prevents custom selection and removal from overwriting a running install", async () => {
         let finish!: (value: InstalledBinary) => void;
@@ -134,6 +278,28 @@ describe("ManagedBinaryManager", () => {
         expect(manager.getRuntimeState()).toEqual({ kind: "idle" });
         expect(manager.isBusy()).toBe(false);
         manager.cancelCurrentOperation();
+      });
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/578 stops elapsed-time updates while an uncancellable request is still settling", async () => {
+        jest.useFakeTimers();
+        try {
+          let fail!: (error: Error) => void;
+          manager.pipeline.mockImplementationOnce(({ progress }) => {
+            progress.connecting();
+            return new Promise((_resolve, reject) => (fail = reject));
+          });
+          const progress = jest.fn();
+          const installing = manager.install({ onProgress: progress });
+          manager.cancelCurrentOperation();
+          const listener = jest.fn();
+          manager.subscribeRuntimeState(listener);
+          await jest.advanceTimersByTimeAsync(60_000);
+          expect(listener).not.toHaveBeenCalled();
+          expect(progress).toHaveBeenCalledTimes(1);
+          fail(new ManagedInstallAbortError());
+          await expect(installing).rejects.toThrow("Aborted");
+        } finally {
+          jest.useRealTimers();
+        }
       });
     });
     describe("forgetSettledError()", () => {

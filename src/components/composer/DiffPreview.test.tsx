@@ -11,7 +11,6 @@ import {
   wordLevelDiff,
 } from "@/components/composer/DiffPreview";
 
-/** Reconstructs one exact side from word-level diff segments. */
 function reconstructWordDiff(
   parts: readonly WordDiffPart[],
   side: "original" | "modified"
@@ -22,7 +21,6 @@ function reconstructWordDiff(
     .join("");
 }
 
-/** Creates one fully typed diff chunk for a test fixture. */
 function createChange(
   value: string,
   kind: "added" | "removed" | "unchanged" = "unchanged"

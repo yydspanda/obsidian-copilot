@@ -4,7 +4,6 @@ import {
   type KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 
-/** One explicit, session-local decision retained for an exact Review snapshot. */
 export type KnowledgeReviewLocalDecision =
   | { kind: "accept_exact" }
   | { kind: "reject" }
@@ -14,12 +13,10 @@ export type KnowledgeReviewLocalDecision =
       blocks: Readonly<Record<string, "accept" | "reject">>;
     };
 
-/** File decisions retained only for the lifetime of one Studio controller session. */
 export type KnowledgeReviewDraftState = Readonly<
   Record<string, Readonly<KnowledgeReviewLocalDecision> | undefined>
 >;
 
-/** One bounded active textarea retained across tab and popout-root remounts. */
 export interface KnowledgeReviewActiveEdit {
   changeId: string;
   afterContent: string;
@@ -30,7 +27,6 @@ interface KnowledgeReviewDraftEntry {
   activeEdit?: Readonly<KnowledgeReviewActiveEdit>;
 }
 
-/** Exact identity that prevents drafts crossing proposal or snapshot generations. */
 export interface KnowledgeReviewDraftIdentity {
   bundleId: string;
   changeSetId: string;
@@ -40,7 +36,6 @@ export interface KnowledgeReviewDraftIdentity {
 
 const EMPTY_REVIEW_DRAFT: KnowledgeReviewDraftState = Object.freeze({});
 
-/** Creates an unambiguous in-memory key from exact Review identity fields. */
 function createDraftKey(identity: Readonly<KnowledgeReviewDraftIdentity>): string {
   return JSON.stringify([
     identity.bundleId,
@@ -50,7 +45,6 @@ function createDraftKey(identity: Readonly<KnowledgeReviewDraftIdentity>): strin
   ]);
 }
 
-/** Reads own enumerable data properties without invoking value accessors. */
 function readPlainDataRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -70,7 +64,6 @@ function readPlainDataRecord(value: unknown): Readonly<Record<string, unknown>> 
   }
 }
 
-/** Reads one record only when it has the exact allowed data keys. */
 function readExactDataRecord(
   value: unknown,
   keys: readonly string[]
@@ -83,7 +76,6 @@ function readExactDataRecord(
     : undefined;
 }
 
-/** Strictly snapshots one file decision against its current plan projection. */
 function snapshotDecision(
   file: Readonly<KnowledgeReviewPlan["files"][number]>,
   value: unknown
@@ -130,7 +122,6 @@ function snapshotDecision(
   throw new TypeError("Knowledge Review draft decision is invalid");
 }
 
-/** Strictly detaches a complete draft against current file and block identities. */
 function snapshotDraft(
   plan: Readonly<KnowledgeReviewPlan>,
   value: unknown
@@ -157,7 +148,6 @@ function snapshotDraft(
   return Object.freeze(detached);
 }
 
-/** Strictly snapshots one current eligible active editor without invoking accessors. */
 function snapshotActiveEdit(
   plan: Readonly<KnowledgeReviewPlan>,
   value: unknown
@@ -189,7 +179,6 @@ function snapshotActiveEdit(
   });
 }
 
-/** Counts every physically retained content string in one exact draft entry. */
 function getEditedCharacterCount(
   draft: KnowledgeReviewDraftState,
   activeEdit?: Readonly<KnowledgeReviewActiveEdit>
@@ -203,12 +192,10 @@ function getEditedCharacterCount(
   return total;
 }
 
-/** Counts retained content once for one exact-identity entry. */
 function getEntryEditedCharacterCount(entry: Readonly<KnowledgeReviewDraftEntry>): number {
   return getEditedCharacterCount(entry.decisions, entry.activeEdit);
 }
 
-/** Returns whether one saved decision exactly commits the retained active buffer. */
 function commitsActiveEdit(
   draft: KnowledgeReviewDraftState,
   activeEdit?: Readonly<KnowledgeReviewActiveEdit>
@@ -218,12 +205,10 @@ function commitsActiveEdit(
   return decision?.kind === "accept_edited" && decision.afterContent === activeEdit.afterContent;
 }
 
-/** Returns whether one exact entry contains any user decision or active text. */
 function hasRetainedDraftState(entry: Readonly<KnowledgeReviewDraftEntry>): boolean {
   return entry.activeEdit !== undefined || Object.keys(entry.decisions).length > 0;
 }
 
-/** Creates exact controller-session draft identity for one current plan. */
 export function createKnowledgeReviewDraftIdentity(
   bundleId: string,
   plan: Readonly<KnowledgeReviewPlan>
@@ -236,16 +221,9 @@ export function createKnowledgeReviewDraftIdentity(
   });
 }
 
-/**
- * Data-only session store for saved Review decisions and committed manual edits.
- *
- * Bounded active textarea buffers and committed decisions survive React and tab
- * remounts, but are reconciled against exact durable Review identities.
- */
 export class KnowledgeReviewDraftStore {
   private readonly drafts = new Map<string, KnowledgeReviewDraftEntry>();
 
-  /** Rejects a replacement whose aggregate controller-session content exceeds 8M. */
   private assertAggregateWithinLimit(key: string, replacement: KnowledgeReviewDraftEntry): void {
     let total = getEntryEditedCharacterCount(replacement);
     for (const [candidateKey, entry] of this.drafts) {
@@ -256,19 +234,16 @@ export class KnowledgeReviewDraftStore {
     }
   }
 
-  /** Reads a saved draft for one exact identity, or a shared immutable empty draft. */
   read(identity: Readonly<KnowledgeReviewDraftIdentity>): KnowledgeReviewDraftState {
     return this.drafts.get(createDraftKey(identity))?.decisions ?? EMPTY_REVIEW_DRAFT;
   }
 
-  /** Reads one bounded active edit for the exact Review identity. */
   readActiveEdit(
     identity: Readonly<KnowledgeReviewDraftIdentity>
   ): Readonly<KnowledgeReviewActiveEdit> | undefined {
     return this.drafts.get(createDraftKey(identity))?.activeEdit;
   }
 
-  /** Replaces one exact draft with a detached immutable snapshot. */
   write(
     identity: Readonly<KnowledgeReviewDraftIdentity>,
     plan: Readonly<KnowledgeReviewPlan>,
@@ -290,14 +265,6 @@ export class KnowledgeReviewDraftStore {
     return snapshot;
   }
 
-  /**
-   * Saves or clears one active textarea without retaining over-budget content.
-   *
-   * @param identity - Exact Review generation identity
-   * @param plan - Current exact plan used to prove file eligibility
-   * @param activeEdit - Replacement editor state, or undefined to close it
-   * @returns Saved immutable editor state
-   */
   writeActiveEdit(
     identity: Readonly<KnowledgeReviewDraftIdentity>,
     plan: Readonly<KnowledgeReviewPlan>,
@@ -327,18 +294,10 @@ export class KnowledgeReviewDraftStore {
     return snapshot;
   }
 
-  /** Deletes a draft after its exact proposal was durably applied or rejected. */
   delete(identity: Readonly<KnowledgeReviewDraftIdentity>): boolean {
     return this.drafts.delete(createDraftKey(identity));
   }
 
-  /**
-   * Drops entries that no longer match a current exact Review in this Bundle.
-   *
-   * @param bundleId - Current controller Bundle session
-   * @param plans - Fresh durable Review projections
-   * @returns Whether any retained entry was revoked
-   */
   reconcile(bundleId: string, plans: readonly Readonly<KnowledgeReviewPlan>[]): boolean {
     const currentKeys = new Set(
       plans.map((plan) => createDraftKey(createKnowledgeReviewDraftIdentity(bundleId, plan)))
@@ -353,7 +312,6 @@ export class KnowledgeReviewDraftStore {
     return changed;
   }
 
-  /** Clears all content-bearing drafts when the controller session ends or changes Bundle. */
   clear(): void {
     this.drafts.clear();
   }

@@ -23,7 +23,6 @@ import type {
 
 const SOURCE_HASH = "a".repeat(64);
 
-/** Creates the Windows-only Bundle used by transaction preflight tests. */
 function createBundle(): KnowledgeBundleConfig {
   return {
     version: 1,
@@ -35,7 +34,6 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
-/** Creates a materially resolvable quote citation. */
 function createCitation(excerpt = "Grounded evidence"): ClaimCitation {
   return {
     citationId: "citation-1",
@@ -52,7 +50,6 @@ function createCitation(excerpt = "Grounded evidence"): ClaimCitation {
   };
 }
 
-/** Creates one accepted create operation with an exact after hash. */
 function createFileChange(path = "Wiki/主题.md", content = "# 主题\n"): KnowledgeFileChange {
   return {
     id: `change-${path}`,
@@ -66,7 +63,6 @@ function createFileChange(path = "Wiki/主题.md", content = "# 主题\n"): Know
   };
 }
 
-/** Creates an accepted ChangeSet whose declared validation is affirmative. */
 function createChangeSet(changes = [createFileChange()]): KnowledgeChangeSet {
   return {
     id: "changeset-1",
@@ -81,7 +77,6 @@ function createChangeSet(changes = [createFileChange()]): KnowledgeChangeSet {
   };
 }
 
-/** Creates a parser observation matching the default citation. */
 function createArtifact(text = "Before Grounded evidence After"): TextArtifactObservation {
   return {
     kind: "text",
@@ -92,7 +87,6 @@ function createArtifact(text = "Before Grounded evidence After"): TextArtifactOb
   };
 }
 
-/** Creates an injected file store backed by exact path observations. */
 function createFileStore(
   observations: Readonly<Record<string, KnowledgeFileObservation>> = {},
   mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities> = ALL_KNOWLEDGE_FILE_MUTATIONS
@@ -110,14 +104,12 @@ function createFileStore(
   };
 }
 
-/** Creates a successful source artifact resolver. */
 function createArtifactResolver(
   artifact: TextArtifactObservation | null = createArtifact()
 ): jest.Mocked<SourceArtifactResolver> {
   return { resolve: jest.fn(async (_locator: SourceLocator) => artifact) };
 }
 
-/** Creates a successful projected OKF and link validator. */
 function createProjectionValidator(): jest.Mocked<KnowledgeProjectionValidator> {
   return {
     validate: jest.fn(async (_input: KnowledgeProjectionValidationInput) => ({
@@ -128,7 +120,6 @@ function createProjectionValidator(): jest.Mocked<KnowledgeProjectionValidator> 
   };
 }
 
-/** Extracts stable diagnostic codes from a rejected validation promise. */
 async function rejectedCodes(promise: Promise<unknown>): Promise<string[]> {
   try {
     await promise;

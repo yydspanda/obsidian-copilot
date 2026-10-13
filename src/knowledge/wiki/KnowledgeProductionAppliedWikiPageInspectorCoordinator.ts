@@ -47,30 +47,24 @@ const STALE_RESULT = Object.freeze({ kind: "stale" as const });
 const UNSUPPORTED_RESULT = Object.freeze({ kind: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 
-/** One validated Bundle and its bounded read-before-content target visitor. */
 export interface KnowledgeProductionAppliedWikiBundleBinding {
   readonly bundle: KnowledgeBundleConfig;
   readonly targetVisitor: ObsidianKnowledgeCompilerTargetVisitPort;
 }
 
-/** The only workspace side effect accepted by the inspector coordinator. */
 export interface KnowledgeAppliedWikiEvidenceNavigationPort {
-  /** Opens one exact, already re-proved Source citation. */
   navigate(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
   ): Promise<ObsidianKnowledgeCitationNavigationResult>;
 }
 
-/** Least-authority advisory row listing used to populate the synchronous path index. */
 export interface KnowledgeAppliedWikiPathIndexRowListPort {
-  /** Lists bounded current Manifest page identities without reading Vault content. */
   listAppliedWikiPathIndexRows(
     signal: AbortSignal
   ): Promise<readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]>;
 }
 
-/** Read-only dependencies captured by one released production generation. */
 export interface KnowledgeProductionAppliedWikiPageInspectorCoordinatorInput {
   readonly runtime: KnowledgeAppliedProvenanceReadPort;
   readonly bundles: readonly Readonly<KnowledgeProductionAppliedWikiBundleBinding>[];
@@ -111,7 +105,6 @@ class PageDrifted extends Error {}
 
 const coordinatorStates = new WeakMap<object, CoordinatorState>();
 
-/** Reads one own enumerable data property without invoking an accessor. */
 function readDataProperty(value: unknown, key: string): unknown {
   try {
     if (typeof value !== "object" || value === null) return undefined;
@@ -124,19 +117,16 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** Creates the platform-standard value-free cancellation category. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Stops work before and after every asynchronous authority boundary. */
 function assertInvocation(state: CoordinatorState, signal: AbortSignal): void {
   if (signal.aborted) throw createAbortError();
   state.assertCurrent();
   if (signal.aborted) throw createAbortError();
 }
 
-/** Reads one exact own enumerable data record without invoking accessors. */
 function readExactRecord(
   value: unknown,
   expectedKeys: readonly string[]
@@ -165,7 +155,6 @@ function readExactRecord(
   }
 }
 
-/** Snapshots one dense bounded array through data descriptors only. */
 function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
@@ -192,7 +181,6 @@ function snapshotDenseArray(value: unknown, maxLength: number): readonly unknown
   }
 }
 
-/** Captures one data method across a bounded acyclic prototype chain. */
 function captureMethod(
   value: object,
   methodName: string
@@ -217,7 +205,6 @@ function captureMethod(
   }
 }
 
-/** Captures one Runtime read capability with its exact receiver. */
 function captureRuntime(
   value: KnowledgeAppliedProvenanceReadPort
 ): KnowledgeAppliedProvenanceReadPort {
@@ -234,7 +221,6 @@ function captureRuntime(
   });
 }
 
-/** Captures one navigator capability with its exact receiver. */
 function captureNavigator(
   value: KnowledgeAppliedWikiEvidenceNavigationPort
 ): KnowledgeAppliedWikiEvidenceNavigationPort {
@@ -252,7 +238,6 @@ function captureNavigator(
   });
 }
 
-/** Captures one bounded visitor as a hash-only single-page observation. */
 function captureObserver(
   value: ObsidianKnowledgeCompilerTargetVisitPort
 ): KnowledgeOutputObservationReaderPort["observe"] {
@@ -317,7 +302,6 @@ function captureObserver(
   };
 }
 
-/** Strictly projects one single-file visitor observation to path/hash only. */
 function projectObservation(
   value: unknown,
   fileByteSize: number | undefined,
@@ -377,12 +361,10 @@ function projectObservation(
   });
 }
 
-/** Reports whether two configured path boundaries overlap under Windows semantics. */
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinRoot(left, right) || isPathWithinRoot(right, left);
 }
 
-/** Captures and cross-validates the complete Bundle/visitor dependency set. */
 function snapshotBundleBindings(value: unknown): readonly Readonly<CapturedBundleBinding>[] {
   const raw = snapshotDenseArray(value, MAX_BUNDLES);
   if (!raw || raw.length === 0) throw createAbortError();
@@ -451,7 +433,6 @@ function snapshotBundleBindings(value: unknown): readonly Readonly<CapturedBundl
   return Object.freeze(bindings);
 }
 
-/** Strictly captures top-level dependencies before invoking any capability. */
 function snapshotCoordinatorInput(
   value: unknown
 ): Readonly<KnowledgeProductionAppliedWikiPageInspectorCoordinatorInput> {
@@ -476,7 +457,6 @@ function snapshotCoordinatorInput(
   });
 }
 
-/** Returns hidden state only for an authentic frozen coordinator. */
 function requireCoordinatorState(value: unknown): CoordinatorState {
   if (
     typeof value !== "object" ||
@@ -491,7 +471,6 @@ function requireCoordinatorState(value: unknown): CoordinatorState {
   return state;
 }
 
-/** Strictly snapshots a Runtime provenance envelope and all page authorities. */
 function snapshotRuntimeProjection(
   bundle: Readonly<KnowledgeBundleConfig>,
   value: unknown,
@@ -560,7 +539,6 @@ function snapshotRuntimeProjection(
   return selected;
 }
 
-/** Strictly projects only page identity rows for advisory menu discovery. */
 function snapshotRuntimePathRows(
   bundle: Readonly<KnowledgeBundleConfig>,
   value: unknown,
@@ -608,7 +586,6 @@ function snapshotRuntimePathRows(
   );
 }
 
-/** Creates a deterministic canonical identity for exact page/source/citation authority. */
 function createAuthorityIdentity(authority: KnowledgeAppliedWikiPageProjectionAuthority): string {
   return JSON.stringify({
     bundleId: authority.bundleId,
@@ -616,7 +593,6 @@ function createAuthorityIdentity(authority: KnowledgeAppliedWikiPageProjectionAu
   });
 }
 
-/** Reads one stable current page through a bounded Runtime/Vault/Runtime sandwich. */
 async function readStablePage(
   state: CoordinatorState,
   binding: Readonly<CapturedBundleBinding>,
@@ -675,7 +651,6 @@ async function readStablePage(
   throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
 }
 
-/** Selects the unique Bundle whose configured Wiki root owns a canonical page path. */
 function selectBundle(state: CoordinatorState, pagePath: string): Readonly<CapturedBundleBinding> {
   const matches = state.bundles.filter((binding) =>
     isPathWithinRoot(pagePath, binding.bundle.wikiRoot)
@@ -685,7 +660,6 @@ function selectBundle(state: CoordinatorState, pagePath: string): Readonly<Captu
   return matches[0];
 }
 
-/** Finds one fresh exact evidence authority equivalent to an original session binding. */
 function findFreshEvidence(
   projector: KnowledgeAppliedWikiPageInspectionProjector,
   session: Readonly<KnowledgeAppliedWikiPageInspectionSession>,
@@ -712,7 +686,6 @@ function findFreshEvidence(
   return undefined;
 }
 
-/** Maps an exact navigator result to the value-free inspector result. */
 function mapNavigationResult(value: unknown): Readonly<KnowledgeAppliedWikiEvidenceOpenResult> {
   const record = readExactRecord(value, ["status"]);
   switch (record?.status) {
@@ -728,7 +701,6 @@ function mapNavigationResult(value: unknown): Readonly<KnowledgeAppliedWikiEvide
   }
 }
 
-/** Reports whether the exact source suffix supports one locator contract. */
 function sourceSupportsLocator(sourcePath: string, kind: string): boolean {
   const lowerPath = sourcePath.toLowerCase();
   if (lowerPath.endsWith(".pdf")) return kind === "pdf_page";
@@ -736,18 +708,9 @@ function sourceSupportsLocator(sourcePath: string, kind: string): boolean {
   return false;
 }
 
-/**
- * Read-only production inspector for one exact current applied Wiki page.
- *
- * Runtime and bounded Vault authority never cross this port. Forward-revised
- * bytes are disclosed through the session origin, while actionable citations
- * remain bound to the retained Source apply. The navigator is the coordinator's
- * only side-effect capability.
- */
 export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
   implements KnowledgeAppliedWikiPageInspectorPort, KnowledgeAppliedWikiPathIndexRowListPort
 {
-  /** Captures one exact Runtime, Bundle/visitor set, navigator, and generation assertion. */
   constructor(input: KnowledgeProductionAppliedWikiPageInspectorCoordinatorInput) {
     const captured = snapshotCoordinatorInput(input);
     const attempts = captured.maxConsistencyAttempts ?? DEFAULT_MAX_CONSISTENCY_ATTEMPTS;
@@ -764,7 +727,6 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
     Object.freeze(this);
   }
 
-  /** Re-proves one exact current applied page and returns a frozen opaque session. */
   async inspectPage(
     requestValue: Readonly<KnowledgeAppliedWikiPageInspectionRequest>,
     signal: AbortSignal
@@ -798,7 +760,6 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
     }
   }
 
-  /** Freshly re-proves an authentic session/evidence identity before navigation. */
   async openEvidence(
     session: Readonly<KnowledgeAppliedWikiPageInspectionSession>,
     evidenceRef: string,
@@ -867,7 +828,6 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
     }
   }
 
-  /** Lists strict bounded current page paths for the synchronous advisory index. */
   async listAppliedWikiPathIndexRows(
     signal: AbortSignal
   ): Promise<readonly Readonly<KnowledgeAppliedWikiPathIndexRow>[]> {

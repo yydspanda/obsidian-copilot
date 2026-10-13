@@ -19,13 +19,11 @@ import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/Knowledge
 const FIRST_REF = "c".repeat(64);
 const SECOND_REF = "d".repeat(64);
 
-/** Promise whose settlement is controlled explicitly by one test. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
 }
 
-/** Creates one manually controlled promise. */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -34,13 +32,11 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** Flushes controller continuations scheduled by fire-and-forget refresh calls. */
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
 
-/** Creates one Review plan with two opaque evidence references. */
 function createReviewPlan(): KnowledgeReviewPlan {
   return {
     changeSetId: "changeset-1",
@@ -85,7 +81,6 @@ function createReviewPlan(): KnowledgeReviewPlan {
   };
 }
 
-/** Creates a ready evidence-capable Studio snapshot. */
 function createSnapshot(): KnowledgeStudioSnapshot {
   const base = createUnavailableKnowledgeStudioSnapshot("personal");
   return {
@@ -106,41 +101,33 @@ function createSnapshot(): KnowledgeStudioSnapshot {
   };
 }
 
-/** Minimal durable port used to start and submit from the controller. */
 class FixedStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort {
   reviewCalls: Array<{ command: KnowledgeReviewCommand; signal: AbortSignal }> = [];
 
-  /** Returns the same exact ready snapshot for every reconciliation read. */
   async load(): Promise<KnowledgeStudioSnapshot> {
     return createSnapshot();
   }
 
-  /** Provides an inert durable hint subscription. */
   subscribe(): () => void {
     return () => undefined;
   }
 
-  /** Keeps Bundle pause unavailable in this focused fixture. */
   async pauseBundle(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps Bundle resume unavailable in this focused fixture. */
   async resumeBundle(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps job cancellation unavailable in this focused fixture. */
   async cancelJob(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Keeps job retry unavailable in this focused fixture. */
   async retryJob(): Promise<void> {
     throw new Error("unavailable");
   }
 
-  /** Records one current content-free Review command. */
   async submitReview(
     _bundleId: string,
     command: KnowledgeReviewCommand,
@@ -151,25 +138,21 @@ class FixedStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommand
   }
 }
 
-/** One recorded evidence boundary invocation. */
 interface EvidenceCall {
   bundleId: string;
   request: Readonly<KnowledgeReviewEvidenceOpenRequest>;
   signal: AbortSignal;
 }
 
-/** Scriptable evidence port retaining exact opaque requests and signals. */
 class RecordingEvidencePort implements KnowledgeStudioReviewEvidencePort {
   calls: EvidenceCall[] = [];
 
-  /** Captures an optional asynchronous handler for every click. */
   constructor(
     private readonly handler: (
       call: EvidenceCall
     ) => Promise<Readonly<KnowledgeReviewEvidenceOpenResult>> = async () => ({ kind: "opened" })
   ) {}
 
-  /** Records and delegates one opaque evidence request. */
   async openReviewEvidence(
     bundleId: string,
     request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
@@ -181,7 +164,6 @@ class RecordingEvidencePort implements KnowledgeStudioReviewEvidencePort {
   }
 }
 
-/** Starts a ready controller with the supplied evidence boundary. */
 async function startController(evidence: KnowledgeStudioReviewEvidencePort): Promise<{
   controller: KnowledgeStudioController;
   studio: FixedStudioPort;

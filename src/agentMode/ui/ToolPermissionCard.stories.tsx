@@ -30,7 +30,6 @@ const meta = {
 } satisfies Meta<ToolPermissionCardProps>;
 export default meta;
 
-/** The action footer has one top divider inside the card's outer border. */
 export const Default: StoryObj<ToolPermissionCardProps> = {};
 
 export const MultipleFiles: StoryObj<ToolPermissionCardProps> = {
@@ -56,6 +55,52 @@ export const MultipleFiles: StoryObj<ToolPermissionCardProps> = {
           },
         ],
       },
+    },
+  },
+};
+
+export const WebSearchQuery: StoryObj<ToolPermissionCardProps> = {
+  args: {
+    toolName: "websearch",
+    request: {
+      ...request,
+      toolCall: {
+        ...request.toolCall,
+        title: "latest stable version of Node.js 2026",
+        kind: "other",
+        rawInput: { query: "latest stable version of Node.js 2026" },
+      },
+    },
+  },
+};
+
+const codexCommand =
+  'python3 -c \'from pathlib import Path; p = Path("/Users/me/Vault/launch-brief.md"); p.write_text("Review on Friday")\'';
+
+export const CodexCommandPrefix: StoryObj<ToolPermissionCardProps> = {
+  args: {
+    toolName: codexCommand,
+    request: {
+      ...request,
+      toolCall: {
+        ...request.toolCall,
+        title: "Run command",
+        kind: "execute",
+        rawInput: { command: codexCommand },
+      },
+      options: [
+        { optionId: "approved", name: "Yes, proceed", kind: "allow_once" },
+        {
+          optionId: "approved-execpolicy-amendment",
+          name: `Yes, and don't ask again for commands that start with \`${codexCommand}\``,
+          kind: "allow_always",
+        },
+        {
+          optionId: "abort",
+          name: "No, and tell Codex what to do differently",
+          kind: "reject_once",
+        },
+      ],
     },
   },
 };
