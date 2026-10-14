@@ -13,7 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations for now; do not retry or adjust prompts. Resume practical acceptance only after an explicitly requested deployment. The existing Windows build remains `801bdc73`, queue paused, both Query allowances closed 1/1. [Handoff](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#zero-model-studio-continuity).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations; do not retry or adjust prompts. `2bb68d27` is pushed/deployed; native Chat/Studio smoke passes with the queue paused. Codex Agent remains blocked by its runtime update connection failure; prior Query allowances stay closed 1/1. [Deployment](./designdocs/progress/archive/2026-10.md#2026-10-14).
 
 ## Upstream Status
 
@@ -27,7 +27,7 @@
 
 ## Recent Activity
 
-- 2026-10-13 — `OPS-UPSTREAM-SYNC` — 132-commit merge reconciled; 774 suites / 11,208 tests pass, 4 skips; personal build, mobile smoke and offline gates pass. Newer 22 commits remain separate. No deployment/model calls. [Record](./designdocs/progress/archive/2026-10.md#2026-10-13).
+- 2026-10-14 — `OPS-UPSTREAM-SYNC` — `2bb68d27` pushed/deployed; native Chat/Studio checks pass, all 220 regular files and 92 original settings preserved. Codex runtime update fails; no model calls or queue processing. Newer 22 upstream commits remain separate. [Record](./designdocs/progress/archive/2026-10.md#2026-10-14).
 - 2026-10-09 — `PK-H3-OVERNIGHT-REGRESSION` — 744 suites / 10,981 tests pass, 4 explicit skips; native Query/citation/Save pass, fresh Review/Apply unverified. Native receipt closed 2/8; initial Jest request count unknown. Fixes/report pushed as `a0aac67f`; zero-model menu/consent follow-up preserves data. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
 - 2026-10-09 — `PK-H3-INCREMENTAL-OMISSION` — User delegates one normal chapter-13 run; native processing completes in 23,289 ms, identical write count 1, no new Review. New personal-method evidence has 0 supporting/selected claims. No retry/Apply/Query; prior October 8 timeout remains separately recorded. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-user-delegated-native-use).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
@@ -56,7 +56,7 @@
 
 ## Current Verification
 
-- October 13 upstream merge: 774 suites / 11,208 pass / 4 skips with paid opt-in off and en-US test locale; lint 0 errors / 20 warnings, formatting, personal build (6,531,132 bytes), syntax/mobile smoke, Gallery and 20 governance tests pass. Review package/source/styles/fixtures pass; official npm audit finds 0 vulnerabilities (configured mirror cannot audit). No new Windows/model acceptance.
+- October 13 upstream merge: 774 suites / 11,208 pass / 4 skips with paid opt-in off and en-US test locale; lint 0 errors / 20 warnings, formatting, personal build (6,531,132 bytes), syntax/mobile smoke, Gallery and 20 governance tests pass. Review stages pass; official npm audit finds 0 vulnerabilities. October 14 native startup/Chat/Studio passes with identical artifacts; Codex upgrade fails, no semantic-model acceptance. [Limits](./designdocs/progress/archive/2026-10.md#2026-10-14).
 - October 9 Query delivery: `801bdc73` pushed/loaded; method/citation and zero-model tab/reopen checks pass. User accepts cross-chapter wording limitations without declaring semantic success. 230 files, 92 settings and Runtime unchanged; six sources retained, five queued jobs paused. Offline 110 tests, two dependency checks, lint/build/review pass; audit 0 critical / 1 high / 3 moderate. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#zero-model-studio-continuity).
 - October 9 delivery: `a0aac67f` pushed with tested code blobs unchanged. Local full Jest 744 suites / 10,981 passed / 4 skipped and gates pass with warnings retained. Native receipt closed 2/8; initial Jest request count unknown. Zero-model menu/consent checks preserve notes/settings/runtime; no fresh Review/Apply. Hosted governance passes, drift fails at 131 behind; default hosted Node CI did not run. Semantic limitation remains.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
