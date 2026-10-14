@@ -13,7 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations; do not retry or adjust prompts. `2bb68d27` is pushed/deployed; native Chat/Studio smoke passes with the queue paused. Codex Agent remains blocked by its runtime update connection failure; prior Query allowances stay closed 1/1. [Deployment](./designdocs/progress/archive/2026-10.md#2026-10-14).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations; do not retry or adjust prompts. `2bb68d27` is pushed/deployed; native Chat/Studio smoke passes with the queue paused. One Codex 2.0.1 download retry aborts; improve Release connectivity before retrying. Prior Query allowances stay closed 1/1. [Deployment](./designdocs/progress/archive/2026-10.md#2026-10-14).
 
 ## Upstream Status
 
