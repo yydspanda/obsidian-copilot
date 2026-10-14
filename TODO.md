@@ -13,7 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations; do not retry or adjust prompts. `2bb68d27` is pushed/deployed; native Chat/Studio smoke passes with the queue paused. Git push recovers, but a subsequent Codex 2.0.1 download remains about 36 KB/s and is cancelled; Release-asset connectivity remains unresolved. Prior Query allowances stay closed 1/1. [Deployment](./designdocs/progress/archive/2026-10.md#2026-10-14).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations; do not retry or adjust prompts. Codex 2.0.1 startup/auth and one authorized answer pass; read-only allowance closed 1/1. Source-link fix #25 passes 81 targeted tests and isolated Windows clicks, pending commit/deployment; installed `2bb68d27` is unchanged. Queue paused; prior Query allowances stay closed 1/1. [Repair](./designdocs/progress/archive/2026-10.md#source-link-repair-issue-25).
 
 ## Upstream Status
 
@@ -27,7 +27,7 @@
 
 ## Recent Activity
 
-- 2026-10-14 — `OPS-UPSTREAM-SYNC` — `2bb68d27` pushed/deployed; native Chat/Studio checks pass, all 220 regular files and 92 original settings preserved. Codex runtime update fails; no model calls or queue processing. Newer 22 upstream commits remain separate. [Record](./designdocs/progress/archive/2026-10.md#2026-10-14).
+- 2026-10-14 — `OPS-UPSTREAM-SYNC` — Codex 2.0.1 startup/auth and one read-only answer pass in 26 s. Source-link defect #25 repaired locally: 81 tests, build/lint/review/mobile checks and isolated Windows clicks pass; not deployed. All 230 files/links, 93 settings and Runtime preserved. Newer 22 upstream commits remain separate. [Record](./designdocs/progress/archive/2026-10.md#source-link-repair-issue-25).
 - 2026-10-09 — `PK-H3-OVERNIGHT-REGRESSION` — 744 suites / 10,981 tests pass, 4 explicit skips; native Query/citation/Save pass, fresh Review/Apply unverified. Native receipt closed 2/8; initial Jest request count unknown. Fixes/report pushed as `a0aac67f`; zero-model menu/consent follow-up preserves data. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
 - 2026-10-09 — `PK-H3-INCREMENTAL-OMISSION` — User delegates one normal chapter-13 run; native processing completes in 23,289 ms, identical write count 1, no new Review. New personal-method evidence has 0 supporting/selected claims. No retry/Apply/Query; prior October 8 timeout remains separately recorded. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-user-delegated-native-use).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).

@@ -8,6 +8,8 @@ Quick Chat remains available for lightweight conversation and is the main chat e
 
 Your sent messages display Markdown formatting, including headings, lists, code blocks, links, and image embeds. Copy and Edit keep the original Markdown text. Links and image embeds in saved chats resolve from the conversation note, even when another note is open.
 
+Source links to existing files in the current vault also open inside Obsidian when an agent uses an absolute Windows or macOS/Linux path. Ctrl-click, Cmd-click, or middle-click opens the source in a new tab. Web links and paths outside the current vault keep Obsidian's normal behavior.
+
 ## Choose an agent
 
 Open [**Settings → Copilot → Basic → Agents**](settings.md#basic). Configure at least one agent, then choose the **Default backend** for new chats.
